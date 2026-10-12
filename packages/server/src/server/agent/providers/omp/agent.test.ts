@@ -459,7 +459,9 @@ describe("OMP agent client and session", () => {
 
   test("fails a turn when the provider idle gate passes its deadline", async () => {
     const scheduler = new ManualIdleScheduler();
-    const omp = new OmpHarness({ providerIdleScheduler: scheduler, providerIdleDeadlineMs: 1 });
+    // Long enough that the gate's first check, made right after the turn ends, cannot already
+    // be past it on a slow runner.
+    const omp = new OmpHarness({ providerIdleScheduler: scheduler, providerIdleDeadlineMs: 50 });
     await omp.start();
     const { completion } = await omp.startPromptUntilProviderIdle("first", "first done", {
       isStreaming: true,
@@ -473,7 +475,7 @@ describe("OMP agent client and session", () => {
       args: { command: "sleep 30" },
     });
     expect(omp.runningToolCallIds()).toEqual(["tool-at-deadline"]);
-    await new Promise((resolve) => setTimeout(resolve, 2));
+    await new Promise((resolve) => setTimeout(resolve, 60));
     scheduler.retry();
     await expect(completion).rejects.toThrow(/provider idle/i);
     expect(omp.runningToolCallIds()).toEqual([]);
@@ -1234,6 +1236,25 @@ describe("OMP agent client and session", () => {
     await omp.startTurn("continue");
     expect(omp.runtimeLaunches()).toHaveLength(2);
     expect(omp.runtime().prompts).toEqual([{ message: "continue", imageCount: 0 }]);
+  });
+
+  test("ignores a prompt rejection a previous OMP process left for a reused request id", async () => {
+    const omp = new OmpHarness();
+    await omp.start();
+    omp.emit({
+      type: "prompt_result",
+      id: "req_1",
+      agentInvoked: false,
+      status: "error",
+      error: { message: "No API key found for anthropic." },
+    });
+    omp.processExit("OMP RPC process exited with code 1 and signal null");
+
+    await omp.runPromptWithoutTurnOnNextRuntime("/session", "req_1");
+
+    expect(omp.runtimeLaunches()).toHaveLength(2);
+    expect(omp.turnFailures()).toEqual(["OMP RPC process exited with code 1 and signal null"]);
+    expect(omp.completedTurnCount()).toBe(1);
   });
 
   test("reports an immediate relaunch failure without retrying in a loop", async () => {
