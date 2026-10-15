@@ -619,6 +619,9 @@ export const ja: TranslationResources = {
       updateHost: "ネイティブターミナルを使用するにはホストを更新してください。",
       unableToSubscribe: "ターミナルに接続できません",
     },
+    sheet: {
+      openAsTab: "タブで開く",
+    },
     tabs: {
       loading: "読み込み中...",
       modified: "未保存の変更",
@@ -634,7 +637,7 @@ export const ja: TranslationResources = {
       },
       switcher: {
         trigger: "タブを切り替え（{{count}}件開いています）",
-        title: "タブを切り替え",
+        title: "ワークスペースのタブ",
         searchPlaceholder: "タブを検索",
       },
       menu: {

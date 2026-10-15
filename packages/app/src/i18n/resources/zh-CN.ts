@@ -613,6 +613,9 @@ export const zhCN: TranslationResources = {
       updateHost: "请更新主机以使用原生终端渲染器。",
       unableToSubscribe: "无法订阅 Terminal",
     },
+    sheet: {
+      openAsTab: "作为标签页打开",
+    },
     tabs: {
       loading: "正在加载...",
       modified: "未保存的更改",
@@ -628,7 +631,7 @@ export const zhCN: TranslationResources = {
       },
       switcher: {
         trigger: "切换标签（已打开 {{count}} 个）",
-        title: "切换标签",
+        title: "Workspace 标签",
         searchPlaceholder: "搜索标签",
       },
       menu: {

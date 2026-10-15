@@ -610,6 +610,9 @@ export const en = {
       updateHost: "Update the host to use the native terminal renderer.",
       unableToSubscribe: "Unable to subscribe to terminal",
     },
+    sheet: {
+      openAsTab: "Open as tab",
+    },
     tabs: {
       loading: "Loading...",
       modified: "Unsaved changes",
@@ -625,7 +628,7 @@ export const en = {
       },
       switcher: {
         trigger: "Switch tabs ({{count}} open)",
-        title: "Switch tab",
+        title: "Workspace tabs",
         searchPlaceholder: "Search tabs",
       },
       menu: {

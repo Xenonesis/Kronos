@@ -31,7 +31,7 @@ import {
   readTaskNotificationToolUseIdFromHistoryRecord,
 } from "./task-notification-tool-call.js";
 import {
-  findClaudeModel,
+  getClaudeContextWindowMaxTokens,
   getClaudeModelsWithSettings,
   normalizeClaudeRuntimeModelId,
   resolveConfiguredClaudeModel,
@@ -1829,30 +1829,22 @@ async function resolveClaudeAuth(
   }
 }
 
-function extractContextWindowSize(modelUsage: unknown): number | undefined {
+function extractContextWindowSize(
+  modelUsage: unknown,
+  modelId: string | null | undefined,
+): number | undefined {
   const usageRecord = toObjectRecord(modelUsage);
   if (!usageRecord) {
     return undefined;
   }
 
-  let maxContextWindow: number | undefined;
-  for (const value of Object.values(usageRecord)) {
-    const valueRecord = toObjectRecord(value);
-    if (!valueRecord) {
-      continue;
-    }
-    const contextWindow = valueRecord.contextWindow;
-    if (
-      typeof contextWindow !== "number" ||
-      !Number.isFinite(contextWindow) ||
-      contextWindow <= 0
-    ) {
-      continue;
-    }
-    maxContextWindow = Math.max(maxContextWindow ?? 0, contextWindow);
-  }
-
-  return maxContextWindow;
+  // modelUsage accumulates every model used in the session, including earlier turns
+  // and subagents. Only the active model describes this turn's context capacity.
+  const modelUsageEntry = modelId ? usageRecord[modelId] : undefined;
+  const contextWindow = toObjectRecord(modelUsageEntry)?.contextWindow;
+  return typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0
+    ? contextWindow
+    : undefined;
 }
 
 interface StreamRequestInputUsage {
@@ -2006,8 +1998,8 @@ class ClaudeContextUsageState {
     this.contextWindowMaxTokens = contextWindowMaxTokens;
   }
 
-  recordModelUsage(modelUsage: unknown): number | undefined {
-    const contextWindowMaxTokens = extractContextWindowSize(modelUsage);
+  recordModelUsage(modelUsage: unknown, modelId: string | null | undefined): number | undefined {
+    const contextWindowMaxTokens = extractContextWindowSize(modelUsage, modelId);
     if (contextWindowMaxTokens !== undefined) {
       this.contextWindowMaxTokens = contextWindowMaxTokens;
     }
@@ -2050,7 +2042,10 @@ class ClaudeContextUsageState {
     return this.createUsageUpdatedEvent(usedTokens);
   }
 
-  buildResultUsage(message: SDKResultMessage, modelUsage: unknown): AgentUsage | undefined {
+  buildResultUsage(
+    message: SDKResultMessage,
+    modelId: string | null | undefined,
+  ): AgentUsage | undefined {
     try {
       if (!message.usage) {
         return undefined;
@@ -2062,7 +2057,7 @@ class ClaudeContextUsageState {
         totalCostUsd: message.total_cost_usd,
       };
 
-      const modelContextWindowMaxTokens = this.recordModelUsage(modelUsage ?? message.modelUsage);
+      const modelContextWindowMaxTokens = this.recordModelUsage(message.modelUsage, modelId);
       if (this.contextWindowMaxTokens !== undefined) {
         usage.contextWindowMaxTokens = this.contextWindowMaxTokens;
       } else if (modelContextWindowMaxTokens !== undefined) {
@@ -2240,7 +2235,7 @@ class ClaudeAgentSession implements AgentSession {
     this.resolveBinary = options.resolveBinary;
     this.rewindSdk = options.rewindSdk ?? realClaudeRewindSdk;
     this.contextUsage = new ClaudeContextUsageState(
-      findClaudeModel(this.config.model)?.contextWindowMaxTokens,
+      getClaudeContextWindowMaxTokens(this.config.model),
     );
     const handle = options.handle;
 
@@ -2572,7 +2567,7 @@ class ClaudeAgentSession implements AgentSession {
       await this.applyFastModeFeature(false, activeQuery);
     }
     this.contextUsage.setInitialContextWindowMaxTokens(
-      findClaudeModel(this.config.model)?.contextWindowMaxTokens,
+      getClaudeContextWindowMaxTokens(this.config.model),
     );
     this.lastOptionsModel = normalizedModelId ?? this.lastOptionsModel;
     this.lastRuntimeModel = null;
@@ -2898,9 +2893,11 @@ class ClaudeAgentSession implements AgentSession {
       this.startFreshConversationSession();
       return;
     }
+    const currentSessionId = this.claudeSessionId;
     await revertClaudeConversation({
       sdk: this.rewindSdk,
-      sessionId: this.claudeSessionId,
+      sessionId: currentSessionId,
+      transcriptPath: currentSessionId ? this.resolveHistoryPath(currentSessionId) : null,
       messageId: target.messageId,
       resolveMessageId: (messageId) => this.resolveClaudeMessageId(messageId),
       setSessionId: (sessionId) => {
@@ -4694,7 +4691,7 @@ class ClaudeAgentSession implements AgentSession {
     message: Extract<SDKMessage, { type: "result" }>,
     events: AgentStreamEvent[],
   ): void {
-    const usage = this.convertUsage(message, message.modelUsage);
+    const usage = this.convertUsage(message);
     if (message.subtype === "success") {
       events.push(...this.sidechainTracker.finishAll("completed"));
       // Built-in slash commands (e.g. /voice, /usage, "Unknown command: …")
@@ -4821,6 +4818,12 @@ class ClaudeAgentSession implements AgentSession {
     this.observePermissionMode(message.permissionMode);
     this.persistence = null;
     if (message.model) {
+      const runtimeContextWindowMaxTokens = getClaudeContextWindowMaxTokens(message.model);
+      // Seed usage before the first result, including settings-resolved aliases.
+      // A repeated init for the same model must retain the SDK's reported limit.
+      if (message.model !== this.lastRuntimeModel && runtimeContextWindowMaxTokens !== undefined) {
+        this.contextUsage.setInitialContextWindowMaxTokens(runtimeContextWindowMaxTokens);
+      }
       const normalizedRuntimeModel = normalizeClaudeRuntimeModelId(message.model);
       this.logger.debug(
         { runtimeModel: message.model, normalizedRuntimeModel },
@@ -4870,8 +4873,8 @@ class ClaudeAgentSession implements AgentSession {
     return null;
   }
 
-  private convertUsage(message: SDKResultMessage, modelUsage?: unknown): AgentUsage | undefined {
-    return this.contextUsage.buildResultUsage(message, modelUsage);
+  private convertUsage(message: SDKResultMessage): AgentUsage | undefined {
+    return this.contextUsage.buildResultUsage(message, this.lastRuntimeModel ?? this.config.model);
   }
 
   private handlePermissionRequest: CanUseTool = async (
