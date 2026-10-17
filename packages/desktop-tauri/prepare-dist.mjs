@@ -8,11 +8,11 @@ const targetDir = path.join(__dirname, "server-dist");
 
 console.log("Preparing lean server-dist for Tauri bundle...");
 
-if (fs.existsSync(targetDir)) {
-  fs.rmSync(targetDir, { recursive: true, force: true });
+const distDir = path.join(targetDir, "dist");
+if (fs.existsSync(distDir)) {
+  fs.rmSync(distDir, { recursive: true, force: true });
 }
 fs.mkdirSync(targetDir, { recursive: true });
-
 // Copy server dist
 console.log("Copying server dist (1,843 files)...");
 fs.cpSync(path.join(root, "packages/server/dist"), path.join(targetDir, "dist"), { recursive: true });
@@ -52,6 +52,22 @@ for (const pkg of internalPackages) {
     recursive: true,
     filter: (srcPath) => !srcPath.includes("node_modules") && !srcPath.includes(".git"),
   });
+}
+// Remove bloated unused claude binary to stay within installer limits
+const heavyClaude = path.join(serverDistNodeModules, "@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe");
+if (fs.existsSync(heavyClaude)) {
+  fs.unlinkSync(heavyClaude);
+  console.log("Stripped bloated claude.exe binary");
+}
+
+// Ensure typescript compiler is available for runtime plugin compilation
+const tsDest = path.join(serverDistNodeModules, "typescript");
+if (!fs.existsSync(tsDest)) {
+  const tsSrc = path.join(root, "node_modules/typescript");
+  if (fs.existsSync(tsSrc)) {
+    fs.cpSync(tsSrc, tsDest, { recursive: true });
+    console.log("Copied typescript to server-dist/node_modules");
+  }
 }
 
 console.log("Lean server-dist prepared with bundled dependencies!");

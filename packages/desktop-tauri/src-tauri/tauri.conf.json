@@ -28,7 +28,8 @@
       "nsis": {
         "installMode": "both",
         "languages": ["English"],
-        "installerHooks": "hooks/nsis-hooks.nsh"
+        "installerHooks": "hooks/nsis-hooks.nsh",
+        "compression": "zlib"
       }
     }
   },

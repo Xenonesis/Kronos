@@ -77,12 +77,19 @@ pub fn start_daemon() -> Option<Child> {
     cmd.arg(&script_path)
         .env("PASEO_LISTEN", "127.0.0.1:6767");
 
-    // Inherit NODE_PATH from global/user node environment if running installed
+    // Ensure bundled server-dist/node_modules is always included in NODE_PATH
+    let local_nm = work_dir.join("node_modules");
     if let Ok(appdata) = env::var("APPDATA") {
         let global_npm = PathBuf::from(appdata).join("npm").join("node_modules");
-        if global_npm.exists() {
-            cmd.env("NODE_PATH", global_npm);
+        if global_npm.exists() && local_nm.exists() {
+            cmd.env("NODE_PATH", format!("{};{}", local_nm.to_string_lossy(), global_npm.to_string_lossy()));
+        } else if local_nm.exists() {
+            cmd.env("NODE_PATH", local_nm.to_string_lossy().to_string());
+        } else if global_npm.exists() {
+            cmd.env("NODE_PATH", global_npm.to_string_lossy().to_string());
         }
+    } else if local_nm.exists() {
+        cmd.env("NODE_PATH", local_nm.to_string_lossy().to_string());
     }
 
     cmd.current_dir(&work_dir)

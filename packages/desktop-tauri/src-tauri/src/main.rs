@@ -34,36 +34,58 @@ fn toggle_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         }
     }
 }
+fn wait_for_daemon_health(max_attempts: usize) -> bool {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    for _ in 0..max_attempts {
+        if let Ok(mut stream) = TcpStream::connect("127.0.0.1:6767") {
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+            let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+            let req = b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:6767\r\nConnection: close\r\n\r\n";
+            if stream.write_all(req).is_ok() {
+                let mut buf = [0u8; 64];
+                if let Ok(n) = stream.read(&mut buf) {
+                    if n > 0 && (buf.starts_with(b"HTTP/1.1 200") || buf.starts_with(b"HTTP/1.0 200")) {
+                        return true;
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    false
+}
+
 fn get_daemon_status_json() -> String {
     let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.push(".paseo");
-    let pid_file = home.join("paseo.pid");
 
-    let mut server_id = "srv_AUs6tLHBB3Fq".to_string();
-    let mut listen = "127.0.0.1:6767".to_string();
-    let mut hostname = "localhost".to_string();
-    let mut pid: u32 = 1;
-
-    for _ in 0..6 {
-        if let Ok(content) = fs::read_to_string(&pid_file) {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(s) = val.get("serverId").and_then(|v| v.as_str()) {
-                    server_id = s.to_string();
-                }
-                if let Some(l) = val.get("listen").and_then(|v| v.as_str()) {
-                    listen = l.to_string();
-                }
-                if let Some(h) = val.get("hostname").and_then(|v| v.as_str()) {
-                    hostname = h.to_string();
-                }
-                if let Some(p) = val.get("pid").and_then(|v| v.as_u64()) {
-                    pid = p as u32;
-                }
-                break;
-            }
+    let mut server_id = String::new();
+    let server_id_file = home.join("server-id");
+    if let Ok(content) = fs::read_to_string(&server_id_file) {
+        let trimmed = content.trim();
+        if !trimmed.is_empty() {
+            server_id = trimmed.to_string();
         }
-        std::thread::sleep(std::time::Duration::from_millis(500));
     }
+    if server_id.is_empty() {
+        server_id = "srv_uaeat24gZeId".to_string();
+    }
+
+    let mut local_credential = String::new();
+    let credential_file = home.join("local-credential");
+    if let Ok(content) = fs::read_to_string(&credential_file) {
+        let trimmed = content.trim();
+        if !trimmed.is_empty() {
+            local_credential = trimmed.to_string();
+        }
+    }
+
+    let listen = "127.0.0.1:6767".to_string();
+    let hostname = "localhost".to_string();
+    let pid: u32 = std::process::id();
 
     serde_json::json!({
         "serverId": server_id,
@@ -71,6 +93,7 @@ fn get_daemon_status_json() -> String {
         "listen": listen,
         "hostname": hostname,
         "pid": pid,
+        "localCredential": local_credential,
         "home": home.to_string_lossy().to_string(),
         "version": "0.12.0",
         "desktopManaged": true,
@@ -85,6 +108,14 @@ fn main() {
     let state = DaemonState {
         process: Mutex::new(daemon_child),
     };
+    // Wait for daemon to be healthy and responding before initializing window
+    let is_healthy = wait_for_daemon_health(50);
+    if is_healthy {
+        println!("[daemon] Host daemon confirmed healthy on 127.0.0.1:6767");
+    } else {
+        eprintln!("[daemon] Host daemon not responding yet, proceeding with startup");
+    }
+
 
     let status_json = get_daemon_status_json();
     let bridge_script = format!(
@@ -140,6 +171,9 @@ try {{
       if (command === 'update_active_agents') {{
         return await window.__TAURI_INTERNALS__.invoke('update_active_agents', args || {{}});
       }}
+      if (command === 'desktop_local_credential') {{
+        return daemonData.localCredential || null;
+      }}
       return null;
     }}
   }};
@@ -163,6 +197,18 @@ try {{
       updatedAt: new Date().toISOString()
     }}];
     localStorage.setItem(REGISTRY_KEY, JSON.stringify(localHostProfile));
+  }} catch (e) {{}}
+  // Migrate or sync last-workspace-route-selection so it points to the active serverId
+  try {{
+    const LAST_WS_KEY = 'paseo:last-workspace-route-selection';
+    const rawWs = localStorage.getItem(LAST_WS_KEY);
+    if (rawWs) {{
+      const parsed = JSON.parse(rawWs);
+      if (parsed && parsed.serverId && parsed.serverId !== daemonData.serverId) {{
+        parsed.serverId = daemonData.serverId;
+        localStorage.setItem(LAST_WS_KEY, JSON.stringify(parsed));
+      }}
+    }}
   }} catch (e) {{}}
   // Reset launchTarget to chat so New workspace composer opens in Chat mode
   try {{
@@ -223,6 +269,7 @@ try {{
                 .title("Paseo")
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(800.0, 600.0)
+                .visible(false)
                 .initialization_script(&bridge_script);
 
             #[cfg(target_os = "windows")]
@@ -233,15 +280,23 @@ try {{
                 win_builder.effects(effects).transparent(true).shadow(true)
             };
 
-            let win = win_builder.build();
-            if win.is_err() {
-                eprintln!("[window] Failed to build window with effects, falling back to standard window");
-                let fallback_builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-                    .title("Paseo")
-                    .inner_size(1280.0, 800.0)
-                    .min_inner_size(800.0, 600.0)
-                    .initialization_script(&bridge_script);
-                let _ = fallback_builder.build();
+            let win = match win_builder.build() {
+                Ok(w) => Some(w),
+                Err(_) => {
+                    eprintln!("[window] Failed to build window with effects, falling back to standard window");
+                    let fallback_builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+                        .title("Paseo")
+                        .inner_size(1280.0, 800.0)
+                        .min_inner_size(800.0, 600.0)
+                        .visible(false)
+                        .initialization_script(&bridge_script);
+                    fallback_builder.build().ok()
+                }
+            };
+
+            if let Some(w) = win {
+                let _ = w.show();
+                let _ = w.set_focus();
             }
 
             // Register global shortcut to toggle main window visibility
