@@ -211,6 +211,7 @@ import {
 import { deleteLocalCredential, writeLocalCredential } from "./local-credential.js";
 import { createWebUiMiddleware } from "./web-ui.js";
 import { createBrowserProxyHandler } from "./browser-proxy.js";
+import { createOmpSessionsRouter } from "./omp-sessions-router.js";
 import { WorkspaceAutoName } from "./workspace-auto-name.js";
 import { createGitMutationService } from "./session/git-mutation/git-mutation-service.js";
 import { workspaceIdsOnCheckout } from "./workspace-directory.js";
@@ -780,8 +781,9 @@ export async function createPaseoDaemon(
     createTerminalActivityRouteHandler(terminalManager),
   );
 
-  // In-app browser proxy to stream and render websites (like google.com) inside iframes
   app.use("/api/browser-proxy", createBrowserProxyHandler(logger));
+  // OMP sessions explorer API
+  app.use("/api/omp-sessions", createOmpSessionsRouter(logger));
   // Serve the bundled browser web UI when enabled. Mounted after service-proxy
   // classification and host/CORS handling, but before daemon bearer auth, so
   // static app files load without the daemon password while API/WebSocket calls

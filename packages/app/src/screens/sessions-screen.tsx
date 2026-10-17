@@ -3,7 +3,8 @@ import { View, Text } from "react-native";
 import { useIsFocused } from "@react-navigation/native";
 import { router } from "expo-router";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { ChevronLeft, Import } from "lucide-react-native";
+import { ChevronLeft, Import, Bot, Layers } from "lucide-react-native";
+import { OmpSessionsView, type OmpSessionItem } from "@/desktop/omp";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { MenuHeader } from "@/components/headers/menu-header";
@@ -76,6 +77,7 @@ function SessionsScreenContent() {
   const importSession = useImportSession();
   const hosts = useHosts();
   const [selectedHost, setSelectedHost] = useState(ALL_HOSTS_OPTION_ID);
+  const [activeViewMode, setActiveViewMode] = useState<"paseo" | "omp">("paseo");
   const [searchInput, setSearchInput] = useState("");
   const search = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS).trim();
   const historyServerId = selectedHost === ALL_HOSTS_OPTION_ID ? null : selectedHost;
@@ -153,6 +155,33 @@ function SessionsScreenContent() {
   return (
     <View style={styles.container}>
       <MenuHeader title={t("sessions.title")} />
+      {/* Switcher tabs between Paseo App Sessions & OMP External Sessions */}
+      <View style={styles.viewModeTabs}>
+        <Button
+          variant={activeViewMode === "paseo" ? "secondary" : "ghost"}
+          size="xs"
+          leftIcon={Layers}
+          onPress={() => setActiveViewMode("paseo")}
+        >
+          Paseo Sessions
+        </Button>
+        <Button
+          variant={activeViewMode === "omp" ? "secondary" : "ghost"}
+          size="xs"
+          leftIcon={Bot}
+          onPress={() => setActiveViewMode("omp")}
+        >
+          OMP CLI Sessions
+        </Button>
+      </View>
+      {activeViewMode === "omp" ? (
+        <OmpSessionsView
+          onSelectResumeSession={(ompSession) => {
+            importSession.open();
+          }}
+        />
+      ) : (
+        <>
       {showFilterRow ? (
         <View style={styles.filterContainer}>
           {isSearchSupported ? (
@@ -220,6 +249,8 @@ function SessionsScreenContent() {
         />
       ) : null}
       {importSession.sheet}
+        </>
+      )}
     </View>
   );
 }
@@ -228,6 +259,13 @@ const styles = StyleSheet.create((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.colors.surface0,
+  },
+  viewModeTabs: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    paddingHorizontal: theme.spacing[4],
+    paddingBottom: theme.spacing[2],
   },
   filterContainer: {
     flexDirection: "row",

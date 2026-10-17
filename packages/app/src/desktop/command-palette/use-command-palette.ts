@@ -75,6 +75,17 @@ export function useCommandPalette() {
           router.push("/schedules");
         },
       },
+      {
+        id: "action-omp-sessions",
+        title: "OMP Sessions Explorer",
+        subtitle: "Inspect past OMP agent history, tool calls, and diffs",
+        category: "navigation",
+        shortcut: "Ctrl+Shift+O",
+        keywords: ["omp", "sessions", "history", "timeline", "diff", "explorer"],
+        run: () => {
+          router.push("/sessions");
+        },
+      },
     ];
 
     // Collect active sessions / agents across hosts
