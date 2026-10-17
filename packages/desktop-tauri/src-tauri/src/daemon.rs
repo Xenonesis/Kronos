@@ -16,18 +16,7 @@ pub struct DaemonState {
 }
 
 fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
-    // 1. Check known local repo path on this machine first
-    let repo_candidates = [
-        PathBuf::from(r"C:\Users\Acer\Desktop\paseo"),
-    ];
-    for repo in &repo_candidates {
-        let script = repo.join("packages").join("server").join("dist").join("server").join("server").join("daemon-worker.js");
-        if script.exists() {
-            return Some((repo.clone(), PathBuf::from("node"), script));
-        }
-    }
-
-    // 2. Installed location (_up_/server-dist or resources/server-dist)
+    // 1. Installed location (_up_/server-dist or resources/server-dist) takes priority
     if let Ok(exe) = env::current_exe() {
         if let Some(parent) = exe.parent() {
             let candidates = [
@@ -43,6 +32,17 @@ fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
                     return Some((res_dir.clone(), node, res_script));
                 }
             }
+        }
+    }
+
+    // 2. Known local repo path on development workstation
+    let repo_candidates = [
+        PathBuf::from(r"C:\Users\Acer\Desktop\paseo"),
+    ];
+    for repo in &repo_candidates {
+        let script = repo.join("packages").join("server").join("dist").join("server").join("server").join("daemon-worker.js");
+        if script.exists() {
+            return Some((repo.clone(), PathBuf::from("node"), script));
         }
     }
 

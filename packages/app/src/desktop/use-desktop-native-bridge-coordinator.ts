@@ -34,7 +34,7 @@ export function useDesktopNativeBridgeCoordinator(): void {
           const previousPhase = previousTurnsRef.current.get(agentId);
           if (previousPhase === "open" && phase === "idle") {
             void showNativeTaskCompleteNotification({
-              taskName: agent.metadata?.title || `Agent ${agentId.slice(0, 8)}`,
+              taskName: agent.title || `Agent ${agentId.slice(0, 8)}`,
               status: "completed",
               details: "Assistant finished executing task successfully.",
             });

@@ -375,7 +375,7 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.surface3,
   },
   tooltipText: {
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     color: "#ffffff",
     fontWeight: theme.fontWeight.medium,
   },

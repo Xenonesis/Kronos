@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { Check, Chrome, Compass, FileText, KeyRound, X } from "lucide-react-native";
+import { Check, Globe, Compass, FileText, KeyRound, X } from "lucide-react-native";
 import { Button } from "@/components/ui/button";
 
 export interface BrowserImportDialogProps {
@@ -57,7 +57,7 @@ export function BrowserImportDialog({
             onPress={() => setSelectedSource("chrome")}
             testID="import-source-chrome"
           >
-            <Chrome size={18} color={theme.colors.foreground} />
+            <Globe size={18} color={theme.colors.foreground} />
             <View style={styles.sourceTextCol}>
               <Text style={styles.sourceTitle}>Google Chrome</Text>
               <Text style={styles.sourceDesc}>Auto-detect session cookies from default Chrome profile</Text>

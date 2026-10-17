@@ -72,7 +72,7 @@ fn get_daemon_status_json() -> String {
         "hostname": hostname,
         "pid": pid,
         "home": home.to_string_lossy().to_string(),
-        "version": "0.9.2",
+        "version": "0.12.0",
         "desktopManaged": true,
         "ownedByDesktop": true,
         "startedAt": "2026-09-26T12:00:00.000Z",
@@ -293,7 +293,7 @@ try {{
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app_handle, event| match event {
-            tauri::RunEvent::Exit => {
+            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {
                 if let Some(state) = app_handle.try_state::<DaemonState>() {
                     stop_daemon(&state);
                 }
