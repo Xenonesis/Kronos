@@ -29,4 +29,29 @@ if (process.platform !== "win32") {
 // Copy server package.json
 fs.copyFileSync(path.join(root, "packages/server/package.json"), path.join(targetDir, "package.json"));
 
-console.log("Lean server-dist prepared!");
+// Install production dependencies directly inside server-dist if missing
+const serverDistNodeModules = path.join(targetDir, "node_modules");
+if (!fs.existsSync(serverDistNodeModules)) {
+  console.log("Installing production node_modules into server-dist...");
+  const { execSync } = await import("node:child_process");
+  execSync("npm install --omit=dev --no-package-lock --ignore-scripts", {
+    cwd: targetDir,
+    stdio: "inherit",
+  });
+}
+
+// Copy internal workspace packages into node_modules/@getpaseo
+const getpaseoDir = path.join(serverDistNodeModules, "@getpaseo");
+fs.mkdirSync(getpaseoDir, { recursive: true });
+const internalPackages = ["client", "highlight", "plugin", "protocol", "relay"];
+for (const pkg of internalPackages) {
+  const src = path.join(root, "packages", pkg);
+  const dest = path.join(getpaseoDir, pkg);
+  if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true });
+  fs.cpSync(src, dest, {
+    recursive: true,
+    filter: (srcPath) => !srcPath.includes("node_modules") && !srcPath.includes(".git"),
+  });
+}
+
+console.log("Lean server-dist prepared with bundled dependencies!");
