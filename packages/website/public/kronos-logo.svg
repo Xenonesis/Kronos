@@ -1,0 +1,135 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Stealth Carbon Chassis Gradient -->
+    <radialGradient id="carbonPlate" cx="50%" cy="36%" r="65%">
+      <stop offset="0%" stop-color="#181f2b"/>
+      <stop offset="50%" stop-color="#0f141d"/>
+      <stop offset="85%" stop-color="#080a0e"/>
+      <stop offset="100%" stop-color="#040507"/>
+    </radialGradient>
+
+    <!-- Outer Armor Rim Gradient -->
+    <linearGradient id="armorRim" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4b5b72"/>
+      <stop offset="30%" stop-color="#242e3d"/>
+      <stop offset="70%" stop-color="#111620"/>
+      <stop offset="100%" stop-color="#344256"/>
+    </linearGradient>
+
+    <!-- Specular Bright Titanium (Light Face) -->
+    <linearGradient id="titaniumSpecular" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="25%" stop-color="#f8fafc"/>
+      <stop offset="60%" stop-color="#cbd5e1"/>
+      <stop offset="90%" stop-color="#94a3b8"/>
+      <stop offset="100%" stop-color="#64748b"/>
+    </linearGradient>
+
+    <!-- Midtone Titanium (Body) -->
+    <linearGradient id="titaniumMid" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#cbd5e1"/>
+      <stop offset="45%" stop-color="#94a3b8"/>
+      <stop offset="80%" stop-color="#64748b"/>
+      <stop offset="100%" stop-color="#475569"/>
+    </linearGradient>
+
+    <!-- Deep Gunmetal Shadow (Facet Bevels) -->
+    <linearGradient id="gunmetalDark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#64748b"/>
+      <stop offset="35%" stop-color="#334155"/>
+      <stop offset="75%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#090d16"/>
+    </linearGradient>
+
+    <!-- Electric Cyan Neon Laser Gradient -->
+    <linearGradient id="cyanNeon" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#00f5ff" stop-opacity="0.15"/>
+      <stop offset="15%" stop-color="#00f5ff" stop-opacity="0.95"/>
+      <stop offset="50%" stop-color="#00e5ff" stop-opacity="1"/>
+      <stop offset="85%" stop-color="#00b4d8" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#0077b6" stop-opacity="0.2"/>
+    </linearGradient>
+
+    <!-- Cyan Glow Filter -->
+    <filter id="cyanGlow" x="-80%" y="-40%" width="260%" height="180%">
+      <feGaussianBlur stdDeviation="7" result="blur1"/>
+      <feGaussianBlur stdDeviation="15" result="blur2"/>
+      <feMerge>
+        <feMergeNode in="blur2"/>
+        <feMergeNode in="blur1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Core Nexus Glow Filter -->
+    <filter id="coreGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="8" result="cblur"/>
+      <feMerge>
+        <feMergeNode in="cblur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- 1. Stealth Armor Chassis Plate -->
+  <rect x="20" y="20" width="472" height="472" rx="98" fill="url(#carbonPlate)" stroke="url(#armorRim)" stroke-width="3.5"/>
+
+  <!-- Chamfer Inset Tactical Grooves -->
+  <path d="M 120 32 L 392 32 M 32 120 L 32 392 M 480 120 L 480 392 M 120 480 L 392 480" stroke="#1d2634" stroke-width="1.5" stroke-opacity="0.6"/>
+
+  <!-- 2. Curved Predator Neon Thrusters (Left & Right) -->
+  <!-- Left Neon Thruster -->
+  <g filter="url(#cyanGlow)">
+    <path d="M 28 80 C 18 160, 24 320, 56 424 C 62 424, 66 418, 64 406 C 36 312, 32 170, 42 90 Z" fill="url(#cyanNeon)"/>
+  </g>
+  <path d="M 33 110 C 26 175, 30 300, 54 394 C 55 394, 56 390, 56 384 C 36 295, 32 180, 39 116 Z" fill="#ffffff" opacity="0.9"/>
+
+  <!-- Right Neon Thruster -->
+  <g filter="url(#cyanGlow)">
+    <path d="M 484 80 C 494 160, 488 320, 456 424 C 450 424, 446 418, 448 406 C 476 312, 480 170, 470 90 Z" fill="url(#cyanNeon)"/>
+  </g>
+  <path d="M 479 110 C 486 175, 482 300, 458 394 C 457 394, 456 390, 456 384 C 476 295, 480 180, 473 116 Z" fill="#ffffff" opacity="0.9"/>
+
+  <!-- 3. The KRONOS Titanium Razor Monogram -->
+  <g id="kronosEmblem">
+    <!-- Vertical Spine Pillar (Left Spine of 'K') -->
+    <!-- Front Bright Specular Facet -->
+    <polygon points="126,90 190,90 190,400 126,400" fill="url(#titaniumSpecular)"/>
+    <!-- Top Cutout Chamfer -->
+    <polygon points="126,90 190,90 174,106 142,106" fill="#ffffff"/>
+    <!-- Right Beveled Chamfer Edge -->
+    <polygon points="190,90 210,110 210,380 190,400" fill="url(#gunmetalDark)"/>
+    <!-- Left Inner Dark Inset -->
+    <polygon points="126,90 114,102 114,388 126,400" fill="url(#gunmetalDark)" opacity="0.8"/>
+
+    <!-- Upper Diagonal Chrono-Blade (Upper Right Wing of 'K') -->
+    <!-- Upper Blade Main Light Surface -->
+    <polygon points="214,236 348,90 388,124 266,260" fill="url(#titaniumSpecular)"/>
+    <!-- Upper Blade Top Chiseled Bevel -->
+    <polygon points="214,236 348,90 376,104 246,244" fill="#ffffff" opacity="0.9"/>
+    <!-- Upper Blade Outer Shadow Chamfer -->
+    <polygon points="348,90 388,124 374,138 340,108" fill="url(#gunmetalDark)"/>
+    <!-- Upper Blade Bottom Shadow Facet -->
+    <polygon points="214,236 266,260 252,274 204,248" fill="url(#gunmetalDark)"/>
+
+    <!-- Lower Diagonal Chrono-Blade (Lower Right Wing of 'K') -->
+    <!-- Lower Blade Main Surface -->
+    <polygon points="246,236 384,374 346,406 208,268" fill="url(#titaniumMid)"/>
+    <!-- Lower Blade Inner Highlight Bevel -->
+    <polygon points="246,236 384,374 368,382 236,252" fill="url(#titaniumSpecular)" opacity="0.85"/>
+    <!-- Lower Blade Bottom Shadow Edge -->
+    <polygon points="384,374 346,406 332,396 364,368" fill="url(#gunmetalDark)"/>
+    <!-- Lower Blade Underside Chamfer -->
+    <polygon points="208,268 346,406 334,416 196,280" fill="url(#gunmetalDark)"/>
+
+    <!-- Central Quantum Agent Nexus / Cyan Reactor Core -->
+    <!-- Positioned inside the junction notch of 'K' -->
+    <polygon points="210,218 238,246 210,274 186,246" fill="#00f0ff" filter="url(#coreGlow)"/>
+    <polygon points="210,228 226,246 210,264 196,246" fill="#ffffff"/>
+  </g>
+
+  <!-- 4. Windows 11 Running Indicator Pill / Taskbar Anchor Accent -->
+  <rect x="228" y="456" width="56" height="8" rx="4" fill="#475569" opacity="0.65"/>
+  <rect x="238" y="458" width="36" height="4" rx="2" fill="#00f0ff" opacity="0.9" filter="url(#cyanGlow)"/>
+  <rect x="246" y="459" width="20" height="2" rx="1" fill="#ffffff" opacity="0.9"/>
+</svg>
