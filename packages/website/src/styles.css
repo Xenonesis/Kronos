@@ -109,6 +109,21 @@
     animation: none;
   }
 }
+/* Industrial Brutalism & Tactical Telemetry */
+.crt-scanlines {
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.25) 2px,
+    rgba(0, 0, 0, 0.25) 4px
+  );
+}
+
+.tactical-dots {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
 
 /* Title font - centralized for easy changes */
 .font-title {
@@ -668,6 +683,12 @@
 }
 
 @theme {
+  --color-tactical-bg: #0a0a0a;
+  --color-tactical-fg: #eaeaea;
+  --color-tactical-accent: #ff2a2a;
+  --color-tactical-green: #4af626;
+  --color-tactical-border: #262626;
+  --color-tactical-surface: #121212;
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
 
   --color-background: #101615;

@@ -1,24 +1,6 @@
 import * as React from "react";
 import { useState, useCallback } from "react";
-import {
-  Activity,
-  ArrowRight,
-  Boxes,
-  Check,
-  ChevronRight,
-  Clock,
-  Copy,
-  Cpu,
-  Download,
-  Eye,
-  Globe,
-  History,
-  RefreshCw,
-  ShieldCheck,
-  Sliders,
-  Terminal,
-  X,
-} from "lucide-react";
+import { ArrowRight, ChevronRight, Copy, Download } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { SiteHeader } from "~/components/site-header";
 import { SiteFooter } from "~/components/site-footer";
@@ -40,191 +22,207 @@ const TRANSITION_DUR_08_D45 = { duration: 0.8, delay: 0.45 };
 const FAQ_ITEMS = [
   {
     id: "faq-migration",
-    q: "Can I migrate my existing Paseo workspaces and agents to Kronos?",
-    a: "Yes, seamlessly! Kronos shares 100% backward compatibility with your existing ~/.paseo configurations, agent credentials, and local projects. Your previous agents and API keys are automatically recognized.",
+    code: "SEC / MIG-01",
+    q: "MIGRATION PROTOCOL // CAN EXISTING PASEO WORKSPACES BE IMPORTED?",
+    a: "AFFIRMATIVE. KRONOS RETAINS 100% RETROGRADE COMPATIBILITY WITH EXISTING CONFIGURATION DIRECTORIES (~/.paseo). LOCAL AGENT STATE, CREDENTIAL HASHES, AND WORKSPACE MATRICES ARE INGESTED AUTOMATICALLY WITHOUT RE-AUTHENTICATION.",
   },
   {
     id: "faq-ram",
-    q: "Why does Kronos consume so much less RAM than Paseo?",
-    a: "Paseo ran on Electron, which bundles a full multi-process Chromium engine consuming 600MB–1.2GB RAM. Kronos runs on Tauri v2 with a pure Rust core and links directly to the operating system's native WebView2 compositor, reducing memory footprint to under 100MB.",
+    code: "SEC / MEM-02",
+    q: "RESOURCE METRICS // WHY DOES KRONOS ELIMINATE 85% OF MEMORY OVERHEAD?",
+    a: "PASEO EMPLOYS A LEGACY ELECTRON HARNESS SPAWNING INDEPENDENT CHROMIUM INSTANCES (600MB–1.2GB RESIDENT SET). KRONOS BINDS TO A PURE RUST TAURI V2 COMPOSITOR LINKED DIRECTLY TO NATIVE WEBVIEW2 SUBSYSTEMS, BOUNDING TOTAL RAM TO UNDER 100MB.",
   },
   {
     id: "faq-update",
-    q: "How does the 1-Click Update system work?",
-    a: "We created a dedicated runner script (update-desktop-exe.bat). When upstream releases new agent features, running this script pulls the latest git commits, rebuilds internal protocol packages, exports the web app, and compiles a fresh NSIS setup executable automatically.",
+    code: "SEC / UPD-03",
+    q: "SYNCHRONIZATION // HOW DOES THE 1-CLICK AUTOMATED RUNNER OPERATE?",
+    a: "RUNNING .\\update-desktop-exe.bat EXECUTES AN ATOMIC FETCH PIPELINE: PULLS UPSTREAM DELTAS, COMPILES INTERNAL PROTOCOL LIBRARIES, EXPORTS THE WEB ASSET RUNTIME, AND PACKAGES A FRESH PE32+ NSIS INSTALLER LOCALLY.",
   },
   {
     id: "faq-omp",
-    q: "What is the OMP Sessions Explorer?",
-    a: "OMP (Open Multi-Agent Protocol) sessions explorer provides first-class visual inspection of subagent execution trees. You can inspect exact diffs, tool call parameters, prompt histories, and roll back broken steps with visual feedback.",
+    code: "SEC / OMP-04",
+    q: "DIAGNOSTICS // WHAT IS THE PURPOSE OF THE OMP SESSIONS TIMELINE?",
+    a: "OMP (OPEN MULTI-AGENT PROTOCOL) TIMELINE PROVIDES FRAME-ACCURATE TELEMETRY INTO SUBAGENT STATE TREES, TOOL DISPATCH PAYLOADS, AST DIFF ARTIFACTS, AND DETERMINISTIC ROLLBACK POINTS BEFORE GIT COMMITS OCCUR.",
   },
   {
     id: "faq-offline",
-    q: "Does Kronos require a cloud connection or send telemetry?",
-    a: "Zero external telemetry. Kronos is 100% local-first. All daemon sockets, terminal processes, and agent workspaces run entirely on your local machine.",
+    code: "SEC / SEC-05",
+    q: "DATA SECURITY // ARE WORKSPACE BUILDS TRANSMITTED EXTERNALLY?",
+    a: "NEGATIVE. KRONOS ENFORCES STRICT AIR-GAP PROTOCOLS. ALL DAEMON SOCKETS, DISPATCH PIPELINES, AND CONCURRENCY POOLS EXECUTE STRICTLY ON LOCALHOST (127.0.0.1) WITH ZERO OUTBOUND TELEMETRY SINKHOLES.",
   },
 ];
 
 const COMPARISON_ROWS = [
   {
     id: "dim-arch",
-    title: "Desktop Architecture",
-    subtitle: "Core executable & webview rendering engine",
-    kronosTitle: "Tauri v2 + Native Rust Core",
-    kronosDesc: "Uses native Windows WebView2. Slashing memory consumption to <100MB.",
-    paseoTitle: "Legacy Electron Shell",
-    paseoDesc: "Runs full bundled Chromium multi-process instance consuming 600MB–1.2GB RAM.",
+    code: "SPEC // D01",
+    dimension: "DESKTOP ENGINE ARCHITECTURE",
+    kronosSpec: "TAURI V2 + NATIVE RUST SUBSYSTEM",
+    kronosDesc: "Hardware-accelerated OS Webview2. Stripped executable. Zero Electron baggage.",
+    kronosStatus: "[+] PASS: 74MB IDLE",
+    paseoSpec: "LEGACY ELECTRON / BUNDLED CHROMIUM",
+    paseoDesc: "Bloated multi-process Chromium shell. Continuous CPU throttling and battery drain.",
+    paseoStatus: "[-] OBSOLETE: 840MB IDLE",
   },
   {
     id: "dim-boot",
-    title: "Startup Latency & Boot Speed",
-    subtitle: "Time from click to interactive terminal",
-    kronosTitle: "Instant Cold Boot (~380ms)",
-    kronosDesc: "Rust binary wakes immediately with zero Chromium bootstrap lag.",
-    paseoTitle: "Sluggish Boot (3.8s–5.5s)",
-    paseoDesc: "Heavy JS preload scripts and Chromium GPU initialization wait times.",
+    code: "SPEC // D02",
+    dimension: "COLD BOOT TIME TO TERMINAL READY",
+    kronosSpec: "0.38 SECONDS (INSTANT INITIALIZATION)",
+    kronosDesc: "Pre-compiled Rust runtime executes binary initialization immediately.",
+    kronosStatus: "[+] PASS: SUB-SECOND",
+    paseoSpec: "4.20 SECONDS (CHROMIUM ENGINE SPIN-UP)",
+    paseoDesc: "Heavy V8 heap initialization, Node loader overhead, and preload script blocking.",
+    paseoStatus: "[-] PENALTY: 11X SLOWER",
   },
   {
     id: "dim-daemon",
-    title: "Daemon Connection Resilience",
-    subtitle: "Local Node daemon connection & socket stability",
-    kronosTitle: "Daemon Health Gating",
+    code: "SPEC // D03",
+    dimension: "DAEMON SOCKET CONNECTION RESILIENCE",
+    kronosSpec: "GATED 200_OK HEALTH HANDSHAKE",
     kronosDesc:
-      'Window displays only after 200 OK health check. Dynamic persistent credentials eliminate "Host not connected" errors.',
-    paseoTitle: "Race Condition & Flaky Drops",
+      "Window render gated by HTTP health polling. Persistent dynamic local credential mesh.",
+    kronosStatus: "[+] PASS: 0% DROPOUT",
+    paseoSpec: "UNSYNCHRONIZED SOCKET RACE CONDITION",
     paseoDesc:
-      'UI opens before daemon finishes socket binding, causing recurrent "Host is not connected" banners.',
+      "Window surfaces before daemon finishes binding port, triggering recurrent error banners.",
+    paseoStatus: "[-] FAILURE: UNSTABLE",
   },
   {
     id: "dim-omp",
-    title: "OMP Sessions & Timeline Explorer",
-    subtitle: "Subagent execution inspection & step rollback",
-    kronosTitle: "First-Class Native Explorer",
-    kronosDesc:
-      "Dedicated visual timeline, tool call diffing, step rollback, and multi-turn branch tree inspection built directly into the UI.",
-    paseoTitle: "Basic Plain Logs Only",
-    paseoDesc: "No dedicated OMP sessions route, no visual step diffs, and no state rollback view.",
+    code: "SPEC // D04",
+    dimension: "OMP MULTI-AGENT SESSIONS TIMELINE",
+    kronosSpec: "DEDICATED NATIVE TIMELINE & DIFF INSPECTOR",
+    kronosDesc: "Visual tool invocation diffs, rollback checkpoints, and token telemetry trees.",
+    kronosStatus: "[+] PASS: FULL TELEMETRY",
+    paseoSpec: "UNSTRUCTURED STDOUT TEXT STREAM",
+    paseoDesc: "No timeline navigation, no structured diff verification, no state rewind controls.",
+    paseoStatus: "[-] ABSENT: RAW LOGS ONLY",
   },
   {
     id: "dim-browser",
-    title: "Browser Automation & DOM Grabbing",
-    subtitle: "Web agent execution & visual markup inspection",
-    kronosTitle: "Interactive Element Inspector",
+    code: "SPEC // D05",
+    dimension: "BROWSER WORKSPACE & DOM INSPECTION",
+    kronosSpec: "INTERACTIVE ELEMENT & MARKUP GRABBER",
     kronosDesc:
-      "Interactive markup grab, live screencasting, Chromium cookie vault, and multi-pane split layout.",
-    paseoTitle: "Static Preview Pane",
+      "Target selector crosshairs, live screencasting, and Chromium cookie vault injection.",
+    kronosStatus: "[+] PASS: INTERACTIVE",
+    paseoSpec: "STATIC SANDBOXED HTML PREVIEW",
     paseoDesc:
-      "Non-interactive HTML preview without DOM element targeting or automated cookie session injection.",
+      "Read-only viewport without DOM element interrogation or automated cookie migration.",
+    paseoStatus: "[-] DEFICIENT: PASSIVE",
   },
   {
     id: "dim-palette",
-    title: "Universal Command Palette (Ctrl+K)",
-    subtitle: "Instant keyboard teleportation & agent actions",
-    kronosTitle: "Integrated Command Hub",
-    kronosDesc:
-      "Fuzzy-find commands, switch active workspaces, dispatch background subagents, and route LLM providers with one shortcut.",
-    paseoTitle: "Limited Fragmented Menus",
-    paseoDesc: "Requires manual mouse clicks across scattered sidebar panes and dropdowns.",
+    code: "SPEC // D06",
+    dimension: "COMMAND BUS TELEPORTATION (CTRL+K)",
+    kronosSpec: "UNIVERSAL TACTICAL COMMAND MATRIX",
+    kronosDesc: "Instant subagent routing, fuzzy workspace switching, and model re-allocation.",
+    kronosStatus: "[+] PASS: 100% KEYBOARD",
+    paseoSpec: "FRAGMENTED MULTI-CLICK SIDEBARS",
+    paseoDesc: "Requires manual mouse navigation across nested panels and unlinked submenus.",
+    paseoStatus: "[-] FRICTION: MANUAL",
   },
   {
     id: "dim-update",
-    title: "Installation & Automated Updates",
-    subtitle: "Packaging, distribution & git synchronization",
-    kronosTitle: "1-Click Auto-Update Runner",
-    kronosDesc:
-      "Run update-desktop-exe.bat to automatically pull latest git updates and rebuild the NSIS setup executable.",
-    paseoTitle: "Manual Multi-Step Rebuilds",
-    paseoDesc:
-      "No unified automation batch runner; prone to merge conflicts and manual workspace package build failures.",
+    code: "SPEC // D07",
+    dimension: "RELEASE SYNCHRONIZATION PIPELINE",
+    kronosSpec: "1-CLICK ATOMIC REBUILD RUNNER",
+    kronosDesc: "Executes git pull, workspace package builds, and NSIS compilation in one command.",
+    kronosStatus: "[+] PASS: AUTOMATED",
+    paseoSpec: "MANUAL MULTI-TIER TERMINAL BUILDS",
+    paseoDesc: "Prone to package desynchronization and missed compiler pre-requisites.",
+    paseoStatus: "[-] HIGH RISK: MANUAL",
   },
   {
     id: "dim-design",
-    title: "Visual Design & Developer Ergonomics",
-    subtitle: "Tactical aesthetics & high-contrast telemetry",
-    kronosTitle: "Cyber Predator Stealth HUD",
+    code: "SPEC // D08",
+    dimension: "TACTICAL ERGONOMICS & VISUAL SYNTHESIS",
+    kronosSpec: "INDUSTRIAL BRUTALISM & TELEMETRY HUD",
     kronosDesc:
-      "Chiseled titanium accents, glowing electric cyan telemetry vents, high-contrast OLED dark mode.",
-    paseoTitle: "Generic Flat Grey Theme",
-    paseoDesc: "Basic monochrome appearance with no hardware telemetry cues or visual hierarchy.",
+      "Monolithic uppercase typography, rigid 1px blueprint grids, and hazard red alerts.",
+    kronosStatus: "[+] PASS: MAXIMUM DENSITY",
+    paseoSpec: "GENERIC LOW-CONTRAST MONOCHROME",
+    paseoDesc: "Unstructured spacing, low visual hierarchy, and missing hardware status readouts.",
+    paseoStatus: "[-] BLAND: LOW CONTRAST",
   },
 ];
 
 const BENTO_CARDS = [
   {
     id: "bento-rust",
-    title: "Tauri v2 Native Rust Engine",
-    desc: "Replaces heavy Chromium processes with native OS Webview2. Consumes under 100MB of RAM, keeping your CPU cool and battery intact during heavy agent builds.",
-    icon: Cpu,
-    colorClass: "bg-cyan-950 text-cyan-400 border-cyan-800/40",
+    unit: "UNIT // SYS-01",
+    title: "TAURI V2 RUST BACKBONE",
+    spec: "RESIDENT SET: < 100MB",
+    desc: "Replaces heavy multi-process Chromium containers with direct native OS Webview2 integration. Zero memory leakage under sustained 12-hour multi-agent build waves.",
   },
   {
     id: "bento-omp",
-    title: "OMP Sessions Diff Timeline",
-    desc: "Inspect every code modification, subagent reasoning step, and tool output. Rewind bad steps with one click before committing to your git history.",
-    icon: History,
-    colorClass: "bg-emerald-950 text-emerald-400 border-emerald-800/40",
+    unit: "UNIT // TEL-02",
+    title: "OMP TIMELINE & DIFF MATRIX",
+    spec: "INSPECTION: AST-ACCURATE",
+    desc: "Inspect every file mutation, tool invocation parameter, and subagent reasoning step. Roll back failed speculative execution branches before permanent git commits.",
   },
   {
     id: "bento-browser",
-    title: "Headless Browser Inspector",
-    desc: "Autonomous agents can interact with live web apps, click elements, extract DOM markup, and debug auth flows through the built-in browser pane.",
-    icon: Globe,
-    colorClass: "bg-blue-950 text-blue-400 border-blue-800/40",
+    unit: "UNIT // DOM-03",
+    title: "TACTICAL BROWSER HEADLESS PANE",
+    spec: "AUTOMATION: CDP RECEPTOR",
+    desc: "Autonomous agents query live DOM hierarchies, click verified coordinates, capture markup snapshots, and inject session cookies from host Chromium stores.",
   },
   {
     id: "bento-swarms",
-    title: "Parallel Swarm Orchestration",
-    desc: "Run Claude Code, OpenCode, Codex, and Pi simultaneously across multiple repositories. Each agent gets its own sandboxed terminal and state.",
-    icon: Boxes,
-    colorClass: "bg-purple-950 text-purple-400 border-purple-800/40",
+    unit: "UNIT // SWR-04",
+    title: "PARALLEL CONCURRENT SWARMS",
+    spec: "DISPATCH POOL: 32 THREADS",
+    desc: "Execute Claude Code, OpenCode, Codex, and Pi simultaneously across multiple isolated worktrees with sandboxed environmental variables and shared IPC channels.",
   },
   {
     id: "bento-daemon",
-    title: "Resilient Daemon Mesh",
-    desc: "Local-first architecture keeps all source code on your machine. Dynamic local credentials eliminate disconnects and unauthorized socket probes.",
-    icon: ShieldCheck,
-    colorClass: "bg-amber-950 text-amber-400 border-amber-800/40",
+    unit: "UNIT // MSH-05",
+    title: "RESILIENT DAEMON HEALTH MESH",
+    spec: "HANDSHAKE: GATED 200_OK",
+    desc: "Eliminates 'Host not connected' socket race conditions via pre-flight health polling and persistent filesystem credential verification at boot.",
   },
   {
     id: "bento-update",
-    title: "1-Click Continuous Rebuilds",
-    desc: "Stay continuously synchronized with upstream git changes. Just double-click update-desktop-exe.bat to pull, build, and package fresh installers.",
-    icon: RefreshCw,
-    colorClass: "bg-rose-950 text-rose-400 border-rose-800/40",
+    unit: "UNIT // BLD-06",
+    title: "1-CLICK ATOMIC REBUILD RUNNER",
+    spec: "PACKAGING: NSIS SETUP .EXE",
+    desc: "Integrated update-desktop-exe.bat script fetches upstream commits, compiles internal packages, and outputs a freshly certified Windows installer in one stroke.",
   },
 ];
 
 function SwarmTerminalColumn() {
   return (
-    <div className="md:col-span-7 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-      <div className="mb-3 flex items-center justify-between border-b border-slate-800/80 pb-2">
-        <div className="flex items-center gap-2 text-cyan-300">
-          <Terminal className="h-4 w-4" />
-          <span className="font-bold">PARALLEL AGENT TERMINAL (SWARM WAVE 2)</span>
+    <div className="md:col-span-7 border border-[#262626] bg-[#0A0A0A] p-4 font-mono text-xs">
+      <div className="mb-3 flex items-center justify-between border-b border-[#262626] pb-2 text-[11px]">
+        <div className="flex items-center gap-2 text-[#EAEAEA]">
+          <span className="text-[#FF2A2A] font-bold">&gt;&gt;&gt;</span>
+          <span className="font-bold tracking-wider">SWARM CONCURRENCY MATRIX // WAVE_02</span>
         </div>
-        <span className="rounded bg-cyan-950 px-2 py-0.5 text-[10px] text-cyan-400 border border-cyan-800/50">
-          3 ACTIVE AGENTS
+        <span className="bg-[#1C1C1C] border border-[#333333] px-2 py-0.5 text-[10px] text-[#4AF626] font-bold">
+          [ 03 ACTIVE AGENTS ]
         </span>
       </div>
-      <div className="space-y-2.5 text-slate-300 text-[11px] leading-relaxed">
-        <div className="text-slate-500">
+      <div className="space-y-2 text-[#888888] text-[11px] leading-relaxed">
+        <div className="text-[#EAEAEA]">
           $ kronos agent:dispatch --swarm=refactor-pipeline --concurrency=3
         </div>
-        <div className="flex items-start gap-2">
-          <span className="text-emerald-400 font-bold">[Agent: ClaudeCode]</span>
-          <span>Tracing dependency tree for packages/server/src/server/omp-sessions-router.ts</span>
+        <div className="text-[#EAEAEA]">
+          <span className="text-[#4AF626] font-bold">[AGENT: CLAUDE_CODE]</span> TRACING DEPENDENCY
+          GRAPH: /omp-sessions-router.ts
         </div>
-        <div className="flex items-start gap-2">
-          <span className="text-cyan-400 font-bold">[Agent: OpenCode]</span>
-          <span>Writing AST mutation: Replacing obsolete imports in 14 modules.</span>
+        <div className="text-[#EAEAEA]">
+          <span className="text-[#4AF626] font-bold">[AGENT: OPEN_CODE]</span> EXECUTING AST
+          MUTATION: REFACTORING 14 EXPORTS
         </div>
-        <div className="flex items-start gap-2">
-          <span className="text-purple-400 font-bold">[Agent: OMP Scout]</span>
-          <span>Verifying contract boundaries: Zero breaking changes in schema.</span>
+        <div className="text-[#EAEAEA]">
+          <span className="text-[#FF2A2A] font-bold">[AGENT: OMP_SCOUT]</span> VERIFYING CONTRACT
+          BOUNDARIES: ZERO BREAKING CHANGES
         </div>
-        <div className="rounded border border-emerald-500/20 bg-emerald-950/20 p-2 text-emerald-300">
-          ✓ Step 4/4 Succeeded: Zero memory leak detected. Rust daemon thread pool steady at 4
-          threads.
+        <div className="border border-[#262626] bg-[#121212] p-2 text-[#4AF626] font-mono text-[10px]">
+          [STATUS: 200_OK] CYCLE TIME: 780MS // MEMORY DELTA: 0.00MB // KERNEL THREADS: 4
         </div>
       </div>
     </div>
@@ -233,41 +231,37 @@ function SwarmTerminalColumn() {
 
 function SwarmInspectorColumn() {
   return (
-    <div className="md:col-span-5 flex flex-col gap-2">
-      <div className="flex-1 rounded-xl border border-slate-800 bg-slate-900/60 p-3">
-        <div className="mb-2 flex items-center justify-between border-b border-slate-800/80 pb-1.5 text-slate-300">
-          <div className="flex items-center gap-1.5 text-amber-300">
-            <History className="h-3.5 w-3.5" />
-            <span className="font-bold text-[11px]">OMP SESSIONS & TIMELINE</span>
-          </div>
-          <span className="text-[10px] text-slate-500">SESSION #01A0DD</span>
+    <div className="md:col-span-5 flex flex-col gap-2 font-mono text-xs">
+      <div className="flex-1 border border-[#262626] bg-[#0A0A0A] p-3">
+        <div className="mb-2 flex items-center justify-between border-b border-[#262626] pb-1 text-[11px]">
+          <span className="font-bold text-[#EAEAEA]">[ TELEMETRY: OMP SESSIONS ]</span>
+          <span className="text-[#888888] text-[10px]">ID: #01A0DD</span>
         </div>
-        <div className="space-y-1.5 text-[10px]">
-          <div className="flex items-center justify-between rounded bg-slate-800/40 p-1.5 text-slate-300">
-            <span className="text-cyan-400">Step 1: Read AST Graph</span>
-            <span className="text-slate-500">12ms · 4KB</span>
+        <div className="space-y-1 text-[10px]">
+          <div className="flex justify-between border-b border-[#1C1C1C] py-1 text-[#888888]">
+            <span className="text-[#EAEAEA]">STEP 01: READ_AST_GRAPH</span>
+            <span className="text-[#888888]">12MS</span>
           </div>
-          <div className="flex items-center justify-between rounded bg-slate-800/40 p-1.5 text-slate-300">
-            <span className="text-cyan-400">Step 2: Diff Inspector Gated</span>
-            <span className="text-emerald-400 font-bold">14 edits</span>
+          <div className="flex justify-between border-b border-[#1C1C1C] py-1 text-[#888888]">
+            <span className="text-[#EAEAEA]">STEP 02: DIFF_INSPECTOR</span>
+            <span className="text-[#4AF626] font-bold">+14 / -0</span>
           </div>
-          <div className="flex items-center justify-between rounded bg-cyan-950/40 border border-cyan-800/40 p-1.5 text-cyan-200">
-            <span>Step 3: Verification Smoke Test</span>
-            <span className="text-cyan-300">PASS (0.8s)</span>
+          <div className="flex justify-between py-1 text-[#888888]">
+            <span className="text-[#EAEAEA]">STEP 03: VERIFICATION_SMOKE</span>
+            <span className="text-[#4AF626] font-bold">[ PASS ]</span>
           </div>
         </div>
       </div>
-      <div className="flex-1 rounded-xl border border-slate-800 bg-slate-900/60 p-3">
-        <div className="mb-2 flex items-center justify-between border-b border-slate-800/80 pb-1.5 text-slate-300">
-          <div className="flex items-center gap-1.5 text-blue-400">
-            <Eye className="h-3.5 w-3.5" />
-            <span className="font-bold text-[11px]">BROWSER MARKUP OVERLAY</span>
-          </div>
-          <span className="text-[10px] text-emerald-400">INSPECT ON</span>
+      <div className="flex-1 border border-[#262626] bg-[#0A0A0A] p-3">
+        <div className="mb-2 flex items-center justify-between border-b border-[#262626] pb-1 text-[11px]">
+          <span className="font-bold text-[#EAEAEA]">[ DOM INSPECTOR RECEPTOR ]</span>
+          <span className="text-[#4AF626] text-[10px] font-bold">[ ACTIVE ]</span>
         </div>
-        <div className="rounded border border-dashed border-cyan-500/40 bg-cyan-950/20 p-2 text-[10px] text-slate-300">
-          <code>&lt;div id=&quot;app-root&quot; data-kronos-element=&quot;selected&quot;&gt;</code>
-          <div className="mt-1 text-slate-400">Selector: #app-root &gt; .terminal-viewport</div>
+        <div className="border border-[#333333] bg-[#121212] p-2 text-[10px] text-[#888888]">
+          <div className="text-[#EAEAEA]">
+            &lt;div id=&quot;app-root&quot; data-kronos-element=&quot;selected&quot;&gt;
+          </div>
+          <div className="text-[#FF2A2A] mt-1">TARGET: #app-root &gt; .terminal-viewport</div>
         </div>
       </div>
     </div>
@@ -276,32 +270,24 @@ function SwarmInspectorColumn() {
 
 function CockpitHeader() {
   return (
-    <div className="flex items-center justify-between border-b border-slate-800/80 px-4 py-2.5">
+    <div className="flex items-center justify-between border-b border-[#262626] bg-[#121212] px-4 py-2 text-xs font-mono">
       <div className="flex items-center gap-3">
-        <div className="flex gap-1.5">
-          <div className="h-3 w-3 rounded-full bg-red-500/80" />
-          <div className="h-3 w-3 rounded-full bg-yellow-500/80" />
-          <div className="h-3 w-3 rounded-full bg-green-500/80" />
-        </div>
-        <div className="flex items-center gap-2 border-l border-slate-800 pl-3">
-          <img src="/kronos-logo.svg" alt="Kronos" className="h-4 w-4" />
-          <span className="font-mono text-xs font-semibold text-slate-300">
-            Kronos Workstation — active-swarm-01
-          </span>
-        </div>
+        <span className="bg-[#FF2A2A] text-black font-bold px-1.5 py-0.5 text-[10px]">
+          TERMINAL / 01
+        </span>
+        <span className="text-[#EAEAEA] font-bold tracking-wider">
+          KRONOS WORKSTATION // ACTIVE SWARM SESSION
+        </span>
       </div>
-      <div className="flex items-center gap-4 text-xs font-mono text-slate-400">
-        <div className="hidden sm:flex items-center gap-1.5 text-cyan-400">
-          <Activity className="h-3.5 w-3.5" />
-          <span>DAEMON: HEALTHY (200 OK)</span>
+      <div className="flex items-center gap-4 text-[11px] text-[#888888]">
+        <div>
+          SYS_HEALTH: <span className="text-[#4AF626] font-bold">[ 200_OK ]</span>
         </div>
-        <div className="flex items-center gap-1.5 text-emerald-400">
-          <Cpu className="h-3.5 w-3.5" />
-          <span>RAM: 72.4 MB</span>
+        <div>
+          RAM: <span className="text-[#EAEAEA] font-bold">72.4 MB</span>
         </div>
-        <div className="hidden md:flex items-center gap-1.5 text-slate-300">
-          <Clock className="h-3.5 w-3.5" />
-          <span>IPC: 1.4ms</span>
+        <div>
+          IPC_LATENCY: <span className="text-[#EAEAEA] font-bold">1.4 MS</span>
         </div>
       </div>
     </div>
@@ -314,10 +300,10 @@ function CockpitWindow() {
       initial={MOTION_FADE_UP_LG}
       animate={MOTION_VISIBLE}
       transition={TRANSITION_DUR_08_D45}
-      className="mx-auto mt-14 max-w-6xl rounded-2xl border border-cyan-500/20 bg-slate-950/90 p-2 shadow-[0_20px_80px_rgba(0,0,0,0.8),0_0_50px_rgba(6,182,212,0.15)] backdrop-blur-2xl md:p-3"
+      className="mx-auto mt-12 max-w-6xl border border-[#262626] bg-[#121212] p-2 rounded-none shadow-none"
     >
       <CockpitHeader />
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-2 p-2 font-mono text-xs">
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-2 p-2">
         <SwarmTerminalColumn />
         <SwarmInspectorColumn />
       </div>
@@ -327,28 +313,28 @@ function CockpitWindow() {
 
 function HeroHeader() {
   return (
-    <div className="mx-auto flex max-w-5xl flex-col items-center text-center">
+    <div className="mx-auto flex max-w-5xl flex-col items-center text-center font-mono">
       <motion.div
         initial={MOTION_FADE_DOWN}
         animate={MOTION_VISIBLE}
         transition={TRANSITION_DUR_05}
-        className="mb-6 inline-flex items-center gap-2 rounded-full border border-cyan-500/30 bg-cyan-950/40 px-3.5 py-1.5 text-xs font-medium text-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.15)] backdrop-blur-md"
+        className="mb-6 inline-flex items-center gap-3 border border-[#262626] bg-[#121212] px-4 py-1 text-xs tracking-widest text-[#EAEAEA] uppercase"
       >
-        <span className="flex h-2 w-2 rounded-full bg-cyan-400 animate-pulse" />
-        <span className="font-mono tracking-wider">KRONOS v0.12.0 APEX</span>
-        <span className="text-cyan-600">|</span>
-        <span className="text-slate-400">Tauri v2 Native Rust Core</span>
+        <span className="h-2 w-2 bg-[#FF2A2A]" />
+        <span>[ CLASSIFIED / SPEC-D12 ]</span>
+        <span className="text-[#444444]">{"///"}</span>
+        <span className="text-[#888888]">TAURI_V2_NATIVE_RUST_CORE</span>
       </motion.div>
 
       <motion.h1
         initial={MOTION_FADE_UP}
         animate={MOTION_VISIBLE}
         transition={TRANSITION_DUR_06_D1}
-        className="text-4xl font-extrabold tracking-tight sm:text-6xl md:text-7xl lg:leading-[1.1]"
+        className="text-5xl font-black uppercase tracking-[-0.04em] sm:text-7xl md:text-8xl leading-[0.88] text-[#EAEAEA]"
       >
-        The Apex AI Developer Workstation &{" "}
-        <span className="bg-gradient-to-r from-cyan-400 via-teal-300 to-blue-500 bg-clip-text text-transparent drop-shadow-[0_0_35px_rgba(6,182,212,0.3)]">
-          Execution Engine
+        KRONOS
+        <span className="block text-2xl sm:text-4xl md:text-5xl font-bold tracking-tight text-[#FF2A2A] mt-2">
+          AUTONOMOUS EXECUTION ENGINE
         </span>
       </motion.h1>
 
@@ -356,37 +342,34 @@ function HeroHeader() {
         initial={MOTION_FADE_UP}
         animate={MOTION_VISIBLE}
         transition={TRANSITION_DUR_06_D2}
-        className="mt-6 max-w-3xl text-lg text-slate-300 md:text-xl font-normal leading-relaxed"
+        className="mt-6 max-w-3xl text-sm md:text-base text-[#888888] uppercase tracking-wider leading-relaxed"
       >
-        Engineered in <strong>Rust & Tauri v2</strong> with <strong>&lt;100MB RAM</strong> overhead.
-        Zero Electron bloat. Features native OMP sessions timeline diffing, headless browser
-        inspection, and unified multi-agent swarm orchestration.
+        {
+          "[ SPECIFICATION: NATIVE RUST WORKSPACE // RAM ALLOCATION < 100MB // ZERO CHROMIUM RESIDUE // FRAME-ACCURATE OMP TIMELINE DIFFING // DETERMINISTIC SWARM CONCURRENCY ]"
+        }
       </motion.p>
 
       <motion.div
         initial={MOTION_FADE_UP}
         animate={MOTION_VISIBLE}
         transition={TRANSITION_DUR_06_D3}
-        className="mt-10 flex flex-wrap items-center justify-center gap-4"
+        className="mt-8 flex flex-wrap items-center justify-center gap-4 text-xs font-mono font-bold"
       >
         <a
           href="#download"
-          className="group relative inline-flex items-center gap-3 overflow-hidden rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-7 py-3.5 text-base font-semibold text-slate-950 shadow-[0_0_30px_rgba(6,182,212,0.35)] transition-all duration-200 hover:scale-105 hover:shadow-[0_0_45px_rgba(6,182,212,0.5)] active:scale-95"
+          className="inline-flex items-center gap-3 bg-[#FF2A2A] px-6 py-3 text-black hover:bg-white transition-colors tracking-widest uppercase"
         >
-          <Download className="h-5 w-5 text-slate-950 transition-transform group-hover:-translate-y-0.5" />
-          <span>Download Kronos (.exe)</span>
-          <span className="rounded bg-black/20 px-1.5 py-0.5 text-xs font-mono font-bold text-slate-900">
-            109 MB
-          </span>
+          <Download className="h-4 w-4 text-black" />
+          <span>&gt;&gt;&gt; GET_INSTALLER_X64.EXE</span>
+          <span className="bg-black text-white px-1.5 py-0.5 text-[10px]">109 MB</span>
         </a>
 
         <a
           href="#compare"
-          className="inline-flex items-center gap-2 rounded-xl border border-slate-700/80 bg-slate-900/80 px-6 py-3.5 text-base font-medium text-slate-200 backdrop-blur-md transition-all duration-200 hover:border-cyan-500/50 hover:bg-slate-800 hover:text-white"
+          className="inline-flex items-center gap-2 border border-[#333333] bg-[#121212] px-6 py-3 text-[#EAEAEA] hover:border-[#FF2A2A] hover:text-[#FF2A2A] transition-colors tracking-widest uppercase"
         >
-          <Sliders className="h-4 w-4 text-cyan-400" />
-          <span>Why We Surpass Paseo</span>
-          <ArrowRight className="h-4 w-4 text-slate-400 transition-transform group-hover:translate-x-1" />
+          <span>{"/// VIEW_TECHNICAL_AUDIT"}</span>
+          <ArrowRight className="h-4 w-4" />
         </a>
       </motion.div>
 
@@ -394,24 +377,12 @@ function HeroHeader() {
         initial={MOTION_FADE_IN}
         animate={MOTION_VISIBLE_IN}
         transition={TRANSITION_DUR_08_D4}
-        className="mt-12 flex flex-wrap items-center justify-center gap-6 text-xs text-slate-400 font-mono"
+        className="mt-10 flex flex-wrap items-center justify-center gap-6 text-[11px] text-[#888888] uppercase tracking-widest border-t border-[#262626] pt-6"
       >
-        <div className="flex items-center gap-2">
-          <Check className="h-4 w-4 text-cyan-400" />
-          <span>85% Less Memory Than Electron</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Check className="h-4 w-4 text-cyan-400" />
-          <span>Instant Cold Boot (&lt;400ms)</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Check className="h-4 w-4 text-cyan-400" />
-          <span>100% Offline Compatible</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Check className="h-4 w-4 text-cyan-400" />
-          <span>1-Click Auto-Update Runner</span>
-        </div>
+        <div>[+] 85% LESS MEMORY THAN ELECTRON</div>
+        <div>[+] COLD_BOOT: 380MS</div>
+        <div>[+] 100% LOCALHOST / AIR-GAPPED</div>
+        <div>[+] ATOMIC 1-CLICK COMPILER</div>
       </motion.div>
     </div>
   );
@@ -419,35 +390,46 @@ function HeroHeader() {
 
 function TelemetryBar() {
   return (
-    <section className="border-y border-slate-800/80 bg-slate-950/60 py-10 backdrop-blur-md">
-      <div className="mx-auto grid max-w-6xl grid-cols-2 gap-6 px-4 md:grid-cols-4">
-        <div className="flex flex-col items-center justify-center p-4 text-center">
-          <span className="text-3xl font-extrabold text-cyan-400 sm:text-4xl md:text-5xl font-mono">
+    <section className="border-y border-[#262626] bg-[#121212] py-6 font-mono text-xs">
+      <div className="mx-auto grid max-w-6xl grid-cols-2 gap-px bg-[#262626] md:grid-cols-4">
+        <div className="bg-[#0A0A0A] p-5 text-center">
+          <div className="text-[10px] text-[#888888] tracking-widest uppercase">
+            [ METRIC_01: MEMORY ]
+          </div>
+          <div className="mt-2 text-3xl font-black text-[#EAEAEA] tracking-tight sm:text-4xl">
             &lt;100MB
-          </span>
-          <span className="mt-2 text-sm font-medium text-slate-300">RAM Footprint</span>
-          <span className="text-xs text-slate-500">8.5x lower than Electron</span>
+          </div>
+          <div className="mt-1 text-[10px] text-[#4AF626] font-bold">8.5X LESS THAN ELECTRON</div>
         </div>
-        <div className="flex flex-col items-center justify-center p-4 text-center">
-          <span className="text-3xl font-extrabold text-emerald-400 sm:text-4xl md:text-5xl font-mono">
-            380ms
-          </span>
-          <span className="mt-2 text-sm font-medium text-slate-300">Cold Boot Time</span>
-          <span className="text-xs text-slate-500">Instant Rust initialization</span>
+
+        <div className="bg-[#0A0A0A] p-5 text-center">
+          <div className="text-[10px] text-[#888888] tracking-widest uppercase">
+            [ METRIC_02: INIT_CYCLE ]
+          </div>
+          <div className="mt-2 text-3xl font-black text-[#EAEAEA] tracking-tight sm:text-4xl">
+            0.38 SEC
+          </div>
+          <div className="mt-1 text-[10px] text-[#4AF626] font-bold">INSTANT RUST COLD BOOT</div>
         </div>
-        <div className="flex flex-col items-center justify-center p-4 text-center">
-          <span className="text-3xl font-extrabold text-blue-400 sm:text-4xl md:text-5xl font-mono">
-            32+
-          </span>
-          <span className="mt-2 text-sm font-medium text-slate-300">Parallel Swarm Tasks</span>
-          <span className="text-xs text-slate-500">Zero UI thread blocking</span>
+
+        <div className="bg-[#0A0A0A] p-5 text-center">
+          <div className="text-[10px] text-[#888888] tracking-widest uppercase">
+            [ METRIC_03: CONCURRENCY ]
+          </div>
+          <div className="mt-2 text-3xl font-black text-[#EAEAEA] tracking-tight sm:text-4xl">
+            32 THREADS
+          </div>
+          <div className="mt-1 text-[10px] text-[#4AF626] font-bold">PARALLEL SWARM RUNTIME</div>
         </div>
-        <div className="flex flex-col items-center justify-center p-4 text-center">
-          <span className="text-3xl font-extrabold text-purple-400 sm:text-4xl md:text-5xl font-mono">
+
+        <div className="bg-[#0A0A0A] p-5 text-center">
+          <div className="text-[10px] text-[#888888] tracking-widest uppercase">
+            [ METRIC_04: BINARY_SIZE ]
+          </div>
+          <div className="mt-2 text-3xl font-black text-[#EAEAEA] tracking-tight sm:text-4xl">
             109 MB
-          </span>
-          <span className="mt-2 text-sm font-medium text-slate-300">Lean NSIS Installer</span>
-          <span className="text-xs text-slate-500">Stripped self-contained setup</span>
+          </div>
+          <div className="mt-1 text-[10px] text-[#4AF626] font-bold">STRIPPED PE32+ NSIS</div>
         </div>
       </div>
     </section>
@@ -456,28 +438,24 @@ function TelemetryBar() {
 
 function ComparisonRow({ row }: { row: (typeof COMPARISON_ROWS)[0] }) {
   return (
-    <tr className="hover:bg-slate-900/30 transition-colors">
-      <td className="p-4 md:p-5 font-medium text-slate-200">
-        <div className="font-semibold text-white">{row.title}</div>
-        <div className="text-xs text-slate-400 mt-0.5">{row.subtitle}</div>
+    <tr className="border-b border-[#262626] bg-[#0A0A0A] text-xs font-mono hover:bg-[#121212] transition-colors">
+      <td className="p-4 border-r border-[#262626] text-[#EAEAEA]">
+        <div className="text-[10px] text-[#888888]">{row.code}</div>
+        <div className="font-bold text-[#EAEAEA] tracking-wider mt-0.5">{row.dimension}</div>
       </td>
-      <td className="p-4 md:p-5 bg-cyan-950/15 border-x border-cyan-500/20 text-slate-200 font-medium">
-        <div className="flex items-start gap-2.5">
-          <Check className="h-5 w-5 text-emerald-400 shrink-0 mt-0.5" />
-          <div>
-            <strong className="text-emerald-300">{row.kronosTitle}</strong>
-            <p className="text-xs text-slate-400 mt-1">{row.kronosDesc}</p>
-          </div>
+      <td className="p-4 border-r border-[#262626] bg-[#121212]">
+        <div className="flex items-center gap-2">
+          <span className="font-bold text-[#EAEAEA]">{row.kronosSpec}</span>
+          <span className="text-[#4AF626] font-bold text-[10px]">{row.kronosStatus}</span>
         </div>
+        <p className="mt-1 text-[11px] text-[#888888] leading-relaxed">{row.kronosDesc}</p>
       </td>
-      <td className="p-4 md:p-5 text-slate-400">
-        <div className="flex items-start gap-2.5">
-          <X className="h-5 w-5 text-red-400 shrink-0 mt-0.5" />
-          <div>
-            <span className="text-red-300 font-medium">{row.paseoTitle}</span>
-            <p className="text-xs text-slate-500 mt-1">{row.paseoDesc}</p>
-          </div>
+      <td className="p-4 bg-[#0A0A0A]">
+        <div className="flex items-center gap-2">
+          <span className="font-bold text-[#888888] line-through">{row.paseoSpec}</span>
+          <span className="text-[#FF2A2A] font-bold text-[10px]">{row.paseoStatus}</span>
         </div>
+        <p className="mt-1 text-[11px] text-[#555555] leading-relaxed">{row.paseoDesc}</p>
       </td>
     </tr>
   );
@@ -485,32 +463,24 @@ function ComparisonRow({ row }: { row: (typeof COMPARISON_ROWS)[0] }) {
 
 function ComparisonTableHeader() {
   return (
-    <tr className="border-b border-slate-800 bg-slate-900/70 text-xs font-mono uppercase tracking-wider text-slate-400">
-      <th className="p-4 md:p-5 w-1/3">Capability / Dimension</th>
-      <th className="p-4 md:p-5 w-1/3 bg-cyan-950/20 text-cyan-300 font-bold border-x border-cyan-500/20">
-        <div className="flex items-center gap-2">
-          <img src="/kronos-logo.svg" alt="Kronos" className="h-4 w-4" />
-          <span>KRONOS (Apex Workstation)</span>
-        </div>
+    <tr className="border-b border-[#262626] bg-[#121212] text-xs font-mono uppercase tracking-widest text-[#888888]">
+      <th className="p-4 w-1/3 border-r border-[#262626]">[ PARAMETER // DIMENSION ]</th>
+      <th className="p-4 w-1/3 border-r border-[#262626] text-[#EAEAEA] font-bold bg-[#1C1C1C]">
+        [+] KRONOS (APEX TAURI V2 RUST)
       </th>
-      <th className="p-4 md:p-5 w-1/3 text-slate-400">
-        <div className="flex items-center gap-2">
-          <div className="h-2 w-2 rounded-full bg-slate-500" />
-          <span>PASEO (Legacy Desktop)</span>
-        </div>
-      </th>
+      <th className="p-4 w-1/3 text-[#888888]">[-] PASEO (LEGACY ELECTRON CHROMIUM)</th>
     </tr>
   );
 }
 
 function ComparisonTable() {
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto border border-[#262626]">
       <table className="w-full text-left border-collapse">
         <thead>
           <ComparisonTableHeader />
         </thead>
-        <tbody className="divide-y divide-slate-800/80 text-sm">
+        <tbody>
           {COMPARISON_ROWS.map((row) => (
             <ComparisonRow key={row.id} row={row} />
           ))}
@@ -522,42 +492,40 @@ function ComparisonTable() {
 
 function ComparisonSection() {
   return (
-    <section id="compare" className="scroll-mt-20 py-24 md:py-32">
+    <section id="compare" className="scroll-mt-10 py-16 font-mono">
       <div className="mx-auto max-w-6xl px-4">
-        <div className="text-center">
-          <div className="inline-flex items-center gap-2 rounded-full border border-cyan-500/30 bg-cyan-950/30 px-3 py-1 text-xs font-semibold text-cyan-400">
-            <Sliders className="h-3.5 w-3.5" />
-            <span>HEAD-TO-HEAD ENGINEERING AUDIT</span>
+        <div className="border border-[#262626] bg-[#121212] p-4 text-xs uppercase mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span className="bg-[#FF2A2A] text-black font-bold px-2 py-0.5 text-[10px]">
+              AUDIT REPORT
+            </span>
+            <span className="font-bold text-[#EAEAEA] tracking-wider">
+              ARCHITECTURAL VERIFICATION MATRIX // REF: KRN-VS-PSO
+            </span>
           </div>
-          <h2 className="mt-4 text-3xl font-bold tracking-tight sm:text-5xl text-white">
-            How <span className="text-cyan-400">Kronos</span> Completely Surpasses{" "}
-            <span className="text-slate-400 line-through">Paseo</span>
-          </h2>
-          <p className="mx-auto mt-4 max-w-2xl text-slate-400 text-base md:text-lg">
-            We took the concept of an agentic development environment and re-engineered it from the
-            ground up: replacing heavy Electron bloat with a razor-sharp Rust core, adding
-            first-class OMP timeline diffing, and eliminating connection failures.
-          </p>
+          <div className="text-[10px] text-[#888888]">
+            VERDICT:{" "}
+            <span className="text-[#4AF626] font-bold">[ PASEO OBSOLETE // KRONOS PASS ]</span>
+          </div>
         </div>
-        <div className="mt-14 overflow-hidden rounded-2xl border border-slate-800 bg-slate-950/80 shadow-[0_0_50px_rgba(0,0,0,0.5)]">
-          <ComparisonTable />
-        </div>
+
+        <ComparisonTable />
       </div>
     </section>
   );
 }
 
 function BentoCard({ card }: { card: (typeof BENTO_CARDS)[0] }) {
-  const Icon = card.icon;
   return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-6 transition-all duration-300 hover:border-cyan-500/40 hover:bg-slate-900/70 hover:shadow-[0_0_30px_rgba(6,182,212,0.15)]">
-      <div
-        className={`flex h-12 w-12 items-center justify-center rounded-xl border ${card.colorClass}`}
-      >
-        <Icon className="h-6 w-6" />
+    <div className="border border-[#262626] bg-[#0A0A0A] p-5 font-mono hover:border-[#FF2A2A] transition-colors">
+      <div className="flex items-center justify-between border-b border-[#262626] pb-2 text-[10px] text-[#888888]">
+        <span>{card.unit}</span>
+        <span className="text-[#FF2A2A] font-bold">{card.spec}</span>
       </div>
-      <h3 className="mt-5 text-lg font-bold text-white">{card.title}</h3>
-      <p className="mt-2 text-sm text-slate-400 leading-relaxed">{card.desc}</p>
+      <h3 className="mt-4 text-sm font-black text-[#EAEAEA] tracking-wider uppercase">
+        {card.title}
+      </h3>
+      <p className="mt-2 text-xs text-[#888888] leading-relaxed uppercase">{card.desc}</p>
     </div>
   );
 }
@@ -566,18 +534,16 @@ function BentoSection() {
   return (
     <section
       id="features"
-      className="scroll-mt-20 py-20 bg-slate-950/40 border-t border-slate-800/60"
+      className="scroll-mt-10 py-16 border-t border-[#262626] bg-[#0A0A0A] font-mono"
     >
       <div className="mx-auto max-w-6xl px-4">
-        <div className="text-center">
-          <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-            Engineered For Power Developers
-          </h2>
-          <p className="mt-3 text-slate-400">
-            Every system in Kronos is built for zero friction and maximum throughput.
-          </p>
+        <div className="border-b border-[#262626] pb-4 mb-8 flex items-center justify-between text-xs uppercase">
+          <span className="font-bold text-[#EAEAEA] tracking-wider">
+            [ SUBSYSTEM SPECIFICATIONS ]
+          </span>
+          <span className="text-[#888888]">SECTION 02 // ARCHITECTURE</span>
         </div>
-        <div className="mt-14 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {BENTO_CARDS.map((card) => (
             <BentoCard key={card.id} card={card} />
           ))}
@@ -603,50 +569,50 @@ function SnippetTabs({
   copied: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900/60 px-4 py-2.5">
+    <div className="flex items-center justify-between border-b border-[#262626] bg-[#121212] px-4 py-2 font-mono text-xs">
       <div className="flex gap-2">
         <button
           type="button"
           onClick={onSelectBatch}
-          className={`text-xs font-mono px-3 py-1 rounded transition-colors ${
+          className={`px-3 py-1 text-[11px] font-bold uppercase transition-colors ${
             activeTab === "batch"
-              ? "bg-cyan-950 text-cyan-300 border border-cyan-800/50"
-              : "text-slate-400 hover:text-white"
+              ? "bg-[#FF2A2A] text-black"
+              : "border border-[#333333] text-[#888888] hover:text-white"
           }`}
         >
-          Windows 1-Click Update
+          [ 1-CLICK BAT ]
         </button>
         <button
           type="button"
           onClick={onSelectPowershell}
-          className={`text-xs font-mono px-3 py-1 rounded transition-colors ${
+          className={`px-3 py-1 text-[11px] font-bold uppercase transition-colors ${
             activeTab === "powershell"
-              ? "bg-cyan-950 text-cyan-300 border border-cyan-800/50"
-              : "text-slate-400 hover:text-white"
+              ? "bg-[#FF2A2A] text-black"
+              : "border border-[#333333] text-[#888888] hover:text-white"
           }`}
         >
-          NPM Command
+          [ NPM SCRIPT ]
         </button>
         <button
           type="button"
           onClick={onSelectClone}
-          className={`text-xs font-mono px-3 py-1 rounded transition-colors ${
+          className={`px-3 py-1 text-[11px] font-bold uppercase transition-colors ${
             activeTab === "clone"
-              ? "bg-cyan-950 text-cyan-300 border border-cyan-800/50"
-              : "text-slate-400 hover:text-white"
+              ? "bg-[#FF2A2A] text-black"
+              : "border border-[#333333] text-[#888888] hover:text-white"
           }`}
         >
-          Git Clone
+          [ GIT REPO ]
         </button>
       </div>
 
       <button
         type="button"
         onClick={onCopy}
-        className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-cyan-300 transition-colors"
+        className="flex items-center gap-1.5 border border-[#333333] px-2 py-1 text-[11px] text-[#888888] hover:text-white transition-colors"
       >
-        <Copy className="h-3.5 w-3.5" />
-        <span>{copied ? "Copied!" : "Copy"}</span>
+        <Copy className="h-3 w-3" />
+        <span>{copied ? "[ COPIED ]" : "[ COPY ]"}</span>
       </button>
     </div>
   );
@@ -656,10 +622,10 @@ function SnippetCode({ activeTab }: { activeTab: "batch" | "powershell" | "clone
   if (activeTab === "batch") {
     return (
       <>
-        <div className="text-slate-500"># Double click in file explorer or run in CMD:</div>
-        <div className="text-cyan-300 font-bold mt-1">.\\update-desktop-exe.bat</div>
-        <div className="text-slate-500 mt-2">
-          # Automatically pulls git, builds workspace packages, and compiles the .exe installer.
+        <div className="text-[#555555]"># EXECUTE AUTOMATED COMPILER & RELEASE PACKAGER:</div>
+        <div className="text-[#EAEAEA] font-bold mt-1">&gt; .\\update-desktop-exe.bat</div>
+        <div className="text-[#555555] mt-2">
+          # PIPELINE: PULLS GIT DELTAS -&gt; BUILDS WORKSPACES -&gt; OUTPUTS NSIS .EXE
         </div>
       </>
     );
@@ -667,16 +633,16 @@ function SnippetCode({ activeTab }: { activeTab: "batch" | "powershell" | "clone
   if (activeTab === "powershell") {
     return (
       <>
-        <div className="text-slate-500"># Run in root repository directory:</div>
-        <div className="text-cyan-300 font-bold mt-1">npm run desktop:update-build</div>
+        <div className="text-[#555555]"># EXECUTE VIA REPOSITORY PACKAGE MANAGER:</div>
+        <div className="text-[#EAEAEA] font-bold mt-1">&gt; npm run desktop:update-build</div>
       </>
     );
   }
   return (
     <>
-      <div className="text-slate-500"># Clone our official repository fork:</div>
-      <div className="text-cyan-300 font-bold mt-1">
-        git clone https://github.com/Xenonesis/paseo.git
+      <div className="text-[#555555]"># CLONE OFFICIAL HARDENED FORK:</div>
+      <div className="text-[#EAEAEA] font-bold mt-1">
+        &gt; git clone https://github.com/Xenonesis/paseo.git
       </div>
     </>
   );
@@ -703,7 +669,7 @@ function SnippetCard() {
   const onSelectClone = useCallback(() => setActiveTab("clone"), []);
 
   return (
-    <div className="mt-10 w-full max-w-2xl rounded-xl border border-slate-800 bg-slate-950/90 text-left overflow-hidden">
+    <div className="mt-8 w-full max-w-2xl border border-[#262626] bg-[#0A0A0A] text-left">
       <SnippetTabs
         activeTab={activeTab}
         onSelectBatch={onSelectBatch}
@@ -712,7 +678,7 @@ function SnippetCard() {
         onCopy={onCopy}
         copied={copied}
       />
-      <div className="p-4 font-mono text-xs text-slate-300 leading-relaxed overflow-x-auto">
+      <div className="p-4 font-mono text-xs text-[#EAEAEA] leading-relaxed overflow-x-auto">
         <SnippetCode activeTab={activeTab} />
       </div>
     </div>
@@ -721,37 +687,39 @@ function SnippetCard() {
 
 function InstallSection() {
   return (
-    <section id="download" className="scroll-mt-20 py-24 md:py-32">
+    <section
+      id="download"
+      className="scroll-mt-10 py-16 border-t border-[#262626] bg-[#0A0A0A] font-mono"
+    >
       <div className="mx-auto max-w-5xl px-4">
-        <div className="rounded-3xl border border-cyan-500/30 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-950 p-8 shadow-[0_0_80px_rgba(6,182,212,0.15)] md:p-14">
-          <div className="flex flex-col items-center text-center">
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-cyan-950 text-cyan-400 border border-cyan-500/40 shadow-[0_0_20px_rgba(6,182,212,0.3)]">
-              <Download className="h-8 w-8" />
-            </div>
-            <h2 className="mt-6 text-3xl font-bold tracking-tight text-white sm:text-5xl">
-              Deploy Kronos On Your Workstation
-            </h2>
-            <p className="mt-3 max-w-xl text-slate-400 text-base md:text-lg">
-              Production-ready NSIS installer for Windows 10 & 11 x64. Packaged with bundled runtime
-              dependencies.
-            </p>
-
-            <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
-              <a
-                href="/download"
-                className="inline-flex items-center gap-3 rounded-xl bg-cyan-400 px-8 py-4 font-bold text-slate-950 shadow-[0_0_30px_rgba(6,182,212,0.4)] transition-all hover:bg-cyan-300 hover:scale-105 active:scale-95"
-              >
-                <Download className="h-5 w-5" />
-                <span>Download Kronos 0.12.0 (.exe)</span>
-              </a>
-            </div>
-
-            <div className="mt-4 text-xs font-mono text-slate-400">
-              SHA-256 Verified · 109.3 MB · Architecture: x64 Windows
-            </div>
-
-            <SnippetCard />
+        <div className="border border-[#262626] bg-[#121212] p-8 text-center">
+          <div className="inline-block bg-[#FF2A2A] text-black font-bold px-3 py-1 text-xs tracking-widest uppercase mb-4">
+            DEPLOYMENT MATRIX // VER 0.12.0
           </div>
+          <h2 className="text-3xl font-black uppercase tracking-tight text-[#EAEAEA] sm:text-4xl">
+            INSTALL KRONOS WORKSTATION
+          </h2>
+          <p className="mt-2 text-xs text-[#888888] uppercase tracking-wider max-w-xl mx-auto">
+            PRODUCTION-CERTIFIED PE32+ NSIS INSTALLER FOR WINDOWS 10 / 11 X64. PACKAGED WITH LOCAL
+            NODE RUNTIME.
+          </p>
+
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-4">
+            <a
+              href="/download"
+              className="inline-flex items-center gap-3 bg-[#FF2A2A] px-8 py-4 font-bold text-black hover:bg-white transition-colors tracking-widest text-xs uppercase"
+            >
+              <Download className="h-4 w-4" />
+              <span>&gt;&gt;&gt; DOWNLOAD KRONOS_0.12.0_SETUP.EXE</span>
+              <span className="bg-black text-white px-1.5 py-0.5 text-[10px]">109 MB</span>
+            </a>
+          </div>
+
+          <div className="mt-3 text-[10px] text-[#555555]">
+            SHA256: VERIFIED · PACKAGING: NSIS X64 · TARGET: LOCALHOST AIRGAP
+          </div>
+
+          <SnippetCard />
         </div>
       </div>
     </section>
@@ -772,22 +740,25 @@ function FaqItem({
   }, [onToggle, item.id]);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/40 transition-colors hover:border-slate-700">
+    <div className="border border-[#262626] bg-[#0A0A0A]">
       <button
         type="button"
         onClick={handleClick}
-        className="flex w-full items-center justify-between p-5 text-left font-semibold text-slate-200"
+        className="flex w-full items-center justify-between p-4 text-left font-bold text-xs uppercase tracking-wider text-[#EAEAEA] hover:bg-[#121212] transition-colors"
       >
-        <span>{item.q}</span>
+        <span className="flex items-center gap-2">
+          <span className="text-[#FF2A2A]">{item.code}</span>
+          <span>{item.q}</span>
+        </span>
         <ChevronRight
-          className={`h-4 w-4 text-cyan-400 transition-transform duration-200 ${
+          className={`h-4 w-4 text-[#FF2A2A] transition-transform duration-200 ${
             isOpen ? "rotate-90" : ""
           }`}
         />
       </button>
       <AnimatePresence>
         {isOpen && (
-          <div className="px-5 pb-5 text-sm text-slate-400 leading-relaxed border-t border-slate-800/40 pt-3">
+          <div className="px-4 pb-4 text-xs text-[#888888] leading-relaxed border-t border-[#262626] pt-3 uppercase">
             {item.a}
           </div>
         )}
@@ -803,17 +774,15 @@ function FaqSection() {
   }, []);
 
   return (
-    <section className="border-t border-slate-800/80 py-20 bg-slate-950/60">
+    <section className="border-t border-[#262626] py-16 bg-[#0A0A0A] font-mono">
       <div className="mx-auto max-w-4xl px-4">
-        <div className="text-center">
-          <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-            Frequently Asked Questions
-          </h2>
-          <p className="mt-3 text-slate-400">
-            Everything you need to know about switching to Kronos.
-          </p>
+        <div className="border-b border-[#262626] pb-3 mb-6 flex items-center justify-between text-xs uppercase">
+          <span className="font-bold text-[#EAEAEA] tracking-wider">
+            [ OPERATOR MANUAL // FAQ ]
+          </span>
+          <span className="text-[#888888]">DOCUMENTATION SECTION 04</span>
         </div>
-        <div className="mt-12 space-y-4">
+        <div className="space-y-2">
           {FAQ_ITEMS.map((item) => (
             <FaqItem
               key={item.id}
@@ -827,18 +796,15 @@ function FaqSection() {
     </section>
   );
 }
+
 export function KronosLandingPage() {
   return (
-    <div className="relative w-full overflow-hidden text-slate-100 selection:bg-cyan-500/30 selection:text-cyan-200">
-      <div className="pointer-events-none absolute -top-40 left-1/2 -z-10 h-[650px] w-[1000px] -translate-x-1/2 rounded-full bg-gradient-to-b from-cyan-500/15 via-blue-600/10 to-transparent blur-[120px]" />
-      <div className="pointer-events-none absolute top-[1200px] -left-60 -z-10 h-[500px] w-[600px] rounded-full bg-cyan-600/10 blur-[140px]" />
-      <div className="pointer-events-none absolute top-[2400px] -right-60 -z-10 h-[600px] w-[600px] rounded-full bg-blue-500/10 blur-[150px]" />
-
-      <div className="mx-auto max-w-6xl px-4 pt-6">
+    <div className="relative w-full bg-[#0A0A0A] text-[#EAEAEA] font-mono selection:bg-[#FF2A2A] selection:text-black crt-scanlines tactical-dots">
+      <div className="mx-auto max-w-6xl px-4 pt-4">
         <SiteHeader />
       </div>
 
-      <section className="relative pt-6 pb-20 md:pt-12 md:pb-32">
+      <section className="relative pt-8 pb-16">
         <HeroHeader />
         <CockpitWindow />
       </section>
@@ -849,7 +815,7 @@ export function KronosLandingPage() {
       <InstallSection />
       <FaqSection />
 
-      <div className="border-t border-slate-800/80 bg-slate-950 py-12">
+      <div className="border-t border-[#262626] bg-[#0A0A0A] py-8">
         <SiteFooter width="wide" sponsors={false} />
       </div>
     </div>
