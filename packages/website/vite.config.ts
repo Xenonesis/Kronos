@@ -104,6 +104,7 @@ const sitemapPages = [
 
 export default defineConfig((): UserConfig => {
   return {
+    base: process.env.VITE_BASE_PATH || "/paseo/",
     server: {
       host: "0.0.0.0",
       port: 8082,
