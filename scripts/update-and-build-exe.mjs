@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { statSync, existsSync, readdirSync } from 'node:fs';
+import { statSync, existsSync, readdirSync, copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -73,6 +73,22 @@ async function main() {
     console.log(`  \x1b[37mPath:\x1b[0m ${exePath}`);
     console.log(`  \x1b[37mSize:\x1b[0m ${sizeMb} MB (${stats.size.toLocaleString()} bytes)`);
     console.log(`  \x1b[37mLast Modified:\x1b[0m ${stats.mtime.toLocaleString()}`);
+
+    const persistentPath = path.join(nsisDir, 'Kronos_x64-setup.exe');
+    if (exePath !== persistentPath) {
+      copyFileSync(exePath, persistentPath);
+      console.log(`  \x1b[37mPersistent Latest Asset:\x1b[0m ${persistentPath}`);
+    }
+
+    if (process.argv.includes('--publish')) {
+      console.log('\n\x1b[33m[*] Uploading latest .exe to GitHub Releases...\x1b[0m');
+      try {
+        execSync(`gh release upload v0.12.0 "${exePath}" "${persistentPath}" --clobber --repo Xenonesis/paseo`, { stdio: 'inherit' });
+        console.log('\x1b[32m✔ Uploaded latest installer to GitHub Releases!\x1b[0m');
+      } catch (e) {
+        console.warn('\x1b[33m⚠ Warning: Could not upload to GitHub Releases automatically.\x1b[0m', e.message);
+      }
+    }
   } else {
     console.error('\n\x1b[31m✖ Error: Installer .exe was not found at expected path.\x1b[0m');
     process.exit(1);

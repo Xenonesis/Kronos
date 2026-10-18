@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { ArrowRight, ChevronRight, Copy, Download } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { SiteHeader } from "~/components/site-header";
@@ -18,6 +18,57 @@ const TRANSITION_DUR_06_D2 = { duration: 0.6, delay: 0.2 };
 const TRANSITION_DUR_06_D3 = { duration: 0.6, delay: 0.3 };
 const TRANSITION_DUR_08_D4 = { duration: 0.8, delay: 0.4 };
 const TRANSITION_DUR_08_D45 = { duration: 0.8, delay: 0.45 };
+
+const LATEST_RELEASE_API = "https://api.github.com/repos/Xenonesis/paseo/releases/latest";
+const PERSISTENT_DOWNLOAD_URL =
+  "https://github.com/Xenonesis/paseo/releases/latest/download/Kronos_x64-setup.exe";
+
+interface ReleaseData {
+  downloadUrl: string;
+  version: string;
+  size: string;
+  filename: string;
+}
+
+function useKronosRelease(): ReleaseData {
+  const [release, setRelease] = useState<ReleaseData>({
+    downloadUrl: PERSISTENT_DOWNLOAD_URL,
+    version: "v0.12.0",
+    size: "104 MB",
+    filename: "Kronos_0.12.0_x64-setup.exe",
+  });
+
+  useEffect(() => {
+    async function fetchRelease() {
+      try {
+        const res = await fetch(LATEST_RELEASE_API);
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          tag_name?: string;
+          assets?: Array<{ name: string; size: number; browser_download_url?: string }>;
+        };
+        if (!data || !Array.isArray(data.assets)) return;
+        const exeAsset =
+          data.assets.find((a) => a.name.endsWith("-setup.exe")) ||
+          data.assets.find((a) => a.name.endsWith(".exe"));
+        if (exeAsset) {
+          const mb = (exeAsset.size / (1024 * 1024)).toFixed(0) + " MB";
+          setRelease({
+            downloadUrl: exeAsset.browser_download_url || PERSISTENT_DOWNLOAD_URL,
+            version: data.tag_name || "v0.12.0",
+            size: mb,
+            filename: exeAsset.name,
+          });
+        }
+      } catch {
+        // Maintain persistent fallback
+      }
+    }
+    void fetchRelease();
+  }, []);
+
+  return release;
+}
 
 const FAQ_ITEMS = [
   {
@@ -311,7 +362,7 @@ function CockpitWindow() {
   );
 }
 
-function HeroHeader() {
+function HeroHeader({ release }: { release: ReleaseData }) {
   return (
     <div className="mx-auto flex max-w-5xl flex-col items-center text-center font-mono">
       <motion.div
@@ -356,12 +407,12 @@ function HeroHeader() {
         className="mt-8 flex flex-wrap items-center justify-center gap-4 text-xs font-mono font-bold"
       >
         <a
-          href="https://github.com/Xenonesis/paseo/releases/download/v0.12.0/Kronos_0.12.0_x64-setup.exe"
+          href={release.downloadUrl}
           className="inline-flex items-center gap-3 bg-[#FF2A2A] px-6 py-3 text-black hover:bg-white transition-colors tracking-widest uppercase"
         >
           <Download className="h-4 w-4 text-black" />
           <span>&gt;&gt;&gt; GET_INSTALLER_X64.EXE</span>
-          <span className="bg-black text-white px-1.5 py-0.5 text-[10px]">104 MB</span>
+          <span className="bg-black text-white px-1.5 py-0.5 text-[10px]">{release.size}</span>
         </a>
 
         <a
@@ -685,7 +736,7 @@ function SnippetCard() {
   );
 }
 
-function InstallSection() {
+function InstallSection({ release }: { release: ReleaseData }) {
   return (
     <section
       id="download"
@@ -694,7 +745,7 @@ function InstallSection() {
       <div className="mx-auto max-w-5xl px-4">
         <div className="border border-[#262626] bg-[#121212] p-8 text-center">
           <div className="inline-block bg-[#FF2A2A] text-black font-bold px-3 py-1 text-xs tracking-widest uppercase mb-4">
-            DEPLOYMENT MATRIX // VER 0.12.0
+            DEPLOYMENT MATRIX // VER {release.version.replace(/^v/, "")}
           </div>
           <h2 className="text-3xl font-black uppercase tracking-tight text-[#EAEAEA] sm:text-4xl">
             INSTALL KRONOS WORKSTATION
@@ -706,12 +757,12 @@ function InstallSection() {
 
           <div className="mt-6 flex flex-wrap items-center justify-center gap-4">
             <a
-              href="https://github.com/Xenonesis/paseo/releases/download/v0.12.0/Kronos_0.12.0_x64-setup.exe"
+              href={release.downloadUrl}
               className="inline-flex items-center gap-3 bg-[#FF2A2A] px-8 py-4 font-bold text-black hover:bg-white transition-colors tracking-widest text-xs uppercase"
             >
               <Download className="h-4 w-4" />
-              <span>&gt;&gt;&gt; DOWNLOAD KRONOS_0.12.0_SETUP.EXE</span>
-              <span className="bg-black text-white px-1.5 py-0.5 text-[10px]">104 MB</span>
+              <span>&gt;&gt;&gt; DOWNLOAD {release.filename.toUpperCase()}</span>
+              <span className="bg-black text-white px-1.5 py-0.5 text-[10px]">{release.size}</span>
             </a>
           </div>
 
@@ -798,6 +849,7 @@ function FaqSection() {
 }
 
 export function KronosLandingPage() {
+  const release = useKronosRelease();
   return (
     <div className="relative w-full bg-[#0A0A0A] text-[#EAEAEA] font-mono selection:bg-[#FF2A2A] selection:text-black crt-scanlines tactical-dots">
       <div className="mx-auto max-w-6xl px-4 pt-4">
@@ -805,14 +857,14 @@ export function KronosLandingPage() {
       </div>
 
       <section className="relative pt-8 pb-16">
-        <HeroHeader />
+        <HeroHeader release={release} />
         <CockpitWindow />
       </section>
 
       <TelemetryBar />
       <ComparisonSection />
       <BentoSection />
-      <InstallSection />
+      <InstallSection release={release} />
       <FaqSection />
 
       <div className="border-t border-[#262626] bg-[#0A0A0A] py-8">

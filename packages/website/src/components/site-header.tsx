@@ -51,7 +51,7 @@ export function SiteHeader() {
           [ DOCS ]
         </a>
         <a
-          href="https://github.com/Xenonesis/paseo/releases/download/v0.12.0/Kronos_0.12.0_x64-setup.exe"
+          href="https://github.com/Xenonesis/paseo/releases/latest/download/Kronos_x64-setup.exe"
           className="bg-[#FF2A2A] text-black px-3 py-1 font-bold tracking-widest hover:bg-white transition-colors"
         >
           &gt;&gt;&gt; GET_INSTALLER.EXE
