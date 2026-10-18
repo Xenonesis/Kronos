@@ -123,6 +123,10 @@ export default defineConfig((): UserConfig => {
           quoteStyle: "double",
           semicolons: true,
         },
+        prerender: {
+          enabled: true,
+          failOnError: false,
+        },
         pages: sitemapPages,
         sitemap: {
           host: siteHost,
