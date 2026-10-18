@@ -266,7 +266,7 @@ try {{
             let _ = setup_tray(app.handle());
             setup_notification_listeners(app.handle());
             let win_builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-                .title("Paseo")
+                .title("Kronos")
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(800.0, 600.0)
                 .visible(false)
@@ -285,7 +285,7 @@ try {{
                 Err(_) => {
                     eprintln!("[window] Failed to build window with effects, falling back to standard window");
                     let fallback_builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-                        .title("Paseo")
+                        .title("Kronos")
                         .inner_size(1280.0, 800.0)
                         .min_inner_size(800.0, 600.0)
                         .visible(false)

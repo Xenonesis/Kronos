@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { statSync, existsSync } from 'node:fs';
+import { statSync, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -45,7 +45,7 @@ async function main() {
   run('npx tauri build --bundles nsis', path.join(rootDir, 'packages', 'desktop-tauri'));
 
   // Verification
-  const exePath = path.join(
+  const nsisDir = path.join(
     rootDir,
     'packages',
     'desktop-tauri',
@@ -53,11 +53,20 @@ async function main() {
     'target',
     'release',
     'bundle',
-    'nsis',
-    'Paseo_0.12.0_x64-setup.exe'
+    'nsis'
   );
 
-  if (existsSync(exePath)) {
+  let exePath = '';
+  if (existsSync(nsisDir)) {
+    const files = readdirSync(nsisDir).filter((f) => f.endsWith('-setup.exe'));
+    if (files.length > 0) {
+      // pick newest
+      files.sort((a, b) => statSync(path.join(nsisDir, b)).mtimeMs - statSync(path.join(nsisDir, a)).mtimeMs);
+      exePath = path.join(nsisDir, files[0]);
+    }
+  }
+
+  if (exePath && existsSync(exePath)) {
     const stats = statSync(exePath);
     const sizeMb = (stats.size / (1024 * 1024)).toFixed(2);
     console.log('\n\x1b[1m\x1b[32m✔ SUCCESS! Updated installer created:\x1b[0m');
