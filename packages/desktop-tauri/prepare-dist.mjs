@@ -69,5 +69,22 @@ if (!fs.existsSync(tsDest)) {
     console.log("Copied typescript to server-dist/node_modules");
   }
 }
+// Strip sourcemap and buildinfo files to speed up packaging and reduce size
+function cleanExtraFiles(dir) {
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      const p = path.join(dir, f);
+      const st = fs.statSync(p);
+      if (st.isDirectory()) {
+        cleanExtraFiles(p);
+      } else if (f.endsWith(".map") || f.endsWith(".tsbuildinfo")) {
+        fs.unlinkSync(p);
+      }
+    }
+  } catch {}
+}
+cleanExtraFiles(targetDir);
+console.log("Stripped sourcemap and buildinfo files");
+
 
 console.log("Lean server-dist prepared with bundled dependencies!");
