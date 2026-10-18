@@ -8,7 +8,7 @@ export function SiteHeader() {
   return (
     <header className="flex flex-col gap-4 border border-[#262626] bg-[#121212] p-3 text-[#EAEAEA] font-mono text-xs uppercase tracking-wider md:flex-row md:items-center md:justify-between rounded-none">
       <div className="flex items-center gap-3">
-        <a href="/" className="flex items-center gap-2 group">
+        <a href="./" className="flex items-center gap-3 group">
           <span className="bg-[#FF2A2A] text-black px-1.5 py-0.5 font-bold tracking-widest text-[11px]">
             KRN
           </span>
@@ -33,13 +33,13 @@ export function SiteHeader() {
           </a>
         )}
         <a
-          href="/#compare"
+          href="#compare"
           className="text-[#EAEAEA] hover:text-[#FF2A2A] transition-colors font-bold"
         >
           [ AUDIT: VS_PASEO ]
         </a>
         <a
-          href="/#features"
+          href="#features"
           className="text-[#888888] hover:text-[#EAEAEA] hover:underline underline-offset-4 transition-colors"
         >
           [ SPEC_SHEET ]
@@ -51,7 +51,7 @@ export function SiteHeader() {
           [ DOCS ]
         </a>
         <a
-          href="/#download"
+          href="https://github.com/Xenonesis/paseo/releases/download/v0.12.0/Kronos_0.12.0_x64-setup.exe"
           className="bg-[#FF2A2A] text-black px-3 py-1 font-bold tracking-widest hover:bg-white transition-colors"
         >
           &gt;&gt;&gt; GET_INSTALLER.EXE

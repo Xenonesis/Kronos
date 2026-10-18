@@ -356,12 +356,12 @@ function HeroHeader() {
         className="mt-8 flex flex-wrap items-center justify-center gap-4 text-xs font-mono font-bold"
       >
         <a
-          href="#download"
+          href="https://github.com/Xenonesis/paseo/releases/download/v0.12.0/Kronos_0.12.0_x64-setup.exe"
           className="inline-flex items-center gap-3 bg-[#FF2A2A] px-6 py-3 text-black hover:bg-white transition-colors tracking-widest uppercase"
         >
           <Download className="h-4 w-4 text-black" />
           <span>&gt;&gt;&gt; GET_INSTALLER_X64.EXE</span>
-          <span className="bg-black text-white px-1.5 py-0.5 text-[10px]">109 MB</span>
+          <span className="bg-black text-white px-1.5 py-0.5 text-[10px]">104 MB</span>
         </a>
 
         <a
@@ -706,12 +706,12 @@ function InstallSection() {
 
           <div className="mt-6 flex flex-wrap items-center justify-center gap-4">
             <a
-              href="/download"
+              href="https://github.com/Xenonesis/paseo/releases/download/v0.12.0/Kronos_0.12.0_x64-setup.exe"
               className="inline-flex items-center gap-3 bg-[#FF2A2A] px-8 py-4 font-bold text-black hover:bg-white transition-colors tracking-widest text-xs uppercase"
             >
               <Download className="h-4 w-4" />
               <span>&gt;&gt;&gt; DOWNLOAD KRONOS_0.12.0_SETUP.EXE</span>
-              <span className="bg-black text-white px-1.5 py-0.5 text-[10px]">109 MB</span>
+              <span className="bg-black text-white px-1.5 py-0.5 text-[10px]">104 MB</span>
             </a>
           </div>
 
