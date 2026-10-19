@@ -24,42 +24,18 @@ export interface ReleaseChannels {
   beta: ReleaseInfo | null;
 }
 
-const LINUX_APPIMAGE_ASSET_PATTERN =
-  /^Paseo-(?:\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)-)?x86_64\.AppImage$/;
-
-const REQUIRED_ASSET_PATTERNS = [
-  /Paseo-.*-arm64\.dmg$/,
-  LINUX_APPIMAGE_ASSET_PATTERN,
-  /Paseo-Setup-.*\.exe$/,
-];
-
-const GITHUB_RELEASES_URL = "https://api.github.com/repos/getpaseo/paseo/releases?per_page=10";
-const RELEASE_CACHE_KEY = "github-release:v2";
-const ANDROID_RELEASE_CACHE_KEY = "github-android-release:v1";
-
-function hasRequiredAssets(release: GitHubRelease): boolean {
-  return REQUIRED_ASSET_PATTERNS.every((pattern) =>
-    release.assets.some((asset) => pattern.test(asset.name)),
-  );
-}
+const GITHUB_RELEASES_URL = "https://api.github.com/repos/Xenonesis/Kronos/releases?per_page=10";
+const RELEASE_CACHE_KEY = "github-release:kronos:v1";
+const ANDROID_RELEASE_CACHE_KEY = "github-android-release:kronos:v1";
 
 function pickWindowsAssets(assets: GitHubAsset[]) {
-  const x64Suffixed = assets.find((asset) => /Paseo-Setup-.*-x64\.exe$/.test(asset.name));
-  const arm64 = assets.find((asset) => /Paseo-Setup-.*-arm64\.exe$/.test(asset.name));
-  const legacy = assets.find(
-    (asset) =>
-      /Paseo-Setup-.*\.exe$/.test(asset.name) &&
-      !asset.name.endsWith("-x64.exe") &&
-      !asset.name.endsWith("-arm64.exe"),
-  );
+  const nsisSetup = assets.find((asset) => /Kronos.*-setup\.exe$/i.test(asset.name));
+  const genericKronos = assets.find((asset) => /Kronos.*\.exe$/i.test(asset.name));
+  const fallback = assets.find((asset) => asset.name.endsWith(".exe"));
   return {
-    x64: (x64Suffixed ?? legacy)?.name ?? null,
-    arm64: arm64?.name ?? null,
+    x64: (nsisSetup ?? genericKronos ?? fallback)?.name ?? null,
+    arm64: null,
   };
-}
-
-function pickLinuxAppImageAsset(assets: GitHubAsset[]) {
-  return assets.find((asset) => LINUX_APPIMAGE_ASSET_PATTERN.test(asset.name))?.name ?? null;
 }
 
 function versionFromTag(tag: string): string {
@@ -67,10 +43,13 @@ function versionFromTag(tag: string): string {
 }
 
 async function fetchGitHubReleases(): Promise<GitHubRelease[]> {
+  const token =
+    typeof process !== "undefined" ? process.env?.GITHUB_TOKEN || process.env?.GH_TOKEN : undefined;
   const response = await fetch(GITHUB_RELEASES_URL, {
     headers: {
       Accept: "application/vnd.github+json",
-      "User-Agent": "paseo-website",
+      "User-Agent": "kronos-website",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     cf: {
       cacheEverything: true,
@@ -84,14 +63,15 @@ async function fetchGitHubReleases(): Promise<GitHubRelease[]> {
 }
 
 function toReleaseInfo(release: GitHubRelease): ReleaseInfo | null {
-  if (release.draft || !hasRequiredAssets(release)) return null;
+  const hasExe = release.assets.some((asset) => asset.name.endsWith(".exe"));
+  if (release.draft || !hasExe) return null;
 
-  const linuxAppImageAsset = pickLinuxAppImageAsset(release.assets);
-  if (!linuxAppImageAsset) return null;
-
+  const version = release.tag_name.replace(/^v/, "");
+  const linuxAsset = release.assets.find((asset) => /AppImage$/i.test(asset.name))?.name;
+  const linuxAppImageAsset = linuxAsset ?? `Kronos-${version}-x86_64.AppImage`;
   const windowsAssets = pickWindowsAssets(release.assets);
   return {
-    version: versionFromTag(release.tag_name),
+    version,
     linuxAppImageAsset,
     windowsX64Asset: windowsAssets.x64,
     windowsArm64Asset: windowsAssets.arm64,
@@ -123,7 +103,7 @@ export function selectReleaseChannels(releases: GitHubRelease[]): ReleaseChannel
     .filter((release) => !release.prerelease)
     .map(toReleaseInfo)
     .find((release) => release !== null);
-  if (!stable) throw new Error("no ready GitHub release found");
+  if (!stable) return FALLBACK_RELEASE_CHANNELS;
 
   const beta = releases
     .filter((release) => release.prerelease)
@@ -133,8 +113,23 @@ export function selectReleaseChannels(releases: GitHubRelease[]): ReleaseChannel
   return { stable, beta: beta && leadsStable(beta.version, stable.version) ? beta : null };
 }
 
+const FALLBACK_RELEASE_CHANNELS: ReleaseChannels = {
+  stable: {
+    version: "0.12.0",
+    linuxAppImageAsset: "Kronos-0.12.0-x86_64.AppImage",
+    windowsX64Asset: "Kronos_0.12.0_x64-setup.exe",
+    windowsArm64Asset: null,
+  },
+  beta: null,
+};
+
 async function fetchReleaseChannels(): Promise<ReleaseChannels> {
-  return selectReleaseChannels(await fetchGitHubReleases());
+  try {
+    const releases = await fetchGitHubReleases();
+    return selectReleaseChannels(releases);
+  } catch {
+    return FALLBACK_RELEASE_CHANNELS;
+  }
 }
 
 export function getLatestAndroidVersionFromReleases(releases: GitHubRelease[]): string {
@@ -163,22 +158,9 @@ function isReleaseInfo(value: unknown): value is ReleaseInfo {
   const record = value as Record<string, unknown>;
   return (
     typeof record.version === "string" &&
-    /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(record.version) &&
     typeof record.linuxAppImageAsset === "string" &&
-    (record.linuxAppImageAsset === "Paseo-x86_64.AppImage" ||
-      new RegExp(`^Paseo-${record.version.replaceAll(".", "\\.")}-x86_64\\.AppImage$`).test(
-        record.linuxAppImageAsset,
-      )) &&
     (typeof record.windowsX64Asset === "string" || record.windowsX64Asset === null) &&
-    (typeof record.windowsArm64Asset === "string" || record.windowsArm64Asset === null) &&
-    (record.windowsX64Asset === null ||
-      new RegExp(`^Paseo-Setup-${record.version.replaceAll(".", "\\.")}(?:-x64)?\\.exe$`).test(
-        record.windowsX64Asset,
-      )) &&
-    (record.windowsArm64Asset === null ||
-      new RegExp(`^Paseo-Setup-${record.version.replaceAll(".", "\\.")}-arm64\\.exe$`).test(
-        record.windowsArm64Asset,
-      ))
+    (typeof record.windowsArm64Asset === "string" || record.windowsArm64Asset === null)
   );
 }
 

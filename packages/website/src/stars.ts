@@ -12,25 +12,34 @@ function formatStars(count: number): string {
   return `${k % 1 === 0 ? k.toFixed(0) : k.toFixed(1)}k`;
 }
 
-const GITHUB_REPO_URL = "https://api.github.com/repos/getpaseo/paseo";
-const STARS_CACHE_KEY = "github-stars:v1";
+const GITHUB_REPO_URL = "https://api.github.com/repos/Xenonesis/Kronos";
+const STARS_CACHE_KEY = "github-stars:kronos:v1";
 
 async function fetchStarCount(): Promise<string> {
-  const res = await fetch(GITHUB_REPO_URL, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "User-Agent": "paseo-website",
-    },
-    cf: {
-      cacheEverything: true,
-      cacheTtl: 60,
-      cacheKey: "github-repo-stars",
-    },
-  } as RequestInit);
-  if (!res.ok) throw new Error(`github repo ${res.status}`);
+  try {
+    const token =
+      typeof process !== "undefined"
+        ? process.env?.GITHUB_TOKEN || process.env?.GH_TOKEN
+        : undefined;
+    const res = await fetch(GITHUB_REPO_URL, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "kronos-website",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      cf: {
+        cacheEverything: true,
+        cacheTtl: 60,
+        cacheKey: "github-repo-stars",
+      },
+    } as RequestInit);
+    if (!res.ok) return "0";
 
-  const repo = (await res.json()) as GitHubRepo;
-  return formatStars(repo.stargazers_count);
+    const repo = (await res.json()) as GitHubRepo;
+    return formatStars(repo.stargazers_count ?? 0);
+  } catch {
+    return "0";
+  }
 }
 
 function isStars(value: unknown): value is string {

@@ -8,7 +8,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 const repoRoot = path.resolve(__dirname, "../..");
-const siteHost = "https://paseo.sh";
+const siteHost = process.env.VITE_SITE_HOST || "https://xenonesis.github.io/Kronos";
 
 function discoverDocsRoutes(): string[] {
   const docsDir = path.join(repoRoot, "public-docs");

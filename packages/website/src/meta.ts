@@ -1,7 +1,11 @@
-const SITE_ORIGIN = "https://paseo.sh";
+const SITE_ORIGIN = "https://xenonesis.github.io/Kronos";
 
 export function pageMeta(title: string, description: string, path: string, image?: string) {
-  const url = `${SITE_ORIGIN}${path}`;
+  let cleanPath = "";
+  if (path !== "/") {
+    cleanPath = path.startsWith("/") ? path : `/${path}`;
+  }
+  const url = `${SITE_ORIGIN}${cleanPath}`;
   return {
     meta: [
       { title },

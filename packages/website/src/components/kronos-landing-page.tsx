@@ -101,6 +101,12 @@ const FAQ_ITEMS = [
     q: "DATA SECURITY // ARE WORKSPACE BUILDS TRANSMITTED EXTERNALLY?",
     a: "NEGATIVE. KRONOS ENFORCES STRICT AIR-GAP PROTOCOLS. ALL DAEMON SOCKETS, DISPATCH PIPELINES, AND CONCURRENCY POOLS EXECUTE STRICTLY ON LOCALHOST (127.0.0.1) WITH ZERO OUTBOUND TELEMETRY SINKHOLES.",
   },
+  {
+    id: "faq-streaming",
+    code: "SEC / STR-06",
+    q: "RUNTIME INTEGRITY // HOW DOES KRONOS PREVENT 'NOT RESPONDING' FREEZES DURING STREAMING?",
+    a: "KRONOS IMPLEMENTS A CLIENT-SIDE TOKEN UPDATE DEBOUNCE (300MS WINDOW), ATOMIC NATIVE SYSTEM TRAY RATE-LIMITING IN RUST, AN OPAQUE DIRECT3D SWAPCHAIN (ELIMINATING HEAVY WINDOWS MICA COMPOSITION DEADLOCKS), AND OFFLOADS TOAST NOTIFICATIONS TO ISOLATED BACKGROUND WORKER THREADS.",
+  },
 ];
 
 const COMPARISON_ROWS = [
@@ -196,6 +202,19 @@ const COMPARISON_ROWS = [
     paseoSpec: "GENERIC LOW-CONTRAST MONOCHROME",
     paseoDesc: "Unstructured spacing, low visual hierarchy, and missing hardware status readouts.",
     paseoStatus: "[-] BLAND: LOW CONTRAST",
+  },
+  {
+    id: "dim-streaming",
+    code: "SPEC // D09",
+    dimension: "AGENT STREAMING & IPC EVENT PIPELINE",
+    kronosSpec: "DEBOUNCED IPC + DIRECT3D OPAQUE SWAPCHAIN",
+    kronosDesc:
+      "300ms tray debouncing, AtomicUsize native guard, and async notification threads prevent DWM composition stalls during high-velocity LLM token streaming.",
+    kronosStatus: "[+] PASS: 60FPS ROCK SOLID",
+    paseoSpec: "UNTHROTTLED WIN32 IPC & MICA COMPOSITION STALLS",
+    paseoDesc:
+      "Fires Shell_NotifyIconW on every streaming token delta; synchronous Toast alerts deadlock the UI thread under agent load.",
+    paseoStatus: "[-] CRASH RISK: 'NOT RESPONDING'",
   },
 ];
 
@@ -439,7 +458,7 @@ function HeroHeader({ release }: { release: ReleaseData }) {
   );
 }
 
-function TelemetryBar() {
+function TelemetryBar({ release }: { release: ReleaseData }) {
   return (
     <section className="border-y border-[#262626] bg-[#121212] py-6 font-mono text-xs">
       <div className="mx-auto grid max-w-6xl grid-cols-2 gap-px bg-[#262626] md:grid-cols-4">
@@ -478,7 +497,7 @@ function TelemetryBar() {
             [ METRIC_04: BINARY_SIZE ]
           </div>
           <div className="mt-2 text-3xl font-black text-[#EAEAEA] tracking-tight sm:text-4xl">
-            109 MB
+            {release.size}
           </div>
           <div className="mt-1 text-[10px] text-[#4AF626] font-bold">STRIPPED PE32+ NSIS</div>
         </div>
@@ -861,7 +880,7 @@ export function KronosLandingPage() {
         <CockpitWindow />
       </section>
 
-      <TelemetryBar />
+      <TelemetryBar release={release} />
       <ComparisonSection />
       <BentoSection />
       <InstallSection release={release} />

@@ -1,8 +1,8 @@
+import { Link } from "@tanstack/react-router";
 import { PLUGINS_LINKED } from "~/plugins/launch";
 import { getAlternativePages } from "~/data/alternative-pages";
 import { appStoreUrl, playStoreUrl, webAppUrl } from "~/downloads";
 import { SponsorsSection } from "~/components/sponsorship";
-
 interface SiteFooterProps {
   width?: "default" | "prose" | "wide";
   /** Pages that show the sponsors in their content turn the footer band off. */
@@ -15,6 +15,7 @@ const WIDTH_CLASSES: Record<NonNullable<SiteFooterProps["width"]>, string> = {
   wide: "max-w-7xl p-6 md:p-20 md:pt-0",
 };
 
+const CLI_PARAMS = { _splat: "cli" };
 export function SiteFooter({ width = "default", sponsors = true }: SiteFooterProps) {
   const widthClasses = WIDTH_CLASSES[width];
   const alternatives = getAlternativePages();
@@ -25,103 +26,104 @@ export function SiteFooter({ width = "default", sponsors = true }: SiteFooterPro
         <div className="space-y-3">
           <p className="text-extra-muted-foreground">Product</p>
           <div className="space-y-2">
-            <a
-              href="/blog"
+            <Link
+              to="/blog"
               className="block text-muted-foreground hover:text-foreground transition-colors"
             >
               Blog
-            </a>
-            <a
-              href="/docs"
+            </Link>
+            <Link
+              to="/docs"
               className="block text-muted-foreground hover:text-foreground transition-colors"
             >
               Docs
-            </a>
+            </Link>
             {PLUGINS_LINKED && (
-              <a
-                href="/plugins"
+              <Link
+                to="/plugins"
                 className="block text-muted-foreground hover:text-foreground transition-colors"
               >
                 Plugins
-              </a>
+              </Link>
             )}
-            <a
-              href="/changelog"
+            <Link
+              to="/changelog"
               className="block text-muted-foreground hover:text-foreground transition-colors"
             >
               Changelog
-            </a>
-            <a
-              href="/hub"
+            </Link>
+            <Link
+              to="/hub"
               className="block text-muted-foreground hover:text-foreground transition-colors"
             >
               Hub
-            </a>
-            <a
-              href="/docs/cli"
+            </Link>
+            <Link
+              to="/docs/$"
+              params={CLI_PARAMS}
               className="block text-muted-foreground hover:text-foreground transition-colors"
             >
               CLI
-            </a>
-            <a
-              href="/privacy"
+            </Link>
+            <Link
+              to="/privacy"
               className="block text-muted-foreground hover:text-foreground transition-colors"
             >
               Privacy
-            </a>
-            <a
-              href="/terms"
+            </Link>
+            <Link
+              to="/terms"
               className="block text-muted-foreground hover:text-foreground transition-colors"
             >
               Terms
-            </a>
-            <a
-              href="/sponsor"
+            </Link>
+            <Link
+              to="/sponsor"
               className="block text-muted-foreground hover:text-foreground transition-colors"
             >
               Sponsor
-            </a>
+            </Link>
           </div>
         </div>
         <div className="space-y-3">
           <p className="text-extra-muted-foreground">Agents</p>
           <div className="space-y-2">
-            <a
-              href="/claude-code"
+            <Link
+              to="/claude-code"
               className="block text-muted-foreground hover:text-foreground transition-colors"
             >
               Claude Code
-            </a>
-            <a
-              href="/codex"
+            </Link>
+            <Link
+              to="/codex"
               className="block text-muted-foreground hover:text-foreground transition-colors"
             >
               Codex
-            </a>
-            <a
-              href="/opencode"
+            </Link>
+            <Link
+              to="/opencode"
               className="block text-muted-foreground hover:text-foreground transition-colors"
             >
               OpenCode
-            </a>
-            <a
-              href="/antigravity"
+            </Link>
+            <Link
+              to="/antigravity"
               className="block text-muted-foreground hover:text-foreground transition-colors"
             >
               Antigravity
-            </a>
-            <a
-              href="/muse-code"
+            </Link>
+            <Link
+              to="/muse-code"
               className="block text-muted-foreground hover:text-foreground transition-colors"
             >
               Muse Code
-            </a>
-            <a
-              href="/agents"
+            </Link>
+            <Link
+              to="/agents"
               className="block text-muted-foreground hover:text-foreground transition-colors"
             >
               All providers
-            </a>
+            </Link>
           </div>
         </div>
         <div className="space-y-3">
@@ -130,7 +132,7 @@ export function SiteFooter({ width = "default", sponsors = true }: SiteFooterPro
             {alternatives.map((page) => (
               <a
                 key={page.slug}
-                href={page.href}
+                href={`${import.meta.env.BASE_URL.replace(/\/$/, "")}${page.href}`}
                 className="block text-muted-foreground hover:text-foreground transition-colors"
               >
                 {page.name}
@@ -158,7 +160,7 @@ export function SiteFooter({ width = "default", sponsors = true }: SiteFooterPro
               Reddit
             </a>
             <a
-              href="https://github.com/getpaseo/paseo"
+              href="https://github.com/Xenonesis/Kronos"
               target="_blank"
               rel="noopener noreferrer"
               className="block text-muted-foreground hover:text-foreground transition-colors"
@@ -187,12 +189,12 @@ export function SiteFooter({ width = "default", sponsors = true }: SiteFooterPro
               Google Play
             </a>
             <a
-              href="https://github.com/getpaseo/paseo/releases"
+              href="https://github.com/Xenonesis/Kronos/releases/latest/download/Kronos_x64-setup.exe"
               target="_blank"
               rel="noopener noreferrer"
               className="block text-muted-foreground hover:text-foreground transition-colors"
             >
-              Desktop
+              Desktop (Windows .EXE)
             </a>
             <a
               href={webAppUrl}

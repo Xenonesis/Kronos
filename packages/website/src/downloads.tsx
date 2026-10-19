@@ -2,7 +2,7 @@ import * as React from "react";
 import type { DesktopPlatform, MobilePlatform } from "~/platform";
 
 export function releaseBase(version: string) {
-  return `https://github.com/getpaseo/paseo/releases/download/v${version}`;
+  return `https://github.com/Xenonesis/Kronos/releases/download/v${version}`;
 }
 
 export interface ReleaseAssetInfo {
@@ -16,20 +16,19 @@ export function downloadUrls(release: ReleaseAssetInfo) {
   const { version, linuxAppImageAsset, windowsX64Asset, windowsArm64Asset } = release;
   const base = releaseBase(version);
   return {
-    macAppleSilicon: `${base}/Paseo-${version}-arm64.dmg`,
-    macIntel: `${base}/Paseo-${version}-x64.dmg`,
+    macAppleSilicon: `${base}/Kronos-${version}-arm64.dmg`,
+    macIntel: `${base}/Kronos-${version}-x64.dmg`,
     linuxAppImage: `${base}/${linuxAppImageAsset}`,
-    linuxDeb: `${base}/Paseo-${version}-amd64.deb`,
-    linuxRpm: `${base}/Paseo-${version}-x86_64.rpm`,
-    windowsExeX64: `${base}/${windowsX64Asset ?? `Paseo-Setup-${version}.exe`}`,
+    linuxDeb: `${base}/Kronos-${version}-amd64.deb`,
+    linuxRpm: `${base}/Kronos-${version}-x86_64.rpm`,
+    windowsExeX64: `${base}/${windowsX64Asset ?? `Kronos_${version}_x64-setup.exe`}`,
     windowsExeArm64: windowsArm64Asset ? `${base}/${windowsArm64Asset}` : null,
-    androidApk: `${base}/paseo-v${version}-android.apk`,
+    androidApk: `${base}/kronos-v${version}-android.apk`,
   };
 }
 
 const RELEASE_ASSETS_ORIGIN = "https://github.com";
-const RELEASE_ASSETS_PATH = "/getpaseo/paseo/releases/download/";
-
+const RELEASE_ASSETS_PATH = "/Xenonesis/Kronos/releases/download/";
 /**
  * The release file a thanks-page link asks for, or null when it is not one of
  * ours. Parsing normalizes `..` segments, so a link cannot climb out of this
