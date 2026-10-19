@@ -51,13 +51,13 @@ export function SiteHeader() {
           [ DOCS ]
         </a>
         <a
-          href="https://github.com/Xenonesis/paseo/releases/latest/download/Kronos_x64-setup.exe"
+          href="https://github.com/Xenonesis/Kronos/releases/latest/download/Kronos_x64-setup.exe"
           className="bg-[#FF2A2A] text-black px-3 py-1 font-bold tracking-widest hover:bg-white transition-colors"
         >
           &gt;&gt;&gt; GET_INSTALLER.EXE
         </a>
         <a
-          href="https://github.com/Xenonesis/paseo"
+          href="https://github.com/Xenonesis/Kronos"
           target="_blank"
           rel="noopener noreferrer"
           aria-label={stars ? `GitHub, ${stars} stars` : "GitHub"}

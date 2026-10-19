@@ -19,9 +19,9 @@ const TRANSITION_DUR_06_D3 = { duration: 0.6, delay: 0.3 };
 const TRANSITION_DUR_08_D4 = { duration: 0.8, delay: 0.4 };
 const TRANSITION_DUR_08_D45 = { duration: 0.8, delay: 0.45 };
 
-const LATEST_RELEASE_API = "https://api.github.com/repos/Xenonesis/paseo/releases/latest";
+const LATEST_RELEASE_API = "https://api.github.com/repos/Xenonesis/Kronos/releases/latest";
 const PERSISTENT_DOWNLOAD_URL =
-  "https://github.com/Xenonesis/paseo/releases/latest/download/Kronos_x64-setup.exe";
+  "https://github.com/Xenonesis/Kronos/releases/latest/download/Kronos_x64-setup.exe";
 
 interface ReleaseData {
   downloadUrl: string;
@@ -693,7 +693,7 @@ function SnippetCode({ activeTab }: { activeTab: "batch" | "powershell" | "clone
     <>
       <div className="text-[#555555]"># CLONE OFFICIAL HARDENED FORK:</div>
       <div className="text-[#EAEAEA] font-bold mt-1">
-        &gt; git clone https://github.com/Xenonesis/paseo.git
+        &gt; git clone https://github.com/Xenonesis/Kronos.git
       </div>
     </>
   );
@@ -708,7 +708,7 @@ function SnippetCard() {
     if (activeTab === "powershell") {
       cmd = "npm run desktop:update-build";
     } else if (activeTab === "clone") {
-      cmd = "git clone https://github.com/Xenonesis/paseo.git";
+      cmd = "git clone https://github.com/Xenonesis/Kronos.git";
     }
     navigator.clipboard.writeText(cmd);
     setCopied(true);

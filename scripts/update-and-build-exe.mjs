@@ -13,7 +13,7 @@ function run(command, cwd = rootDir) {
 }
 
 async function main() {
-  console.log('\x1b[1m\x1b[32m=== Paseo Desktop Auto-Pull & .EXE Builder ===\x1b[0m');
+  console.log('\x1b[1m\x1b[32m=== Kronos Desktop Auto-Pull & .EXE Builder ===\x1b[0m');
 
   // Step 1: Git Pull
   console.log('\n\x1b[33m[1/5] Pulling latest changes from git...\x1b[0m');
@@ -83,7 +83,7 @@ async function main() {
     if (process.argv.includes('--publish')) {
       console.log('\n\x1b[33m[*] Uploading latest .exe to GitHub Releases...\x1b[0m');
       try {
-        execSync(`gh release upload v0.12.0 "${exePath}" "${persistentPath}" --clobber --repo Xenonesis/paseo`, { stdio: 'inherit' });
+        execSync(`gh release upload v0.12.0 "${exePath}" "${persistentPath}" --clobber --repo Xenonesis/Kronos`, { stdio: 'inherit' });
         console.log('\x1b[32m✔ Uploaded latest installer to GitHub Releases!\x1b[0m');
       } catch (e) {
         console.warn('\x1b[33m⚠ Warning: Could not upload to GitHub Releases automatically.\x1b[0m', e.message);

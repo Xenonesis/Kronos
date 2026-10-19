@@ -39,7 +39,7 @@
     },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDExMjM1OApSV1RUUUVKVE40...=",
-      "endpoints": ["https://github.com/Xenonesis/paseo/releases/latest/download/latest.json"]
+      "endpoints": ["https://github.com/Xenonesis/Kronos/releases/latest/download/latest.json"]
     }
   }
 }
