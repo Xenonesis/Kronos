@@ -6,8 +6,6 @@ import { SiteShell } from "~/components/site-shell";
 import { pageMeta } from "~/meta";
 import {
   downloadUrls,
-  appStoreUrl,
-  playStoreUrl,
   thanksPageHref,
   webAppUrl,
   AppleIcon,
@@ -134,18 +132,9 @@ function Download() {
         <div className="divide-y divide-border">
           <PlatformRow icon={AndroidIcon} label="Android">
             <PillGroup>
-              {!onBeta && <DownloadPill href={playStoreUrl} label="Play Store" external />}
               <DownloadPill href={thanksPageHref(urls.androidApk)} label="APK" />
             </PillGroup>
           </PlatformRow>
-
-          {!onBeta && (
-            <PlatformRow icon={AppleIcon} label="iOS">
-              <PillGroup>
-                <DownloadPill href={appStoreUrl} label="App Store" external />
-              </PillGroup>
-            </PlatformRow>
-          )}
         </div>
       </section>
 

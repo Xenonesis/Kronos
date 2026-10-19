@@ -1,7 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { PLUGINS_LINKED } from "~/plugins/launch";
 import { getAlternativePages } from "~/data/alternative-pages";
-import { appStoreUrl, playStoreUrl, webAppUrl } from "~/downloads";
 import { SponsorsSection } from "~/components/sponsorship";
 interface SiteFooterProps {
   width?: "default" | "prose" | "wide";
@@ -144,22 +143,6 @@ export function SiteFooter({ width = "default", sponsors = true }: SiteFooterPro
           <p className="text-extra-muted-foreground">Community</p>
           <div className="space-y-2">
             <a
-              href="https://discord.gg/jz8T2uahpH"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Discord
-            </a>
-            <a
-              href="https://www.reddit.com/r/PaseoAI/"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Reddit
-            </a>
-            <a
               href="https://github.com/Xenonesis/Kronos"
               target="_blank"
               rel="noopener noreferrer"
@@ -173,22 +156,6 @@ export function SiteFooter({ width = "default", sponsors = true }: SiteFooterPro
           <p className="text-extra-muted-foreground">Download</p>
           <div className="space-y-2">
             <a
-              href={appStoreUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              App Store
-            </a>
-            <a
-              href={playStoreUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Google Play
-            </a>
-            <a
               href="https://github.com/Xenonesis/Kronos/releases/latest/download/Kronos_x64-setup.exe"
               target="_blank"
               rel="noopener noreferrer"
@@ -197,12 +164,12 @@ export function SiteFooter({ width = "default", sponsors = true }: SiteFooterPro
               Desktop (Windows .EXE)
             </a>
             <a
-              href={webAppUrl}
+              href="https://github.com/Xenonesis/Kronos/releases"
               target="_blank"
               rel="noopener noreferrer"
               className="block text-muted-foreground hover:text-foreground transition-colors"
             >
-              Web App
+              GitHub Releases
             </a>
           </div>
         </div>

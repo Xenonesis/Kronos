@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { DiscordIcon, GitHubIcon, RedditIcon } from "~/components/brand-icons";
+import { GitHubIcon } from "~/components/brand-icons";
 import { SiteShell } from "~/components/site-shell";
 import { SponsorSection } from "~/components/sponsorship";
 import { parseReleaseAssetUrl } from "~/downloads";
@@ -18,8 +18,8 @@ export const Route = createFileRoute("/download_/thanks")({
   },
   head: () =>
     pageMeta(
-      "Thanks for downloading Paseo",
-      "Your Paseo download is starting. Join the community on Discord, GitHub, and Reddit, or sponsor Paseo.",
+      "Thanks for downloading Kronos",
+      "Your Kronos download is starting. Follow development and report issues on GitHub.",
       "/download/thanks",
     ),
   component: DownloadThanks,
@@ -27,22 +27,10 @@ export const Route = createFileRoute("/download_/thanks")({
 
 const COMMUNITY = [
   {
-    name: "Discord",
-    icon: <DiscordIcon className="h-6 w-6" />,
-    body: "Get help and share feedback.",
-    href: "https://discord.gg/jz8T2uahpH",
-  },
-  {
     name: "GitHub",
     icon: <GitHubIcon className="h-6 w-6" />,
     body: "Star, report issues, contribute.",
-    href: "https://github.com/getpaseo/paseo",
-  },
-  {
-    name: "Reddit",
-    icon: <RedditIcon className="h-6 w-6" />,
-    body: "Workflows and questions.",
-    href: "https://www.reddit.com/r/PaseoAI/",
+    href: "https://github.com/Xenonesis/Kronos",
   },
 ];
 
