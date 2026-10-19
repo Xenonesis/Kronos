@@ -8,7 +8,12 @@ export function SiteHeader() {
   return (
     <header className="flex flex-col gap-4 border border-[#262626] bg-[#121212] p-3 text-[#EAEAEA] font-mono text-xs uppercase tracking-wider md:flex-row md:items-center md:justify-between rounded-none">
       <div className="flex items-center gap-3">
-        <Link to="/" className="flex items-center gap-3 group">
+        <Link to="/" className="flex items-center gap-2.5 group">
+          <img
+            src={`${import.meta.env.BASE_URL}favicon.svg`}
+            alt="Kronos Emblem"
+            className="w-5 h-5 rounded-sm shrink-0"
+          />
           <span className="bg-[#FF2A2A] text-black px-1.5 py-0.5 font-bold tracking-widest text-[11px]">
             KRN
           </span>

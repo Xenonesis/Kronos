@@ -388,14 +388,20 @@ function HeroHeader({ release }: { release: ReleaseData }) {
         initial={MOTION_FADE_DOWN}
         animate={MOTION_VISIBLE}
         transition={TRANSITION_DUR_05}
-        className="mb-6 inline-flex items-center gap-3 border border-[#262626] bg-[#121212] px-4 py-1 text-xs tracking-widest text-[#EAEAEA] uppercase"
+        className="mb-6 flex flex-col items-center gap-4"
       >
-        <span className="h-2 w-2 bg-[#FF2A2A]" />
-        <span>[ CLASSIFIED / SPEC-D12 ]</span>
-        <span className="text-[#444444]">{"///"}</span>
-        <span className="text-[#888888]">TAURI_V2_NATIVE_RUST_CORE</span>
+        <img
+          src={`${import.meta.env.BASE_URL}kronos-logo.svg`}
+          alt="Kronos Apex Logo"
+          className="w-16 h-16 sm:w-20 sm:h-20 drop-shadow-[0_0_24px_rgba(0,240,255,0.4)]"
+        />
+        <div className="inline-flex items-center gap-3 border border-[#262626] bg-[#121212] px-4 py-1 text-xs tracking-widest text-[#EAEAEA] uppercase">
+          <span className="h-2 w-2 bg-[#FF2A2A]" />
+          <span>[ CLASSIFIED / SPEC-D12 ]</span>
+          <span className="text-[#444444]">{"///"}</span>
+          <span className="text-[#888888]">TAURI_V2_NATIVE_RUST_CORE</span>
+        </div>
       </motion.div>
-
       <motion.h1
         initial={MOTION_FADE_UP}
         animate={MOTION_VISIBLE}
