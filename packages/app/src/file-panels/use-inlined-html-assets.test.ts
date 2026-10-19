@@ -1,14 +1,9 @@
 import { describe, expect, it } from "vitest";
-import {
-  parseHtmlAssetLinks,
-  resolveRelativeAssetPath,
-} from "./use-inlined-html-assets";
+import { parseHtmlAssetLinks, resolveRelativeAssetPath } from "./use-inlined-html-assets";
 
 describe("resolveRelativeAssetPath", () => {
   it("resolves sibling files correctly", () => {
-    expect(resolveRelativeAssetPath("website/index.html", "styles.css")).toBe(
-      "website/styles.css",
-    );
+    expect(resolveRelativeAssetPath("website/index.html", "styles.css")).toBe("website/styles.css");
     expect(resolveRelativeAssetPath("website/index.html", "./styles.css")).toBe(
       "website/styles.css",
     );
@@ -16,12 +11,12 @@ describe("resolveRelativeAssetPath", () => {
   });
 
   it("resolves parent and nested paths correctly", () => {
-    expect(
-      resolveRelativeAssetPath("website/pages/index.html", "../styles.css"),
-    ).toBe("website/styles.css");
-    expect(
-      resolveRelativeAssetPath("website/index.html", "css/sub/styles.css"),
-    ).toBe("website/css/sub/styles.css");
+    expect(resolveRelativeAssetPath("website/pages/index.html", "../styles.css")).toBe(
+      "website/styles.css",
+    );
+    expect(resolveRelativeAssetPath("website/index.html", "css/sub/styles.css")).toBe(
+      "website/css/sub/styles.css",
+    );
   });
 
   it("ignores external schemes and protocol-relative URLs", () => {
@@ -38,9 +33,9 @@ describe("resolveRelativeAssetPath", () => {
   });
 
   it("strips query params and hashes from paths", () => {
-    expect(
-      resolveRelativeAssetPath("website/index.html", "styles.css?v=123#test"),
-    ).toBe("website/styles.css");
+    expect(resolveRelativeAssetPath("website/index.html", "styles.css?v=123#test")).toBe(
+      "website/styles.css",
+    );
   });
 });
 

@@ -26,10 +26,7 @@ const MAX_IMAGE_INLINE_BYTES = 10 * 1024 * 1024; // 10 MB max per image
 // Shared in-memory cache across tab switches and preview renders
 const assetCache = new Map<string, { content: string; isDataUri?: boolean }>();
 
-export function resolveRelativeAssetPath(
-  baseFilePath: string,
-  assetHref: string,
-): string | null {
+export function resolveRelativeAssetPath(baseFilePath: string, assetHref: string): string | null {
   if (/^(?:[a-z]+:|\/\/|#)/i.test(assetHref)) {
     return null;
   }
@@ -59,10 +56,7 @@ export function resolveRelativeAssetPath(
   return stack.join("/");
 }
 
-export function parseHtmlAssetLinks(
-  html: string,
-  baseFilePath: string,
-): ParsedHtmlAssets {
+export function parseHtmlAssetLinks(html: string, baseFilePath: string): ParsedHtmlAssets {
   const stylesheets: ParsedAsset[] = [];
   const scripts: ParsedAsset[] = [];
   const images: ParsedAsset[] = [];
@@ -77,7 +71,7 @@ export function parseHtmlAssetLinks(
       continue;
     }
     const hrefMatch = attrs.match(/\bhref\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i);
-    const href = hrefMatch ? (hrefMatch[1] || hrefMatch[2] || hrefMatch[3]) : null;
+    const href = hrefMatch ? hrefMatch[1] || hrefMatch[2] || hrefMatch[3] : null;
     if (href) {
       const resolvedPath = resolveRelativeAssetPath(baseFilePath, href);
       if (resolvedPath) {
@@ -101,8 +95,7 @@ export function parseHtmlAssetLinks(
   }
 
   // Match <img ... src="..."> tags
-  const imgRegex =
-    /<img\b([^>]*?)\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))([^>]*?)>/gi;
+  const imgRegex = /<img\b([^>]*?)\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))([^>]*?)>/gi;
   while ((match = imgRegex.exec(html)) !== null) {
     const rawTag = match[0];
     const src = match[2] || match[3] || match[4];
@@ -128,11 +121,7 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function applyInlinedAssets(
-  html: string,
-  cwd: string,
-  parsed: ParsedHtmlAssets,
-): string {
+function applyInlinedAssets(html: string, cwd: string, parsed: ParsedHtmlAssets): string {
   let result = html;
 
   for (const sheet of parsed.stylesheets) {
@@ -221,50 +210,46 @@ export function useInlinedHtmlAssets({
       return;
     }
 
-    void Promise.all(
-      pendingAssets.map(async (asset) => {
-        try {
-          const maxBytes =
-            asset.kind === "script"
-              ? MAX_SCRIPT_INLINE_BYTES
-              : asset.kind === "image"
-                ? MAX_IMAGE_INLINE_BYTES
-                : undefined;
+    const loadAssets = async () => {
+      await Promise.all(
+        pendingAssets.map(async (asset) => {
+          try {
+            let maxBytes: number | undefined;
+            if (asset.kind === "script") {
+              maxBytes = MAX_SCRIPT_INLINE_BYTES;
+            } else if (asset.kind === "image") {
+              maxBytes = MAX_IMAGE_INLINE_BYTES;
+            }
 
-          const fileResult = await client.readFile(
-            cwd,
-            asset.resolvedPath,
-            undefined,
-            maxBytes,
-          );
+            const fileResult = await client.readFile(cwd, asset.resolvedPath, undefined, maxBytes);
 
-          if (isDisposed) {
-            return;
+            if (isDisposed) {
+              return;
+            }
+
+            if (asset.kind === "image") {
+              const mime = fileResult.mime || "image/png";
+              const base64 = uint8ArrayToBase64(fileResult.bytes);
+              assetCache.set(`${cwd}:${asset.resolvedPath}`, {
+                content: `data:${mime};base64,${base64}`,
+                isDataUri: true,
+              });
+            } else {
+              const text = new TextDecoder().decode(fileResult.bytes);
+              assetCache.set(`${cwd}:${asset.resolvedPath}`, {
+                content: text,
+              });
+            }
+          } catch {
+            // Gracefully ignore missing or inaccessible relative files
           }
-
-          if (asset.kind === "image") {
-            const mime = fileResult.mime || "image/png";
-            const base64 = uint8ArrayToBase64(fileResult.bytes);
-            assetCache.set(`${cwd}:${asset.resolvedPath}`, {
-              content: `data:${mime};base64,${base64}`,
-              isDataUri: true,
-            });
-          } else {
-            const text = new TextDecoder().decode(fileResult.bytes);
-            assetCache.set(`${cwd}:${asset.resolvedPath}`, {
-              content: text,
-            });
-          }
-        } catch {
-          // Gracefully ignore missing or inaccessible relative files
-        }
-      }),
-    ).then(() => {
+        }),
+      );
       if (!isDisposed) {
         setInlinedHtml(applyInlinedAssets(html, cwd, parsed));
       }
-    });
-
+    };
+    void loadAssets();
     return () => {
       isDisposed = true;
     };

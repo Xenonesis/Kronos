@@ -1,18 +1,27 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { Linking, Platform, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
-import { useTranslation } from "react-i18next";
+
 import * as Clipboard from "expo-clipboard";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useToast } from "@/contexts/toast-context";
 import { BrowserTabBar, type BrowserTabItem } from "@/desktop/browser/pane/browser-tab-bar";
 import { BrowserNavigationBar } from "@/desktop/browser/pane/browser-navigation-bar";
-import { BrowserLoadFailureOverlay, parseHostFromUrl } from "@/desktop/browser/pane/browser-load-failure-overlay";
+import {
+  BrowserLoadFailureOverlay,
+  parseHostFromUrl,
+} from "@/desktop/browser/pane/browser-load-failure-overlay";
 import { BrowserImportDialog } from "@/desktop/browser/pane/browser-import-dialog";
-import { isLocalhostUrl, resolveIframeTargetUrl } from "@/desktop/browser/pane/url-utils";
+import { resolveIframeTargetUrl } from "@/desktop/browser/pane/url-utils";
 import { useSendBrowserUrlToAgent } from "@/desktop/browser/pane/use-send-browser-url-to-agent";
-import { InteractiveInspectOverlay } from "@/desktop/browser/pane/interactive-inspect-overlay";
-import { formatGrabPayloadAsText, type BrowserGrabPayload } from "@/desktop/browser/pane/browser-grab-payload";
+import {
+  InteractiveInspectOverlay,
+  type InspectTargetInfo,
+} from "@/desktop/browser/pane/interactive-inspect-overlay";
+import {
+  formatGrabPayloadAsText,
+  type BrowserGrabPayload,
+} from "@/desktop/browser/pane/browser-grab-payload";
 import { withPreviewCsp } from "./html-preview-csp";
 import { useInlinedHtmlAssets } from "./use-inlined-html-assets";
 
@@ -42,7 +51,6 @@ export function FileHtmlPreview({
   client?: DaemonClient | null;
   testID?: string;
 }) {
-  const { t } = useTranslation();
   const toast = useToast();
 
   const fileName = useMemo(() => {
@@ -69,12 +77,14 @@ export function FileHtmlPreview({
     },
   ]);
   const [activeTabId, setActiveTabId] = useState("tab-file");
-  const [viewportPreset, setViewportPreset] = useState<"responsive" | "desktop" | "tablet" | "mobile">("responsive");
+  const [viewportPreset, setViewportPreset] = useState<
+    "responsive" | "desktop" | "tablet" | "mobile"
+  >("responsive");
   const [isInspectActive, setIsInspectActive] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
 
   const activeTab = useMemo(
-    () => tabs.find((t) => t.id === activeTabId) ?? tabs[0]!,
+    () => tabs.find((item) => item.id === activeTabId) ?? tabs[0]!,
     [tabs, activeTabId],
   );
 
@@ -84,24 +94,27 @@ export function FileHtmlPreview({
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
-  const navigateTo = useCallback((newUrl: string) => {
-    setTabs((prev) =>
-      prev.map((tab) => {
-        if (tab.id !== activeTabId) return tab;
-        const newHistory = tab.history.slice(0, tab.historyIndex + 1);
-        newHistory.push(newUrl);
-        return {
-          ...tab,
-          url: newUrl,
-          title: parseHostFromUrl(newUrl),
-          isFile: false,
-          hasLoadError: false,
-          history: newHistory,
-          historyIndex: newHistory.length - 1,
-        };
-      }),
-    );
-  }, [activeTabId]);
+  const navigateTo = useCallback(
+    (newUrl: string) => {
+      setTabs((prev) =>
+        prev.map((tab) => {
+          if (tab.id !== activeTabId) return tab;
+          const newHistory = tab.history.slice(0, tab.historyIndex + 1);
+          newHistory.push(newUrl);
+          return {
+            ...tab,
+            url: newUrl,
+            title: parseHostFromUrl(newUrl),
+            isFile: false,
+            hasLoadError: false,
+            history: newHistory,
+            historyIndex: newHistory.length - 1,
+          };
+        }),
+      );
+    },
+    [activeTabId],
+  );
 
   const handleGoBack = useCallback(() => {
     if (activeTab.historyIndex > 0) {
@@ -143,7 +156,7 @@ export function FileHtmlPreview({
 
   const handleReload = useCallback(() => {
     setTabs((prev) =>
-      prev.map((t) => (t.id === activeTabId ? { ...t, hasLoadError: false } : t)),
+      prev.map((item) => (item.id === activeTabId ? { ...item, hasLoadError: false } : item)),
     );
     if (iframeRef.current) {
       if (activeTab.isFile) {
@@ -152,8 +165,7 @@ export function FileHtmlPreview({
         iframeRef.current.src = resolveIframeTargetUrl(activeTab.url);
       }
     }
-  }, [activeTab, inlinedDocument]);
-
+  }, [activeTab, activeTabId, inlinedDocument]);
   const handleCopyAddress = useCallback(
     async (urlToCopy: string) => {
       await Clipboard.setStringAsync(urlToCopy);
@@ -194,7 +206,7 @@ export function FileHtmlPreview({
     (tabId: string) => {
       setTabs((prev) => {
         if (prev.length <= 1) return prev;
-        const filtered = prev.filter((t) => t.id !== tabId);
+        const filtered = prev.filter((item) => item.id !== tabId);
         if (activeTabId === tabId) {
           setActiveTabId(filtered[filtered.length - 1]!.id);
         }
@@ -216,6 +228,33 @@ export function FileHtmlPreview({
     [handleReload, toast],
   );
 
+  const handleOpenImport = useCallback(() => setIsImportOpen(true), []);
+  const handleCloseImport = useCallback(() => setIsImportOpen(false), []);
+  const handleToggleInspect = useCallback(() => setIsInspectActive((prev) => !prev), []);
+  const handleCancelInspect = useCallback(() => setIsInspectActive(false), []);
+  const handleIframeError = useCallback(() => {
+    setTabs((prev) =>
+      prev.map((item) => (item.id === activeTabId ? { ...item, hasLoadError: true } : item)),
+    );
+  }, [activeTabId]);
+
+  const handleSelectElement = useCallback(
+    (target: InspectTargetInfo) => {
+      const elementDesc = `${target.tag}${target.id ? `#${target.id}` : ""}: "${(target.textSnippet || target.textContent || "").slice(0, 40)}"`;
+      toast.show(`Selected element: ${elementDesc}`);
+      setIsInspectActive(false);
+      const payload: BrowserGrabPayload = {
+        url:
+          activeTab.url || target.payload?.url || (filePath ? `file://${filePath}` : "about:blank"),
+        title: activeTab.title || target.payload?.title || (filePath ? filePath : undefined),
+        target,
+        timestamp: target.payload?.timestamp ?? Date.now(),
+      };
+      const formattedText = formatGrabPayloadAsText(payload);
+      void sendToAgent(activeTab.url, formattedText);
+    },
+    [activeTab.title, activeTab.url, filePath, sendToAgent, toast],
+  );
   const viewportStyle = useMemo(() => {
     switch (viewportPreset) {
       case "desktop":
@@ -232,11 +271,11 @@ export function FileHtmlPreview({
 
   const tabItems: BrowserTabItem[] = useMemo(
     () =>
-      tabs.map((t) => ({
-        id: t.id,
-        url: t.url,
-        title: t.title,
-        isLoading: t.isLoading,
+      tabs.map((item) => ({
+        id: item.id,
+        url: item.url,
+        title: item.title,
+        isLoading: item.isLoading,
       })),
     [tabs],
   );
@@ -263,11 +302,11 @@ export function FileHtmlPreview({
         onGoBack={handleGoBack}
         onGoForward={handleGoForward}
         onReload={handleReload}
-        onOpenImport={() => setIsImportOpen(true)}
+        onOpenImport={handleOpenImport}
         onSendToAgent={handleSendToAgent}
         onCopyAddress={handleCopyAddress}
         onOpenExternally={handleOpenExternally}
-        onToggleInspect={() => setIsInspectActive((prev) => !prev)}
+        onToggleInspect={handleToggleInspect}
         isInspectActive={isInspectActive}
         onSelectViewportPreset={setViewportPreset}
       />
@@ -275,50 +314,33 @@ export function FileHtmlPreview({
       {/* 3. Main Viewport Content */}
       <View style={styles.viewportWrapper}>
         <View style={viewportStyle}>
-          {Platform.OS === "web" ? (
-            activeTab.isFile ? (
-              <iframe
-                key={activeTab.id}
-                ref={iframeRef}
-                srcDoc={inlinedDocument}
-                style={iframeInnerStyle}
-                sandbox={SANDBOX}
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <iframe
-                key={activeTab.id}
-                ref={iframeRef}
-                src={resolveIframeTargetUrl(activeTab.url)}
-                style={iframeInnerStyle}
-                sandbox={SANDBOX}
-                referrerPolicy="no-referrer"
-                onError={() =>
-                  setTabs((prev) =>
-                    prev.map((t) => (t.id === activeTabId ? { ...t, hasLoadError: true } : t)),
-                  )
-                }
-              />
-            )
-          ) : null}
+          {Platform.OS === "web" && activeTab.isFile && (
+            <iframe
+              key={activeTab.id}
+              ref={iframeRef}
+              srcDoc={inlinedDocument}
+              style={iframeInnerStyle}
+              sandbox={SANDBOX}
+              referrerPolicy="no-referrer"
+            />
+          )}
+          {Platform.OS === "web" && !activeTab.isFile && (
+            <iframe
+              key={activeTab.id}
+              ref={iframeRef}
+              src={resolveIframeTargetUrl(activeTab.url)}
+              style={iframeInnerStyle}
+              sandbox={SANDBOX}
+              referrerPolicy="no-referrer"
+              onError={handleIframeError}
+            />
+          )}
           {/* Interactive Inspect Overlay on top of iframe */}
           <InteractiveInspectOverlay
             active={isInspectActive}
             iframeRef={iframeRef}
-            onSelectElement={(target) => {
-              const elementDesc = `${target.tag}${target.id ? `#${target.id}` : ""}: "${(target.textSnippet || target.textContent || "").slice(0, 40)}"`;
-              toast.show(`Selected element: ${elementDesc}`);
-              setIsInspectActive(false);
-              const payload: BrowserGrabPayload = {
-                url: activeTab.url || target.payload?.url || (filePath ? `file://${filePath}` : "about:blank"),
-                title: activeTab.title || target.payload?.title || (filePath ? filePath : undefined),
-                target,
-                timestamp: target.payload?.timestamp ?? Date.now(),
-              };
-              const formattedText = formatGrabPayloadAsText(payload);
-              void sendToAgent(activeTab.url, formattedText);
-            }}
-            onCancel={() => setIsInspectActive(false)}
+            onSelectElement={handleSelectElement}
+            onCancel={handleCancelInspect}
           />
 
           {/* 4. Orca-style Load Failure Overlay if URL unreachable */}
@@ -336,7 +358,7 @@ export function FileHtmlPreview({
       {/* 5. Cookie / Auth Import Dialog */}
       <BrowserImportDialog
         visible={isImportOpen}
-        onClose={() => setIsImportOpen(false)}
+        onClose={handleCloseImport}
         onImport={handleImportSession}
       />
     </View>
