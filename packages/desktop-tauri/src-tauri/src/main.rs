@@ -104,6 +104,15 @@ fn get_daemon_status_json() -> String {
 }
 
 fn main() {
+    #[cfg(target_os = "windows")]
+    {
+        // Prevent GPU watchdog crashes and DWM occlusion freezes on hybrid Intel/NVIDIA GPUs
+        std::env::set_var(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "--disable-features=CalculateNativeWinOcclusion --disable-gpu-watchdog --enable-gpu-rasterization --ignore-gpu-blocklist",
+        );
+    }
+
     let daemon_child = start_daemon();
     let state = DaemonState {
         process: Mutex::new(daemon_child),

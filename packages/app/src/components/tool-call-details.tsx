@@ -169,11 +169,61 @@ interface ShellDetailProps {
   cwd?: string;
   ds: DetailStyles;
 }
+const MAX_SHELL_OUTPUT_CHARS = 24_000;
+const MAX_SHELL_OUTPUT_LINES = 300;
+
+interface FormattedShellOutput {
+  head: string;
+  elidedMessage: string | null;
+  tail: string | null;
+}
+
+function formatDisplayShellOutput(rawOutput: string): FormattedShellOutput {
+  if (rawOutput.length <= MAX_SHELL_OUTPUT_CHARS) {
+    const lines = rawOutput.split("\n");
+    if (lines.length <= MAX_SHELL_OUTPUT_LINES) {
+      return { head: rawOutput, elidedMessage: null, tail: null };
+    }
+    const head = lines.slice(0, 80).join("\n");
+    const tail = lines.slice(-220).join("\n");
+    const elided = lines.length - 300;
+    return {
+      head,
+      elidedMessage: `\n\n[ ... ${elided} lines elided for display performance · Click "Copy Out" for full output ... ]\n\n`,
+      tail,
+    };
+  }
+
+  const lines = rawOutput.split("\n");
+  if (lines.length > 300) {
+    const head = lines.slice(0, 80).join("\n");
+    const tail = lines.slice(-220).join("\n");
+    const elided = lines.length - 300;
+    return {
+      head,
+      elidedMessage: `\n\n[ ... ${elided} lines elided for display performance · Click "Copy Out" for full output ... ]\n\n`,
+      tail,
+    };
+  }
+
+  const head = rawOutput.slice(0, 6_000);
+  const tail = rawOutput.slice(-18_000);
+  const elidedChars = rawOutput.length - 24_000;
+  return {
+    head,
+    elidedMessage: `\n\n[ ... ${elidedChars} characters elided for display performance · Click "Copy Out" for full output ... ]\n\n`,
+    tail,
+  };
+}
 
 function ShellDetailSection({ command, output, exitCode, cwd, ds }: ShellDetailProps) {
   const normalizedCommand = command.replace(/\n+$/, "");
   const commandOutput = (output ?? "").replace(/^\n+/, "");
   const hasOutput = commandOutput.length > 0;
+  const formattedOutput = useMemo(() => {
+    if (!hasOutput) return null;
+    return formatDisplayShellOutput(commandOutput);
+  }, [commandOutput, hasOutput]);
   const [isExpanded, setIsExpanded] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState(false);
   const [copiedOut, setCopiedOut] = useState(false);
@@ -201,7 +251,6 @@ function ShellDetailSection({ command, output, exitCode, cwd, ds }: ShellDetailP
       console.error("Failed to copy shell output", err);
     }
   }, [commandOutput, hasOutput]);
-
   const handleToggleExpand = useCallback(() => {
     setIsExpanded((previous) => !previous);
   }, []);
@@ -313,8 +362,16 @@ function ShellDetailSection({ command, output, exitCode, cwd, ds }: ShellDetailP
             <Text selectable style={styles.shellScrollText}>
               <Text style={styles.shellPrompt}>$ </Text>
               <Text style={styles.shellCommandText}>{normalizedCommand}</Text>
-              {hasOutput ? (
-                <Text style={styles.shellOutputText}>{`\n\n${commandOutput}`}</Text>
+              {hasOutput && formattedOutput ? (
+                <>
+                  <Text style={styles.shellOutputText}>{`\n\n${formattedOutput.head}`}</Text>
+                  {formattedOutput.elidedMessage ? (
+                    <Text style={styles.shellTruncatedNotice}>{formattedOutput.elidedMessage}</Text>
+                  ) : null}
+                  {formattedOutput.tail ? (
+                    <Text style={styles.shellOutputText}>{formattedOutput.tail}</Text>
+                  ) : null}
+                </>
               ) : null}
             </Text>
           </View>
@@ -1108,7 +1165,8 @@ const styles = StyleSheet.create((theme) => {
       ...(isWeb
         ? {
             whiteSpace: "pre-wrap",
-            overflowWrap: "anywhere",
+            wordBreak: "break-all",
+            overflowWrap: "break-word",
           }
         : null),
     },
@@ -1118,6 +1176,10 @@ const styles = StyleSheet.create((theme) => {
     },
     shellOutputText: {
       color: theme.colors.foregroundMuted,
+    },
+    shellTruncatedNotice: {
+      color: theme.colors.accent,
+      fontStyle: "italic",
     },
     shellToolbar: {
       flexDirection: "row",

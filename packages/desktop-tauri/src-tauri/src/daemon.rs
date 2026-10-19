@@ -10,7 +10,8 @@ use std::os::windows::process::CommandExt;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-
+#[cfg(windows)]
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
 pub struct DaemonState {
     pub process: Mutex<Option<Child>>,
 }
@@ -109,9 +110,8 @@ pub fn start_daemon() -> Option<Child> {
 
     #[cfg(windows)]
     {
-        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
     }
-
     let child = cmd.spawn().ok()?;
     std::thread::sleep(Duration::from_millis(2000));
     Some(child)

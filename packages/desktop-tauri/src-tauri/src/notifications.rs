@@ -45,59 +45,65 @@ pub fn notify_task_complete(
 pub fn setup_notification_listeners(app: &AppHandle) {
     let app_handle = app.clone();
     app.listen("show_notification", move |event| {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(event.payload()) {
-            let title = val
-                .get("title")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Paseo Notification");
-            let body = val.get("body").and_then(|v| v.as_str());
+        let app_handle = app_handle.clone();
+        let payload = event.payload().to_string();
+        std::thread::spawn(move || {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&payload) {
+                let title = val
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Kronos Notification");
+                let body = val.get("body").and_then(|v| v.as_str());
 
-            let mut builder = app_handle.notification().builder().title(title);
-            if let Some(b) = body {
-                builder = builder.body(b);
+                let mut builder = app_handle.notification().builder().title(title);
+                if let Some(b) = body {
+                    builder = builder.body(b);
+                }
+                let _ = builder.show();
+            } else {
+                let _ = app_handle
+                    .notification()
+                    .builder()
+                    .title("Kronos Notification")
+                    .body(&payload)
+                    .show();
             }
-            let _ = builder.show();
-        } else {
-            // String payload fallback
-            let body_str = event.payload();
-            let _ = app_handle
-                .notification()
-                .builder()
-                .title("Paseo Notification")
-                .body(body_str)
-                .show();
-        }
+        });
     });
 
     let app_handle_task = app.clone();
     app.listen("task-completed", move |event| {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(event.payload()) {
-            let task_name = val
-                .get("taskName")
-                .or_else(|| val.get("task"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("Background Task");
-            let title = format!("Task Complete: {}", task_name);
-            let details = val
-                .get("details")
-                .or_else(|| val.get("body"))
-                .or_else(|| val.get("message"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("Task has finished execution.");
+        let app_handle_task = app_handle_task.clone();
+        let payload = event.payload().to_string();
+        std::thread::spawn(move || {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&payload) {
+                let task_name = val
+                    .get("taskName")
+                    .or_else(|| val.get("task"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Background Task");
+                let title = format!("Task Complete: {}", task_name);
+                let details = val
+                    .get("details")
+                    .or_else(|| val.get("body"))
+                    .or_else(|| val.get("message"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Task has finished execution.");
 
-            let _ = app_handle_task
-                .notification()
-                .builder()
-                .title(title)
-                .body(details)
-                .show();
-        } else {
-            let _ = app_handle_task
-                .notification()
-                .builder()
-                .title("Task Complete")
-                .body(event.payload())
-                .show();
-        }
+                let _ = app_handle_task
+                    .notification()
+                    .builder()
+                    .title(title)
+                    .body(details)
+                    .show();
+            } else {
+                let _ = app_handle_task
+                    .notification()
+                    .builder()
+                    .title("Task Complete")
+                    .body(&payload)
+                    .show();
+            }
+        });
     });
 }
