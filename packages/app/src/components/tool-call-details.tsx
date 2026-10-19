@@ -1,4 +1,4 @@
-import React, { useMemo, type ReactNode } from "react";
+import React, { useMemo, useState, useCallback, useRef, type ReactNode } from "react";
 import {
   View,
   Text,
@@ -7,7 +7,22 @@ import {
   type ViewStyle,
 } from "react-native";
 import { ScrollView as GHScrollView } from "react-native-gesture-handler";
-import { StyleSheet } from "react-native-unistyles";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { Check, Copy, Maximize2, Minimize2, Terminal } from "lucide-react-native";
+import { Button } from "@/components/ui/button";
+import type { Theme } from "@/styles/theme";
+import { copyToClipboard } from "@/utils/copy-to-clipboard";
+
+const ThemedTerminal = withUnistyles(Terminal);
+const ThemedCopy = withUnistyles(Copy);
+const ThemedCheck = withUnistyles(Check);
+const ThemedMaximize = withUnistyles(Maximize2);
+const ThemedMinimize = withUnistyles(Minimize2);
+
+const foregroundMutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+const successColorMapping = (theme: Theme) => ({
+  color: theme.colors.success ?? theme.colors.accent,
+});
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import type { ToolCallDetail } from "@getpaseo/protocol/agent-types";
@@ -150,36 +165,159 @@ function useDiffLines(detail: ToolCallDetail | undefined): DiffLine[] | undefine
 interface ShellDetailProps {
   command: string;
   output: string | null | undefined;
+  exitCode?: number | null;
+  cwd?: string;
   ds: DetailStyles;
 }
 
-function ShellDetailSection({ command, output, ds }: ShellDetailProps) {
+function ShellDetailSection({ command, output, exitCode, cwd, ds }: ShellDetailProps) {
   const normalizedCommand = command.replace(/\n+$/, "");
   const commandOutput = (output ?? "").replace(/^\n+/, "");
   const hasOutput = commandOutput.length > 0;
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [copiedCmd, setCopiedCmd] = useState(false);
+  const [copiedOut, setCopiedOut] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleCopyCommand = useCallback(async () => {
+    try {
+      await copyToClipboard(normalizedCommand);
+      setCopiedCmd(true);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopiedCmd(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy shell command", err);
+    }
+  }, [normalizedCommand]);
+
+  const handleCopyOutput = useCallback(async () => {
+    if (!hasOutput) return;
+    try {
+      await copyToClipboard(commandOutput);
+      setCopiedOut(true);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopiedOut(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy shell output", err);
+    }
+  }, [commandOutput, hasOutput]);
+
+  const handleToggleExpand = useCallback(() => {
+    setIsExpanded((previous) => !previous);
+  }, []);
+
+  const copyCmdIcon = useMemo(
+    () =>
+      copiedCmd ? (
+        <ThemedCheck size={11} uniProps={successColorMapping} />
+      ) : (
+        <ThemedCopy size={11} uniProps={foregroundMutedColorMapping} />
+      ),
+    [copiedCmd],
+  );
+
+  const copyOutIcon = useMemo(
+    () =>
+      copiedOut ? (
+        <ThemedCheck size={11} uniProps={successColorMapping} />
+      ) : (
+        <ThemedCopy size={11} uniProps={foregroundMutedColorMapping} />
+      ),
+    [copiedOut],
+  );
+
+  const expandIcon = useMemo(
+    () =>
+      isExpanded ? (
+        <ThemedMinimize size={11} uniProps={foregroundMutedColorMapping} />
+      ) : (
+        <ThemedMaximize size={11} uniProps={foregroundMutedColorMapping} />
+      ),
+    [isExpanded],
+  );
+  const hasExitCode = exitCode !== undefined && exitCode !== null;
+  const isSuccess = exitCode === 0;
+
   return (
     <View style={ds.sectionFillStyle}>
       <View style={ds.codeBlockFillStyle}>
+        <View style={styles.shellToolbar}>
+          <View style={styles.shellToolbarLeft}>
+            <ThemedTerminal size={12} uniProps={foregroundMutedColorMapping} />
+            <Text style={styles.shellTag}>$ SHELL</Text>
+            {hasExitCode ? (
+              <View
+                style={[
+                  styles.shellExitBadge,
+                  isSuccess ? styles.shellExitBadgeSuccess : styles.shellExitBadgeError,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.shellExitBadgeText,
+                    isSuccess ? styles.shellExitBadgeSuccessText : styles.shellExitBadgeErrorText,
+                  ]}
+                >
+                  {isSuccess ? "EXIT 0" : `EXIT ${exitCode}`}
+                </Text>
+              </View>
+            ) : null}
+            {cwd ? (
+              <Text numberOfLines={1} style={styles.shellCwdText}>
+                {cwd}
+              </Text>
+            ) : null}
+          </View>
+          <View style={styles.shellToolbarActions}>
+            <Button
+              size="xs"
+              variant="ghost"
+              accessibilityLabel="Copy command"
+              leftIcon={copyCmdIcon}
+              onPress={handleCopyCommand}
+            >
+              {copiedCmd ? "Copied" : "Copy Cmd"}
+            </Button>
+
+            {hasOutput ? (
+              <Button
+                size="xs"
+                variant="ghost"
+                accessibilityLabel="Copy output"
+                leftIcon={copyOutIcon}
+                onPress={handleCopyOutput}
+              >
+                {copiedOut ? "Copied" : "Copy Out"}
+              </Button>
+            ) : null}
+
+            <Button
+              size="xs"
+              variant="ghost"
+              accessibilityLabel={isExpanded ? "Collapse output" : "Expand output"}
+              leftIcon={expandIcon}
+              onPress={handleToggleExpand}
+            >
+              {isExpanded ? "Collapse" : "Expand"}
+            </Button>
+          </View>
+        </View>
+
         <ScrollView
-          style={ds.codeVerticalScrollStyle}
+          style={isExpanded ? styles.codeVerticalScrollExpanded : ds.codeVerticalScrollStyle}
           contentContainerStyle={styles.codeVerticalContent}
           nestedScrollEnabled
           showsVerticalScrollIndicator
         >
-          <ScrollView
-            horizontal
-            nestedScrollEnabled
-            showsHorizontalScrollIndicator
-            contentContainerStyle={styles.codeHorizontalContent}
-          >
-            <View style={styles.codeLine} dataSet={CODE_SURFACE_DATASET}>
-              <Text selectable style={styles.scrollText}>
-                <Text style={styles.shellPrompt}>$ </Text>
-                {normalizedCommand}
-                {hasOutput ? `\n\n${commandOutput}` : ""}
-              </Text>
-            </View>
-          </ScrollView>
+          <View style={styles.codeLine} dataSet={CODE_SURFACE_DATASET}>
+            <Text selectable style={styles.shellScrollText}>
+              <Text style={styles.shellPrompt}>$ </Text>
+              <Text style={styles.shellCommandText}>{normalizedCommand}</Text>
+              {hasOutput ? (
+                <Text style={styles.shellOutputText}>{`\n\n${commandOutput}`}</Text>
+              ) : null}
+            </Text>
+          </View>
         </ScrollView>
       </View>
     </View>
@@ -675,7 +813,14 @@ function buildDetailSections(
   if (!detail) return [];
   if (detail.type === "shell") {
     return [
-      <ShellDetailSection key="shell" command={detail.command} output={detail.output} ds={ds} />,
+      <ShellDetailSection
+        key="shell"
+        command={detail.command}
+        output={detail.output}
+        exitCode={detail.exitCode}
+        cwd={detail.cwd}
+        ds={ds}
+      />,
     ];
   }
   if (detail.type === "worktree_setup") {
@@ -916,6 +1061,9 @@ const styles = StyleSheet.create((theme) => {
       backgroundColor: theme.colors.surface1,
     },
     codeVerticalScroll: {},
+    codeVerticalScrollExpanded: {
+      maxHeight: undefined,
+    },
     codeVerticalContent: {
       flexGrow: 1,
       paddingBottom: insets.extraBottom,
@@ -951,6 +1099,84 @@ const styles = StyleSheet.create((theme) => {
     },
     shellPrompt: {
       color: theme.colors.foregroundMuted,
+    },
+    shellScrollText: {
+      fontFamily: theme.fontFamily.mono,
+      fontSize: theme.fontSize.code,
+      color: theme.colors.foreground,
+      lineHeight: 18,
+      ...(isWeb
+        ? {
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+          }
+        : null),
+    },
+    shellCommandText: {
+      color: theme.colors.foreground,
+      fontWeight: theme.fontWeight.semibold,
+    },
+    shellOutputText: {
+      color: theme.colors.foregroundMuted,
+    },
+    shellToolbar: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingHorizontal: insets.padding,
+      paddingVertical: theme.spacing[1.5],
+      borderBottomWidth: theme.borderWidth[1],
+      borderBottomColor: theme.colors.border,
+      backgroundColor: theme.colors.surface2,
+    },
+    shellToolbarLeft: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: theme.spacing[2],
+      flexShrink: 1,
+    },
+    shellTag: {
+      fontFamily: theme.fontFamily.mono,
+      fontSize: 11,
+      fontWeight: theme.fontWeight.bold,
+      color: theme.colors.foregroundMuted,
+      letterSpacing: 0.5,
+    },
+    shellExitBadge: {
+      paddingHorizontal: theme.spacing[1.5],
+      paddingVertical: 1,
+      borderRadius: theme.borderRadius.sm,
+      borderWidth: theme.borderWidth[1],
+    },
+    shellExitBadgeSuccess: {
+      borderColor: theme.colors.success ?? theme.colors.accent,
+      backgroundColor: "rgba(74, 246, 38, 0.12)",
+    },
+    shellExitBadgeError: {
+      borderColor: theme.colors.destructive,
+      backgroundColor: "rgba(255, 42, 42, 0.12)",
+    },
+    shellExitBadgeText: {
+      fontFamily: theme.fontFamily.mono,
+      fontSize: 10,
+      fontWeight: theme.fontWeight.bold,
+    },
+    shellExitBadgeSuccessText: {
+      color: theme.colors.success ?? theme.colors.accent,
+    },
+    shellExitBadgeErrorText: {
+      color: theme.colors.destructive,
+    },
+    shellCwdText: {
+      fontFamily: theme.fontFamily.mono,
+      fontSize: 10,
+      color: theme.colors.foregroundExtraMuted,
+      maxWidth: 160,
+    },
+    shellToolbarActions: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: theme.spacing[1.5],
     },
     subAgentSessionText: {
       fontFamily: theme.fontFamily.mono,
