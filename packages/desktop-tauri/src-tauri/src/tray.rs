@@ -8,6 +8,7 @@ use tauri_plugin_opener::OpenerExt;
 
 pub struct TrayState {
     pub active_agents_item: MenuItem<tauri::Wry>,
+    pub last_count: std::sync::atomic::AtomicUsize,
 }
 
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
@@ -38,12 +39,13 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
     app.manage(TrayState {
         active_agents_item: active_agents_i,
+        last_count: std::sync::atomic::AtomicUsize::new(usize::MAX),
     });
 
     let _tray = TrayIconBuilder::with_id("main")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("Paseo")
+        .tooltip("Kronos")
         .on_menu_event(|app, event| match event.id.as_ref() {
             "new_chat" => {
                 if let Some(window) = app.get_webview_window("main") {
@@ -125,19 +127,23 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
 #[tauri::command]
 pub fn update_active_agents(app: AppHandle, count: usize) -> Result<(), String> {
-    if let Some(tray) = app.tray_by_id("main") {
-        let tooltip = if count == 0 {
-            "Paseo".to_string()
-        } else if count == 1 {
-            "Paseo (1 active agent)".to_string()
-        } else {
-            format!("Paseo ({count} active agents)")
-        };
-        let _ = tray.set_tooltip(Some(tooltip));
-    }
     if let Some(state) = app.try_state::<TrayState>() {
+        let previous = state.last_count.swap(count, std::sync::atomic::Ordering::SeqCst);
+        if previous == count {
+            return Ok(());
+        }
         let text = format!("Active Agents: {count}");
         let _ = state.active_agents_item.set_text(text);
+    }
+    if let Some(tray) = app.tray_by_id("main") {
+        let tooltip = if count == 0 {
+            "Kronos".to_string()
+        } else if count == 1 {
+            "Kronos (1 active agent)".to_string()
+        } else {
+            format!("Kronos ({count} active agents)")
+        };
+        let _ = tray.set_tooltip(Some(tooltip));
     }
     Ok(())
 }

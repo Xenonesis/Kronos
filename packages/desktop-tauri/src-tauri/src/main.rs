@@ -174,6 +174,16 @@ try {{
       if (command === 'desktop_local_credential') {{
         return daemonData.localCredential || null;
       }}
+      if (command === 'get_desktop_settings' || command === 'patch_desktop_settings') {{
+        return {{
+          releaseChannel: 'stable',
+          notifications: {{ playSound: true }},
+          daemon: {{ manageBuiltInDaemon: true, keepRunningAfterQuit: false }}
+        }};
+      }}
+      if (command === 'desktop_get_system_idle_time') {{
+        return 0;
+      }}
       return null;
     }}
   }};
@@ -269,31 +279,11 @@ try {{
                 .title("Kronos")
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(800.0, 600.0)
+                .shadow(true)
                 .visible(false)
                 .initialization_script(&bridge_script);
 
-            #[cfg(target_os = "windows")]
-            let win_builder = {
-                let effects = tauri::window::EffectsBuilder::new()
-                    .effect(tauri::window::Effect::Mica)
-                    .build();
-                win_builder.effects(effects).transparent(true).shadow(true)
-            };
-
-            let win = match win_builder.build() {
-                Ok(w) => Some(w),
-                Err(_) => {
-                    eprintln!("[window] Failed to build window with effects, falling back to standard window");
-                    let fallback_builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-                        .title("Kronos")
-                        .inner_size(1280.0, 800.0)
-                        .min_inner_size(800.0, 600.0)
-                        .visible(false)
-                        .initialization_script(&bridge_script);
-                    fallback_builder.build().ok()
-                }
-            };
-
+            let win = win_builder.build().ok();
             if let Some(w) = win {
                 let _ = w.show();
                 let _ = w.set_focus();

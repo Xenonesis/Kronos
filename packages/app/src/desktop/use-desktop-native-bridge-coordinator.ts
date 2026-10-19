@@ -13,6 +13,8 @@ import {
  */
 export function useDesktopNativeBridgeCoordinator(): void {
   const previousTurnsRef = useRef<Map<string, "open" | "idle">>(new Map());
+  const previousActiveCountRef = useRef<number>(-1);
+  const throttleTimeoutRef = useRef<NodeJS.Timeout | number | null>(null);
 
   useEffect(() => {
     // Subscribe to session store state changes
@@ -44,11 +46,20 @@ export function useDesktopNativeBridgeCoordinator(): void {
 
       previousTurnsRef.current = currentTurns;
 
-      // Update native system tray active agents count
-      void updateNativeTrayActiveAgents(activeCount);
+      // Only dispatch native system tray update when active agent count actually changes
+      if (activeCount !== previousActiveCountRef.current) {
+        previousActiveCountRef.current = activeCount;
+        clearTimeout(throttleTimeoutRef.current as number);
+        throttleTimeoutRef.current = setTimeout(() => {
+          throttleTimeoutRef.current = null;
+          void updateNativeTrayActiveAgents(activeCount);
+        }, 300);
+      }
     });
 
     return () => {
+      clearTimeout(throttleTimeoutRef.current as number);
+      throttleTimeoutRef.current = null;
       unsubscribe();
     };
   }, []);

@@ -7,11 +7,14 @@ pub fn show_notification(
     title: String,
     body: Option<String>,
 ) -> Result<(), String> {
-    let mut builder = app.notification().builder().title(title);
-    if let Some(b) = body {
-        builder = builder.body(b);
-    }
-    builder.show().map_err(|e| e.to_string())
+    std::thread::spawn(move || {
+        let mut builder = app.notification().builder().title(title);
+        if let Some(b) = body {
+            builder = builder.body(b);
+        }
+        let _ = builder.show();
+    });
+    Ok(())
 }
 
 #[tauri::command]
@@ -21,19 +24,22 @@ pub fn notify_task_complete(
     status: Option<String>,
     details: Option<String>,
 ) -> Result<(), String> {
-    let title = format!("Task Complete: {}", task_name);
-    let body_text = match (status, details) {
-        (Some(s), Some(d)) => format!("{}: {}", s, d),
-        (Some(s), None) => format!("Status: {}", s),
-        (None, Some(d)) => d,
-        (None, None) => "Background task has completed successfully.".to_string(),
-    };
-    app.notification()
-        .builder()
-        .title(title)
-        .body(body_text)
-        .show()
-        .map_err(|e| e.to_string())
+    std::thread::spawn(move || {
+        let title = format!("Task Complete: {}", task_name);
+        let body_text = match (status, details) {
+            (Some(s), Some(d)) => format!("{}: {}", s, d),
+            (Some(s), None) => format!("Status: {}", s),
+            (None, Some(d)) => d,
+            (None, None) => "Background task has completed successfully.".to_string(),
+        };
+        let _ = app
+            .notification()
+            .builder()
+            .title(title)
+            .body(body_text)
+            .show();
+    });
+    Ok(())
 }
 
 pub fn setup_notification_listeners(app: &AppHandle) {
