@@ -34,7 +34,7 @@ function useKronosRelease(): ReleaseData {
   const [release, setRelease] = useState<ReleaseData>({
     downloadUrl: PERSISTENT_DOWNLOAD_URL,
     version: "v0.12.0",
-    size: "104 MB",
+    size: "99 MB",
     filename: "Kronos_0.12.0_x64-setup.exe",
   });
 
