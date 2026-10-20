@@ -1,0 +1,3 @@
+# Patch files must keep LF endings. patch-package parses them line by line and
+# fails to match context when the working tree has CRLF (Windows autocrlf).
+patches/*.patch text eol=lf
