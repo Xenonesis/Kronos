@@ -60,7 +60,9 @@ export function BrowserLoadFailureOverlay({
 
         {/* Subtitle */}
         <Text style={styles.description}>
-          {"We couldn't connect to your local server.\nIf this should be a local app, make sure the server is running and listening on the expected port."}
+          {
+            "We couldn't connect to your local server.\nIf this should be a local app, make sure the server is running and listening on the expected port."
+          }
         </Text>
 
         {/* Action Buttons Row */}

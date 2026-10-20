@@ -16,9 +16,7 @@ export function resolveDefaultBrowserUserDataDir(paseoHome?: string): string {
 /**
  * Callback function to receive command execution responses.
  */
-export type PlaywrightBrowserHostOnResponse = (
-  response: BrowserAutomationExecuteResponse,
-) => void;
+export type PlaywrightBrowserHostOnResponse = (response: BrowserAutomationExecuteResponse) => void;
 
 /**
  * Options for configuring Playwright browser host instance.

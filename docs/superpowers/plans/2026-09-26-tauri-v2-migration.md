@@ -21,6 +21,7 @@
 ### Task 1: Initialize `packages/desktop-tauri` Scaffolding
 
 **Files:**
+
 - Create: `packages/desktop-tauri/package.json`
 - Create: `packages/desktop-tauri/src-tauri/Cargo.toml`
 - Create: `packages/desktop-tauri/src-tauri/tauri.conf.json`
@@ -37,6 +38,7 @@
 ### Task 2: Implement Rust Sidecar Daemon Manager
 
 **Files:**
+
 - Create: `packages/desktop-tauri/src-tauri/src/daemon.rs`
 - Modify: `packages/desktop-tauri/src-tauri/src/main.rs`
 
@@ -49,6 +51,7 @@
 ### Task 3: Implement Native Editor Opener Commands
 
 **Files:**
+
 - Create: `packages/desktop-tauri/src-tauri/src/editor.rs`
 - Modify: `packages/desktop-tauri/src-tauri/src/main.rs`
 
@@ -60,6 +63,7 @@
 ### Task 4: Build & Memory Verification
 
 **Files:**
+
 - Build artifacts: `packages/desktop-tauri/src-tauri/target/release/`
 
 - [ ] **Step 1: Run `cargo tauri build`**

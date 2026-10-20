@@ -68,9 +68,7 @@ export function DiffCommentCard({
   autoFocus = true,
   testID = "diff-comment-card",
 }: DiffCommentCardProps) {
-  const [feedback, setFeedback] = useState(
-    initialFeedback ?? annotation.feedbackText ?? "",
-  );
+  const [feedback, setFeedback] = useState(initialFeedback ?? annotation.feedbackText ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -121,10 +119,7 @@ export function DiffCommentCard({
     try {
       if (typeof client.send === "function") {
         await client.send(agentId, prompt);
-      } else if (
-        "sendAgentMessage" in client &&
-        typeof client.sendAgentMessage === "function"
-      ) {
+      } else if ("sendAgentMessage" in client && typeof client.sendAgentMessage === "function") {
         await client.sendAgentMessage(agentId, prompt);
       } else {
         throw new Error("Client does not provide a send method");
@@ -163,10 +158,7 @@ export function DiffCommentCard({
       };
       if (nativeEvent.key === "Escape") {
         handleCancel();
-      } else if (
-        nativeEvent.key === "Enter" &&
-        (nativeEvent.ctrlKey || nativeEvent.metaKey)
-      ) {
+      } else if (nativeEvent.key === "Enter" && (nativeEvent.ctrlKey || nativeEvent.metaKey)) {
         void handleSubmit();
       }
     },
@@ -201,9 +193,7 @@ export function DiffCommentCard({
             <View
               style={[
                 styles.sideBadge,
-                annotation.side === "old"
-                  ? styles.sideBadgeOld
-                  : styles.sideBadgeNew,
+                annotation.side === "old" ? styles.sideBadgeOld : styles.sideBadgeNew,
               ]}
             >
               <Text style={styles.sideBadgeText}>{sideLabel}</Text>

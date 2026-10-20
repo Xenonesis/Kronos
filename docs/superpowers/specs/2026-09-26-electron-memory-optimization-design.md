@@ -9,6 +9,7 @@
 ## 1. Problem Statement
 
 Paseo is an Electron-based environment integrating:
+
 1. Electron Main Process.
 2. React Renderer GUI.
 3. Embedded Browser Webviews (`<webview>` instances with CDP sessions for AI web agents).
@@ -41,6 +42,7 @@ Without strict lifecycle pruning, idle RAM footprint scales up to 500MB-800MB+ d
 ### Component Details:
 
 ### Component A: Chromium Process & Flag Optimizer (`packages/desktop/src/main.ts`)
+
 - **Flags Configured at Startup**:
   - `--enable-features=AutomaticTabDiscarding,WebContentsDiscarding`
   - `--js-flags="--max-old-space-size=256 --expose-gc"`
@@ -50,6 +52,7 @@ Without strict lifecycle pruning, idle RAM footprint scales up to 500MB-800MB+ d
   - Broadcast explicit `cleanUpCaches()` to webviews and renderer windows.
 
 ### Component B: Webview & CDP Tab Hibernation (`packages/desktop/src/features/browser-webviews/`)
+
 - **Lifecycle States**:
   - `ACTIVE`: Attached to UI or currently targeted by AI Agent CDP queue.
   - `IDLE`: Inactive for > 60 seconds without pending CDP automation tasks.
@@ -57,6 +60,7 @@ Without strict lifecycle pruning, idle RAM footprint scales up to 500MB-800MB+ d
 - **Wake Strategy**: Seamless reload/re-attach upon user tab click or agent task dispatch.
 
 ### Component C: Server Memory Pruning (`packages/server/`)
+
 - Terminal scrollback buffers capped with circular buffers.
 - Inactive git workspace diff caches evicted after inactivity.
 - Explicit V8 GC invocation when daemon enters idle low-power state.

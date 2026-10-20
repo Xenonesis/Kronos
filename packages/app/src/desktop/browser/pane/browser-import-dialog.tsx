@@ -47,7 +47,8 @@ export function BrowserImportDialog({
         </View>
 
         <Text style={styles.subtitle}>
-          Import authentication cookies from your default browser so you are already logged in on local and web apps.
+          Import authentication cookies from your default browser so you are already logged in on
+          local and web apps.
         </Text>
 
         {/* Source Selector */}
@@ -60,9 +61,13 @@ export function BrowserImportDialog({
             <Globe size={18} color={theme.colors.foreground} />
             <View style={styles.sourceTextCol}>
               <Text style={styles.sourceTitle}>Google Chrome</Text>
-              <Text style={styles.sourceDesc}>Auto-detect session cookies from default Chrome profile</Text>
+              <Text style={styles.sourceDesc}>
+                Auto-detect session cookies from default Chrome profile
+              </Text>
             </View>
-            {selectedSource === "chrome" ? <Check size={16} color={theme.colors.foreground} /> : null}
+            {selectedSource === "chrome" ? (
+              <Check size={16} color={theme.colors.foreground} />
+            ) : null}
           </Pressable>
 
           <Pressable
@@ -88,7 +93,9 @@ export function BrowserImportDialog({
               <Text style={styles.sourceTitle}>Paste Cookies / Storage JSON</Text>
               <Text style={styles.sourceDesc}>Enter custom Cookie header or token JSON</Text>
             </View>
-            {selectedSource === "manual" ? <Check size={16} color={theme.colors.foreground} /> : null}
+            {selectedSource === "manual" ? (
+              <Check size={16} color={theme.colors.foreground} />
+            ) : null}
           </Pressable>
         </View>
 
@@ -105,16 +112,19 @@ export function BrowserImportDialog({
           />
         ) : null}
 
-        {importedStatus ? (
-          <Text style={styles.statusSuccess}>{importedStatus}</Text>
-        ) : null}
+        {importedStatus ? <Text style={styles.statusSuccess}>{importedStatus}</Text> : null}
 
         {/* Footer Actions */}
         <View style={styles.footer}>
           <Button variant="ghost" size="sm" onPress={onClose}>
             Cancel
           </Button>
-          <Button variant="default" size="sm" onPress={handleExecuteImport} testID="browser-import-confirm-btn">
+          <Button
+            variant="default"
+            size="sm"
+            onPress={handleExecuteImport}
+            testID="browser-import-confirm-btn"
+          >
             Import Data
           </Button>
         </View>

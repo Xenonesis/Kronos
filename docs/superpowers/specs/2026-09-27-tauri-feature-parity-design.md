@@ -42,6 +42,7 @@
 ## 2. Feature Workstreams & Technical Design
 
 ### Workstream 1: Window Management & State Persistence
+
 - **Current State:** Single window created with fixed 1280x800 dimensions, no position/dimension save or restore.
 - **Target State:**
   - Persist window position, dimensions, maximized state across restarts via `tauri-plugin-window-state`.
@@ -49,6 +50,7 @@
   - Custom titlebar integration matching Paseo styling (minimize, maximize, close, window drag regions).
 
 ### Workstream 2: Native Dialogs, Menus & File Openers
+
 - **Current State:** Stubs in bridge script returning `null`.
 - **Target State:**
   - Integrate `tauri-plugin-dialog` for native directory/file pickers (`open_folder_dialog`, `open_file_dialog`).
@@ -56,6 +58,7 @@
   - Open external URLs in system default browser via `tauri-plugin-opener` or `webbrowser::open`.
 
 ### Workstream 3: Deep Link & Protocol Registration (`paseo://`)
+
 - **Current State:** Not registered; deep links fail on OS.
 - **Target State:**
   - Register `paseo://` protocol handler in `tauri.conf.json` via `tauri-plugin-deep-link`.
@@ -63,6 +66,7 @@
   - Handle single-instance locking: secondary launches with deep-link URI focus the primary window and dispatch the URL.
 
 ### Workstream 4: Browser Automation via Headless Chromium (Playwright)
+
 - **Current State:** Electron uses direct `webContents.debugger` (CDP) for in-app browser tabs. Tauri has no CDP bridge.
 - **Target State:**
   - Implement a Playwright-backed headless browser manager on the daemon side (`packages/server`).
@@ -74,6 +78,7 @@
   - Cross-platform: works uniformly on Windows, macOS, and Linux without platform-specific webview hacks.
 
 ### Workstream 5: System Tray & Desktop Notifications
+
 - **Current State:** No tray icon; app closes on window close.
 - **Target State:**
   - Tauri system tray with options:
@@ -85,6 +90,7 @@
   - Native OS notifications via `tauri-plugin-notification` for agent turn completions and permission requests.
 
 ### Workstream 6: Auto-Updater
+
 - **Current State:** No updater logic; updates require manual reinstall.
 - **Target State:**
   - Integrate `tauri-plugin-updater` with public release endpoints.

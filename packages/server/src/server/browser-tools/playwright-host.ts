@@ -1,5 +1,11 @@
 import fs from "node:fs/promises";
-import { chromium, type Browser, type BrowserContext, type CDPSession, type Page } from "playwright";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type CDPSession,
+  type Page,
+} from "playwright";
 import {
   type BrowserAutomationCommand,
   type BrowserAutomationCommandName,
@@ -186,9 +192,7 @@ export class PlaywrightBrowserHostClient implements BrowserHostClient {
       type PageWithContext = Page & { context?: () => BrowserContext };
       const pageWithContext = page as PageWithContext;
       const context =
-        typeof pageWithContext.context === "function"
-          ? pageWithContext.context()
-          : this.context;
+        typeof pageWithContext.context === "function" ? pageWithContext.context() : this.context;
 
       type ContextWithCDP = BrowserContext & {
         newCDPSession?: (page: Page) => Promise<CDPSession>;
@@ -373,9 +377,7 @@ export class PlaywrightBrowserHostClient implements BrowserHostClient {
    * Captures a live frame from the active (or specified) browser tab.
    * Encoded as base64 JPEG for real-time live agent stream inspection and preview.
    */
-  public async captureCurrentFrame(
-    options?: CaptureCurrentFrameOptions,
-  ): Promise<CapturedFrame> {
+  public async captureCurrentFrame(options?: CaptureCurrentFrameOptions): Promise<CapturedFrame> {
     const { context } = await this.ensureBrowser();
 
     if (this.tabs.size === 0) {
@@ -395,8 +397,7 @@ export class PlaywrightBrowserHostClient implements BrowserHostClient {
     });
 
     const data = buffer.toString("base64");
-    const browserId =
-      options?.browserId ?? this.activeTabId ?? this.tabs.keys().next().value ?? "";
+    const browserId = options?.browserId ?? this.activeTabId ?? this.tabs.keys().next().value ?? "";
     const url = page.url();
     const title = await page.title().catch(() => "");
     const timestamp = Date.now();

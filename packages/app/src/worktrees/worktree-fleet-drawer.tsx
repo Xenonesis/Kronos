@@ -2,15 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import {
-  Archive,
-  Bot,
-  Folder,
-  GitBranch,
-  Plus,
-  RotateCw,
-  Trash2,
-} from "lucide-react-native";
+import { Archive, Bot, Folder, GitBranch, Plus, RotateCw, Trash2 } from "lucide-react-native";
 import type { Theme } from "@/styles/theme";
 import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
@@ -89,7 +81,12 @@ export function WorktreeFleetDrawer({
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rawWorktrees, setRawWorktrees] = useState<
-    Array<{ worktreePath: string; createdAt: string; branchName?: string | null; head?: string | null }>
+    Array<{
+      worktreePath: string;
+      createdAt: string;
+      branchName?: string | null;
+      head?: string | null;
+    }>
   >([]);
 
   // New worktree form state
@@ -449,10 +446,7 @@ export function WorktreeFleetDrawer({
                         />
                       ) : null}
                     </View>
-                    <StatusBadge
-                      label={item.status.toUpperCase()}
-                      variant={statusVariant}
-                    />
+                    <StatusBadge label={item.status.toUpperCase()} variant={statusVariant} />
                   </View>
 
                   <View style={styles.pathRow}>

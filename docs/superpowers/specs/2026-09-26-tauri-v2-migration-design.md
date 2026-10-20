@@ -9,6 +9,7 @@
 ## 1. Architectural Strategy
 
 We use a parallel package approach:
+
 - `packages/desktop`: Retained as-is (Electron).
 - `packages/desktop-tauri`: New Tauri v2 package.
 
@@ -36,23 +37,27 @@ We use a parallel package approach:
 ## 2. Component Specifications
 
 ### 2.1 Tauri Configuration (`tauri.conf.json`)
+
 - Bundle identifier: `sh.paseo.desktop.tauri`
 - Frontend dist: `../../packages/app/dist`
 - Dev server URL: `http://localhost:8081` (for live Expo development)
 - Windows: Single main window, titleBarStyle: `Overlay` for custom Paseo titlebar.
 
 ### 2.2 Server Daemon Sidecar Management (`src-tauri/src/daemon.rs`)
+
 - Tauri app setup hook spawns Node daemon with environment:
   - `PASEO_LISTEN=127.0.0.1:6768`
   - Inherits system login shell PATH.
 - App exit listener sends SIGTERM / graceful shutdown IPC to ensure no orphan Node processes.
 
 ### 2.3 Rust Native Commands (`src-tauri/src/commands/`)
+
 - `open_in_editor(editor: String, path: String, line: Option<u32>, col: Option<u32>)`
 - `get_daemon_status()`
 - `show_native_dialog(options: DialogOptions)`
 
 ### 2.4 Browser Automation Adapter
+
 - Agent web browsing is routed via external Playwright / Chrome execution instead of in-app WebKit CDP.
 
 ---

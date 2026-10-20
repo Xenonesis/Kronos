@@ -60,7 +60,9 @@ export function BrowserPaneView({
     },
   ]);
   const [activeTabId, setActiveTabId] = useState("tab-1");
-  const [viewportPreset, setViewportPreset] = useState<"responsive" | "desktop" | "tablet" | "mobile">("responsive");
+  const [viewportPreset, setViewportPreset] = useState<
+    "responsive" | "desktop" | "tablet" | "mobile"
+  >("responsive");
   const [isInspectActive, setIsInspectActive] = useState(false);
   const [isMarkupActive, setIsMarkupActive] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
@@ -75,7 +77,9 @@ export function BrowserPaneView({
   const verifyReachability = useCallback(async (targetUrl: string, tabId: string) => {
     if (!targetUrl || targetUrl === "about:blank") {
       setTabs((prev) =>
-        prev.map((t) => (t.id === tabId ? { ...t, hasLoadError: false, isLoading: false, title: "New Tab" } : t)),
+        prev.map((t) =>
+          t.id === tabId ? { ...t, hasLoadError: false, isLoading: false, title: "New Tab" } : t,
+        ),
       );
       return;
     }
@@ -84,16 +88,15 @@ export function BrowserPaneView({
     if (!isLocalhostUrl(targetUrl)) {
       setTabs((prev) =>
         prev.map((t) =>
-          t.id === tabId ? { ...t, hasLoadError: false, isLoading: false, title: parseHostFromUrl(targetUrl) } : t,
+          t.id === tabId
+            ? { ...t, hasLoadError: false, isLoading: false, title: parseHostFromUrl(targetUrl) }
+            : t,
         ),
       );
       return;
     }
 
-
-    setTabs((prev) =>
-      prev.map((t) => (t.id === tabId ? { ...t, isLoading: true } : t)),
-    );
+    setTabs((prev) => prev.map((t) => (t.id === tabId ? { ...t, isLoading: true } : t)));
 
     try {
       if (Platform.OS === "web") {
@@ -111,15 +114,11 @@ export function BrowserPaneView({
           );
         } catch {
           clearTimeout(timeout);
-          setTabs((prev) =>
-            prev.map((t) => (t.id === tabId ? { ...t, hasLoadError: true } : t)),
-          );
+          setTabs((prev) => prev.map((t) => (t.id === tabId ? { ...t, hasLoadError: true } : t)));
         }
       }
     } finally {
-      setTabs((prev) =>
-        prev.map((t) => (t.id === tabId ? { ...t, isLoading: false } : t)),
-      );
+      setTabs((prev) => prev.map((t) => (t.id === tabId ? { ...t, isLoading: false } : t)));
     }
   }, []);
 
@@ -413,7 +412,9 @@ export function BrowserPaneView({
               onLoad={() => {
                 injectInspectorIntoIframe();
                 setTabs((prev) =>
-                  prev.map((t) => (t.id === activeTabId ? { ...t, isLoading: false, hasLoadError: false } : t)),
+                  prev.map((t) =>
+                    t.id === activeTabId ? { ...t, isLoading: false, hasLoadError: false } : t,
+                  ),
                 );
               }}
               onError={() =>

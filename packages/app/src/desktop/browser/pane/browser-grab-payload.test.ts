@@ -115,7 +115,9 @@ describe("formatGrabPayloadAsText", () => {
     };
 
     const text = formatGrabPayloadAsText(payload);
-    expect(text).toContain("Attached browser context from http://localhost:3000/settings (Settings Overview):");
+    expect(text).toContain(
+      "Attached browser context from http://localhost:3000/settings (Settings Overview):",
+    );
   });
 
   it("includes React component and source when present", () => {
@@ -209,7 +211,9 @@ describe("formatGrabPayloadAsText", () => {
     };
 
     const text = formatGrabPayloadAsText(payload);
-    expect(text).toContain('- Accessibility: role="button", aria-label="Close modal", name="Close"');
+    expect(text).toContain(
+      '- Accessibility: role="button", aria-label="Close modal", name="Close"',
+    );
   });
 
   it("omits accessibility line when absent", () => {
@@ -228,14 +232,16 @@ describe("formatGrabPayloadAsText", () => {
     const payload: BrowserGrabPayload = {
       url: "http://localhost:3000",
       target: createBaseTarget({
-        nearbyContext: "Parent: <form>, Siblings: <input type=\"text\">",
+        nearbyContext: 'Parent: <form>, Siblings: <input type="text">',
         html: '<button type="submit" class="btn btn-primary" id="submit-btn">Submit</button>',
       }),
     };
 
     const text = formatGrabPayloadAsText(payload);
     expect(text).toContain('- Nearby context: Parent: <form>, Siblings: <input type="text">');
-    expect(text).toContain('- HTML:\n<button type="submit" class="btn btn-primary" id="submit-btn">Submit</button>');
+    expect(text).toContain(
+      '- HTML:\n<button type="submit" class="btn btn-primary" id="submit-btn">Submit</button>',
+    );
   });
 
   it("correctly formats id and multiple class names in selected element tag", () => {
@@ -249,7 +255,9 @@ describe("formatGrabPayloadAsText", () => {
     };
 
     const text = formatGrabPayloadAsText(payload);
-    expect(text).toContain("- Selected element: <button#checkout-btn.btn.btn-primary.btn-lg.active>");
+    expect(text).toContain(
+      "- Selected element: <button#checkout-btn.btn.btn-primary.btn-lg.active>",
+    );
   });
 
   it("rounds dimension numbers cleanly", () => {
@@ -287,7 +295,8 @@ describe("formatGrabPayloadAsText", () => {
         textContent: "Save Changes",
         component: "SaveButton",
         source: "src/admin/components/save-button.tsx:18:3",
-        nearbyContext: "Parent: <div class=\"form-actions\">, Siblings: <button class=\"btn btn-secondary\">",
+        nearbyContext:
+          'Parent: <div class="form-actions">, Siblings: <button class="btn btn-secondary">',
         computedStyles: {
           display: "inline-block",
           position: "relative",

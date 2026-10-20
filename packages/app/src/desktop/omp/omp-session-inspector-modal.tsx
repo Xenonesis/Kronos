@@ -1,12 +1,5 @@
 import React, { useState } from "react";
-import {
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  Text,
-  View,
-} from "react-native";
+import { Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import {
   X,
@@ -86,12 +79,7 @@ export function OmpSessionInspectorModal({
   if (!visible || !session) return null;
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-    >
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
         <View style={styles.container}>
           {/* Header */}
@@ -143,7 +131,12 @@ export function OmpSessionInspectorModal({
               style={[styles.tab, activeTab === "timeline" && styles.tabActive]}
               onPress={() => setActiveTab("timeline")}
             >
-              <Terminal size={14} color={activeTab === "timeline" ? theme.colors.foreground : theme.colors.foregroundMuted} />
+              <Terminal
+                size={14}
+                color={
+                  activeTab === "timeline" ? theme.colors.foreground : theme.colors.foregroundMuted
+                }
+              />
               <Text style={[styles.tabText, activeTab === "timeline" && styles.tabTextActive]}>
                 Timeline ({session.turns.length})
               </Text>
@@ -153,7 +146,12 @@ export function OmpSessionInspectorModal({
               style={[styles.tab, activeTab === "files" && styles.tabActive]}
               onPress={() => setActiveTab("files")}
             >
-              <FileCode size={14} color={activeTab === "files" ? theme.colors.foreground : theme.colors.foregroundMuted} />
+              <FileCode
+                size={14}
+                color={
+                  activeTab === "files" ? theme.colors.foreground : theme.colors.foregroundMuted
+                }
+              />
               <Text style={[styles.tabText, activeTab === "files" && styles.tabTextActive]}>
                 Files Changed ({session.fileDiffs.length})
               </Text>
@@ -181,15 +179,16 @@ export function OmpSessionInspectorModal({
                         <View style={styles.timestampRow}>
                           <Clock size={11} color={theme.colors.foregroundMuted} />
                           <Text style={styles.timestampText}>
-                            {new Date(turn.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                            {new Date(turn.timestamp).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
                           </Text>
                         </View>
                       ) : null}
                     </View>
 
-                    {turn.text ? (
-                      <Text style={styles.turnBodyText}>{turn.text}</Text>
-                    ) : null}
+                    {turn.text ? <Text style={styles.turnBodyText}>{turn.text}</Text> : null}
 
                     {turn.toolCalls && turn.toolCalls.length > 0 ? (
                       <View style={styles.toolCallsWrap}>
@@ -221,7 +220,9 @@ export function OmpSessionInspectorModal({
               <View style={styles.filesList}>
                 {session.fileDiffs.length === 0 ? (
                   <View style={styles.emptyFilesBox}>
-                    <Text style={styles.emptyFilesText}>No file modifications recorded in this session.</Text>
+                    <Text style={styles.emptyFilesText}>
+                      No file modifications recorded in this session.
+                    </Text>
                   </View>
                 ) : (
                   session.fileDiffs.map((diff, index) => (

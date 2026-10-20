@@ -21,6 +21,7 @@
 ### Task 1: Window State Persistence & Native Dialogs (Phase 1)
 
 **Files:**
+
 - Modify: `packages/desktop-tauri/src-tauri/Cargo.toml`
 - Modify: `packages/desktop-tauri/src-tauri/src/main.rs`
 - Modify: `packages/desktop-tauri/src-tauri/tauri.conf.json`
@@ -47,6 +48,7 @@
 ### Task 2: Deep Link Registration & Single Instance (Phase 2)
 
 **Files:**
+
 - Modify: `packages/desktop-tauri/src-tauri/Cargo.toml`
 - Modify: `packages/desktop-tauri/src-tauri/tauri.conf.json`
 - Modify: `packages/desktop-tauri/src-tauri/src/main.rs`
@@ -69,6 +71,7 @@
 ### Task 3: Daemon-Side Playwright Browser Automation (Phase 3)
 
 **Files:**
+
 - Modify: `packages/server/package.json`
 - Create: `packages/server/src/server/agent/tools/playwright-browser.ts`
 - Modify: `packages/server/src/server/agent/provider-registry.ts`
@@ -89,6 +92,7 @@
 ### Task 4: System Tray, Notifications & Auto-Update (Phase 4)
 
 **Files:**
+
 - Modify: `packages/desktop-tauri/src-tauri/Cargo.toml`
 - Modify: `packages/desktop-tauri/src-tauri/src/main.rs`
 - Create: `packages/desktop-tauri/src-tauri/src/tray.rs`
@@ -112,6 +116,7 @@
 ### Task 5: End-to-End Validation & Electron Removal (Phase 5)
 
 **Files:**
+
 - Remove: `packages/desktop/`
 - Modify: `package.json` (remove workspace, electron dependencies, electron build scripts)
 - Modify: Root CI/CD workflows (`.github/workflows/`)

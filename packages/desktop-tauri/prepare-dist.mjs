@@ -15,7 +15,9 @@ if (fs.existsSync(distDir)) {
 fs.mkdirSync(targetDir, { recursive: true });
 // Copy server dist
 console.log("Copying server dist (1,843 files)...");
-fs.cpSync(path.join(root, "packages/server/dist"), path.join(targetDir, "dist"), { recursive: true });
+fs.cpSync(path.join(root, "packages/server/dist"), path.join(targetDir, "dist"), {
+  recursive: true,
+});
 
 // Copy node runtime directly so Tauri installed app always has Node available
 console.log("Copying node runtime...");
@@ -27,7 +29,10 @@ if (process.platform !== "win32") {
   } catch {}
 }
 // Copy server package.json
-fs.copyFileSync(path.join(root, "packages/server/package.json"), path.join(targetDir, "package.json"));
+fs.copyFileSync(
+  path.join(root, "packages/server/package.json"),
+  path.join(targetDir, "package.json"),
+);
 
 // Install production dependencies directly inside server-dist if missing
 const serverDistNodeModules = path.join(targetDir, "node_modules");
@@ -54,7 +59,10 @@ for (const pkg of internalPackages) {
   });
 }
 // Remove bloated unused claude binary to stay within installer limits
-const heavyClaude = path.join(serverDistNodeModules, "@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe");
+const heavyClaude = path.join(
+  serverDistNodeModules,
+  "@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe",
+);
 if (fs.existsSync(heavyClaude)) {
   fs.unlinkSync(heavyClaude);
   console.log("Stripped bloated claude.exe binary");
@@ -85,6 +93,5 @@ function cleanExtraFiles(dir) {
 }
 cleanExtraFiles(targetDir);
 console.log("Stripped sourcemap and buildinfo files");
-
 
 console.log("Lean server-dist prepared with bundled dependencies!");

@@ -131,23 +131,11 @@ vi.mock("@/components/ui/button", () => ({
 
 vi.mock("@/components/ui/status-badge", () => ({
   StatusBadge: ({ label, variant }: { label: string; variant?: string }) =>
-    React.createElement(
-      "span",
-      { "data-testid": `status-badge-${variant ?? "default"}` },
-      label,
-    ),
+    React.createElement("span", { "data-testid": `status-badge-${variant ?? "default"}` }, label),
 }));
 
 vi.mock("@/components/ui/form-field", () => ({
-  Field: ({
-    label,
-    children,
-    testID,
-  }: {
-    label: string;
-    children: ReactNode;
-    testID?: string;
-  }) =>
+  Field: ({ label, children, testID }: { label: string; children: ReactNode; testID?: string }) =>
     React.createElement(
       "div",
       { "data-testid": testID },
@@ -595,7 +583,9 @@ describe("Worktree Fleet Manager", () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByTestId("archive-worktree-button-/repos/main/feat-to-delete")).toBeDefined();
+        expect(
+          screen.getByTestId("archive-worktree-button-/repos/main/feat-to-delete"),
+        ).toBeDefined();
       });
 
       const archiveButton = screen.getByTestId(

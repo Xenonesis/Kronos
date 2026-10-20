@@ -16,6 +16,7 @@ This is an npm workspace monorepo:
 - `packages/website` — Marketing site (paseo.sh)
 
 ### Desktop Distribution Policy
+
 - Only **installable packages** (e.g. Windows NSIS `.exe` installer) are officially distributed and supported.
 - Never distribute, link, or treat raw standalone/portable executables (`paseo-desktop.exe`) as release artifacts.
 - All desktop builds intended for distribution must be built via the bundle pipeline (`npm run bundle:desktop`) producing installers under `packages/desktop-tauri/src-tauri/target/release/bundle/nsis/`.

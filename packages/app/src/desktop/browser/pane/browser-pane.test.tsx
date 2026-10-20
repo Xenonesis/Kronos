@@ -7,7 +7,6 @@ afterEach(() => {
   cleanup();
 });
 
-
 vi.mock("expo-clipboard", () => ({
   setStringAsync: vi.fn(),
   getStringAsync: vi.fn(),
@@ -43,9 +42,7 @@ vi.mock("react-native-reanimated", () => ({
 vi.mock("react-native-unistyles", () => ({
   StyleSheet: {
     create: (factory: unknown) =>
-      factory instanceof Function
-        ? (factory as (t: unknown) => unknown)(theme)
-        : factory,
+      factory instanceof Function ? (factory as (t: unknown) => unknown)(theme) : factory,
     absoluteFillObject: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
   },
   useUnistyles: () => ({
@@ -62,8 +59,10 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 vi.mock("lucide-react-native", () => {
-  const createIcon = (name: string) => ({ style: _style, ...props }: Record<string, unknown>) =>
-    React.createElement("span", { ...props, "data-icon": name });
+  const createIcon =
+    (name: string) =>
+    ({ style: _style, ...props }: Record<string, unknown>) =>
+      React.createElement("span", { ...props, "data-icon": name });
   return {
     ArrowLeft: createIcon("ArrowLeft"),
     ArrowRight: createIcon("ArrowRight"),

@@ -30,9 +30,7 @@ export function sanitizeProxyHeaders(
 
   if (headers["content-security-policy"]) {
     const csp = String(headers["content-security-policy"]);
-    headers["content-security-policy"] = csp
-      .replace(/frame-ancestors[^;]+;?\s*/gi, "")
-      .trim();
+    headers["content-security-policy"] = csp.replace(/frame-ancestors[^;]+;?\s*/gi, "").trim();
   }
 
   // Set permissive CORS
@@ -64,7 +62,8 @@ export function createBrowserProxyHandler(logger?: Logger): RequestHandler {
     // Cookie management and local browser auto-import endpoint
     if (req.method === "POST" && req.path.endsWith("/cookies")) {
       const { host, cookies, browser } =
-        (req.body as { host?: string; cookies?: string; browser?: "chrome" | "edge" | "brave" }) || {};
+        (req.body as { host?: string; cookies?: string; browser?: "chrome" | "edge" | "brave" }) ||
+        {};
       if (browser && host) {
         const imported = readChromiumCookiesForHost(browser, host);
         if (imported.cookies) {
@@ -89,9 +88,10 @@ export function createBrowserProxyHandler(logger?: Logger): RequestHandler {
 
     let parsedUrl: URL;
     try {
-      const normalized = rawTarget.startsWith("http://") || rawTarget.startsWith("https://")
-        ? rawTarget
-        : `https://${rawTarget}`;
+      const normalized =
+        rawTarget.startsWith("http://") || rawTarget.startsWith("https://")
+          ? rawTarget
+          : `https://${rawTarget}`;
       parsedUrl = new URL(normalized);
     } catch {
       res.status(400).json({ error: "Invalid URL parameter" });
@@ -114,7 +114,8 @@ export function createBrowserProxyHandler(logger?: Logger): RequestHandler {
           ...req.headers,
           host: parsedUrl.host,
           "user-agent": DESKTOP_USER_AGENT,
-          accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+          accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
           "accept-encoding": "identity", // Disable gzip/br to allow easy <base> injection
           referer: parsedUrl.origin,
           ...(outboundCookie ? { cookie: outboundCookie } : {}),
@@ -161,7 +162,10 @@ export function createBrowserProxyHandler(logger?: Logger): RequestHandler {
     );
 
     proxyRequest.on("error", (err) => {
-      logger?.warn({ err: err.message, url: parsedUrl.toString() }, "Browser proxy upstream connection error");
+      logger?.warn(
+        { err: err.message, url: parsedUrl.toString() },
+        "Browser proxy upstream connection error",
+      );
       res.status(502).json({ error: "Failed to connect to target website", details: err.message });
     });
 

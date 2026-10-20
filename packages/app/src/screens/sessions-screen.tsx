@@ -182,73 +182,73 @@ function SessionsScreenContent() {
         />
       ) : (
         <>
-      {showFilterRow ? (
-        <View style={styles.filterContainer}>
-          {isSearchSupported ? (
-            <SearchField
-              value={searchInput}
-              onChangeText={setSearchInput}
-              placeholder={t("sessions.searchPlaceholder")}
-              clearAccessibilityLabel={t("sessions.actions.clearSearch")}
-              testID="sessions-search-input"
-              clearTestID="sessions-search-clear"
+          {showFilterRow ? (
+            <View style={styles.filterContainer}>
+              {isSearchSupported ? (
+                <SearchField
+                  value={searchInput}
+                  onChangeText={setSearchInput}
+                  placeholder={t("sessions.searchPlaceholder")}
+                  clearAccessibilityLabel={t("sessions.actions.clearSearch")}
+                  testID="sessions-search-input"
+                  clearTestID="sessions-search-clear"
+                />
+              ) : null}
+              {showHostFilter ? (
+                <HostFilter
+                  hosts={hosts}
+                  selectedHost={selectedHost}
+                  onSelectHost={setSelectedHost}
+                  triggerTestID="sessions-host-filter-trigger"
+                  hostOptionTestID={sessionsHostOptionTestID}
+                />
+              ) : null}
+            </View>
+          ) : null}
+          {hostErrors.length > 0 ? <SessionHostErrorsBanner errors={hostErrors} t={t} /> : null}
+          {isInitialLoad ? (
+            <View style={styles.loadingContainer}>
+              <LoadingSpinner size="large" color={theme.colors.foregroundMuted} />
+            </View>
+          ) : null}
+          {!isInitialLoad && showLoadError ? (
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyText}>Unable to load sessions</Text>
+              <Button variant="ghost" onPress={handleRefresh}>
+                Try again
+              </Button>
+            </View>
+          ) : null}
+          {!isInitialLoad && !showLoadError && agents.length === 0 ? (
+            <View style={styles.emptyContainer} testID="sessions-empty">
+              <Text style={styles.emptyText}>{emptyText}</Text>
+              {isSearching ? (
+                <Button variant="ghost" onPress={handleClearSearch}>
+                  {t("sessions.actions.clearSearch")}
+                </Button>
+              ) : (
+                <Button variant="ghost" leftIcon={ChevronLeft} onPress={handleBack}>
+                  Back
+                </Button>
+              )}
+              <Button variant="ghost" leftIcon={Import} onPress={importSession.open}>
+                {t("importSession.title")}
+              </Button>
+            </View>
+          ) : null}
+          {!isInitialLoad && !showLoadError && agents.length > 0 ? (
+            <AgentList
+              agents={agents}
+              showCheckoutInfo={false}
+              isRefreshing={isManualRefresh}
+              onRefresh={handleRefresh}
+              listFooterComponent={listFooterComponent}
+              showAttentionIndicator={false}
+              showHostColumn
+              search={isSearching ? search : undefined}
             />
           ) : null}
-          {showHostFilter ? (
-            <HostFilter
-              hosts={hosts}
-              selectedHost={selectedHost}
-              onSelectHost={setSelectedHost}
-              triggerTestID="sessions-host-filter-trigger"
-              hostOptionTestID={sessionsHostOptionTestID}
-            />
-          ) : null}
-        </View>
-      ) : null}
-      {hostErrors.length > 0 ? <SessionHostErrorsBanner errors={hostErrors} t={t} /> : null}
-      {isInitialLoad ? (
-        <View style={styles.loadingContainer}>
-          <LoadingSpinner size="large" color={theme.colors.foregroundMuted} />
-        </View>
-      ) : null}
-      {!isInitialLoad && showLoadError ? (
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyText}>Unable to load sessions</Text>
-          <Button variant="ghost" onPress={handleRefresh}>
-            Try again
-          </Button>
-        </View>
-      ) : null}
-      {!isInitialLoad && !showLoadError && agents.length === 0 ? (
-        <View style={styles.emptyContainer} testID="sessions-empty">
-          <Text style={styles.emptyText}>{emptyText}</Text>
-          {isSearching ? (
-            <Button variant="ghost" onPress={handleClearSearch}>
-              {t("sessions.actions.clearSearch")}
-            </Button>
-          ) : (
-            <Button variant="ghost" leftIcon={ChevronLeft} onPress={handleBack}>
-              Back
-            </Button>
-          )}
-          <Button variant="ghost" leftIcon={Import} onPress={importSession.open}>
-            {t("importSession.title")}
-          </Button>
-        </View>
-      ) : null}
-      {!isInitialLoad && !showLoadError && agents.length > 0 ? (
-        <AgentList
-          agents={agents}
-          showCheckoutInfo={false}
-          isRefreshing={isManualRefresh}
-          onRefresh={handleRefresh}
-          listFooterComponent={listFooterComponent}
-          showAttentionIndicator={false}
-          showHostColumn
-          search={isSearching ? search : undefined}
-        />
-      ) : null}
-      {importSession.sheet}
+          {importSession.sheet}
         </>
       )}
     </View>

@@ -28,11 +28,7 @@ function createFakePage(options: FakePageOptions = {}): Page {
       currentTitle = `Title for ${url}`;
     },
     content: async () => `<html><body>${currentTitle}</body></html>`,
-    screenshot: async (opts?: {
-      type?: "png" | "jpeg";
-      quality?: number;
-      fullPage?: boolean;
-    }) => {
+    screenshot: async (opts?: { type?: "png" | "jpeg"; quality?: number; fullPage?: boolean }) => {
       const type = opts?.type ?? "png";
       const quality = opts?.quality ?? 80;
       return Buffer.from(`fake-${type}-screenshot-q${quality}`);
@@ -136,8 +132,7 @@ const mockLaunch = vi.fn();
 
 vi.mock("playwright", () => ({
   chromium: {
-    launchPersistentContext: (dir: string, opts: unknown) =>
-      mockLaunchPersistentContext(dir, opts),
+    launchPersistentContext: (dir: string, opts: unknown) => mockLaunchPersistentContext(dir, opts),
     launch: (opts: unknown) => mockLaunch(opts),
   },
 }));

@@ -70,7 +70,7 @@ export const SyncedLoader = memo(function SyncedLoader({
       height: gridHeight,
       position: "relative" as const,
     }),
-    [gridHeight, gridWidth]
+    [gridHeight, gridWidth],
   );
 
   return (

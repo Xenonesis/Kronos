@@ -97,7 +97,10 @@ export function BrowserNavigationBar({
           onPress={onGoBack}
           testID="browser-back-btn"
         >
-          <ArrowLeft size={16} color={canGoBack ? theme.colors.foreground : theme.colors.foregroundMuted} />
+          <ArrowLeft
+            size={16}
+            color={canGoBack ? theme.colors.foreground : theme.colors.foregroundMuted}
+          />
         </Button>
 
         <Button
@@ -108,7 +111,10 @@ export function BrowserNavigationBar({
           onPress={onGoForward}
           testID="browser-forward-btn"
         >
-          <ArrowRight size={16} color={canGoForward ? theme.colors.foreground : theme.colors.foregroundMuted} />
+          <ArrowRight
+            size={16}
+            color={canGoForward ? theme.colors.foreground : theme.colors.foregroundMuted}
+          />
         </Button>
 
         <Button
@@ -157,7 +163,9 @@ export function BrowserNavigationBar({
               </Button>
             </TooltipTrigger>
             <TooltipContent side="top" align="center" offset={8}>
-              <Text style={styles.tooltipText}>Import browser cookies & sessions (Chrome/Edge)</Text>
+              <Text style={styles.tooltipText}>
+                Import browser cookies & sessions (Chrome/Edge)
+              </Text>
             </TooltipContent>
           </Tooltip>
         ) : null}
@@ -172,7 +180,10 @@ export function BrowserNavigationBar({
                 onPress={onToggleInspect}
                 testID="browser-inspect-btn"
               >
-                <MousePointer2 size={14} color={isInspectActive ? "#fff" : theme.colors.foreground} />
+                <MousePointer2
+                  size={14}
+                  color={isInspectActive ? "#fff" : theme.colors.foreground}
+                />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="top" align="center" offset={8}>
@@ -258,32 +269,63 @@ export function BrowserNavigationBar({
         {onSelectViewportPreset ? (
           <View style={styles.viewportControls}>
             <Pressable
-              style={[styles.viewportBtn, viewportPreset === "responsive" && styles.viewportBtnActive]}
+              style={[
+                styles.viewportBtn,
+                viewportPreset === "responsive" && styles.viewportBtnActive,
+              ]}
               onPress={() => onSelectViewportPreset("responsive")}
               testID="viewport-responsive"
             >
-              <Maximize size={12} color={viewportPreset === "responsive" ? theme.colors.foreground : theme.colors.foregroundMuted} />
+              <Maximize
+                size={12}
+                color={
+                  viewportPreset === "responsive"
+                    ? theme.colors.foreground
+                    : theme.colors.foregroundMuted
+                }
+              />
             </Pressable>
             <Pressable
               style={[styles.viewportBtn, viewportPreset === "desktop" && styles.viewportBtnActive]}
               onPress={() => onSelectViewportPreset("desktop")}
               testID="viewport-desktop"
             >
-              <Monitor size={12} color={viewportPreset === "desktop" ? theme.colors.foreground : theme.colors.foregroundMuted} />
+              <Monitor
+                size={12}
+                color={
+                  viewportPreset === "desktop"
+                    ? theme.colors.foreground
+                    : theme.colors.foregroundMuted
+                }
+              />
             </Pressable>
             <Pressable
               style={[styles.viewportBtn, viewportPreset === "tablet" && styles.viewportBtnActive]}
               onPress={() => onSelectViewportPreset("tablet")}
               testID="viewport-tablet"
             >
-              <Tablet size={12} color={viewportPreset === "tablet" ? theme.colors.foreground : theme.colors.foregroundMuted} />
+              <Tablet
+                size={12}
+                color={
+                  viewportPreset === "tablet"
+                    ? theme.colors.foreground
+                    : theme.colors.foregroundMuted
+                }
+              />
             </Pressable>
             <Pressable
               style={[styles.viewportBtn, viewportPreset === "mobile" && styles.viewportBtnActive]}
               onPress={() => onSelectViewportPreset("mobile")}
               testID="viewport-mobile"
             >
-              <Smartphone size={12} color={viewportPreset === "mobile" ? theme.colors.foreground : theme.colors.foregroundMuted} />
+              <Smartphone
+                size={12}
+                color={
+                  viewportPreset === "mobile"
+                    ? theme.colors.foreground
+                    : theme.colors.foregroundMuted
+                }
+              />
             </Pressable>
           </View>
         ) : null}

@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  injectBaseTagIntoHtml,
-  sanitizeProxyHeaders,
-} from "./browser-proxy";
+import { injectBaseTagIntoHtml, sanitizeProxyHeaders } from "./browser-proxy";
 
 describe("sanitizeProxyHeaders", () => {
   it("strips x-frame-options and removes frame-ancestors from csp", () => {
@@ -23,7 +20,8 @@ describe("sanitizeProxyHeaders", () => {
 
 describe("injectBaseTagIntoHtml", () => {
   it("injects <base href> tag inside <head>", () => {
-    const html = "<!DOCTYPE html><html><head><title>Test</title></head><body><h1>Hello</h1></body></html>";
+    const html =
+      "<!DOCTYPE html><html><head><title>Test</title></head><body><h1>Hello</h1></body></html>";
     const result = injectBaseTagIntoHtml(html, "https://google.com/search");
 
     expect(result).toContain('<base href="https://google.com/search">');
@@ -31,7 +29,8 @@ describe("injectBaseTagIntoHtml", () => {
   });
 
   it("removes X-Frame-Options meta tags", () => {
-    const html = '<html><head><meta http-equiv="X-Frame-Options" content="DENY"></head><body>Hi</body></html>';
+    const html =
+      '<html><head><meta http-equiv="X-Frame-Options" content="DENY"></head><body>Hi</body></html>';
     const result = injectBaseTagIntoHtml(html, "https://example.com");
 
     expect(result).not.toContain('http-equiv="X-Frame-Options"');

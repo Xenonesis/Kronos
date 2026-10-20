@@ -96,7 +96,6 @@ export function BranchSwitcher({
     [setIsOpen, t],
   );
 
-
   if (!currentBranchName) {
     return null;
   }

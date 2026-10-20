@@ -127,8 +127,7 @@ export function extractReactFiberInfo(element: Element): { component?: string; s
 
       if (!info.component) {
         const candidateName =
-          getComponentNameFromType(curr.type) ||
-          getComponentNameFromType(curr.elementType);
+          getComponentNameFromType(curr.type) || getComponentNameFromType(curr.elementType);
         if (candidateName && !isIgnoredComponentName(candidateName)) {
           info.component = candidateName;
         }

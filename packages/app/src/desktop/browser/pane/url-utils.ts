@@ -15,14 +15,20 @@ export function isLocalhostUrl(urlStr: string): boolean {
 }
 
 const LOOKS_LIKE_DOMAIN_PATTERN = /^[^\s/:]+\.[a-z]{2,}(?::\d+)?(?:[/?#].*)?$/i;
-const LOCAL_ADDRESS_PATTERN = /^(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0)(?::\d+)?(?:[/?#].*)?$/i;
+const LOCAL_ADDRESS_PATTERN =
+  /^(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0)(?::\d+)?(?:[/?#].*)?$/i;
 
 export function normalizeAddressBarInput(input: string, searchEngine = "google"): string {
   const trimmed = input.trim();
   if (!trimmed || trimmed === "about:blank") return "about:blank";
 
   // Already a full URL
-  if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("about:") || trimmed.startsWith("file://")) {
+  if (
+    trimmed.startsWith("http://") ||
+    trimmed.startsWith("https://") ||
+    trimmed.startsWith("about:") ||
+    trimmed.startsWith("file://")
+  ) {
     return trimmed;
   }
 

@@ -29,9 +29,7 @@ const { theme } = vi.hoisted(() => ({
 vi.mock("react-native-unistyles", () => ({
   StyleSheet: {
     create: (factory: unknown) =>
-      typeof factory === "function"
-        ? (factory as (t: typeof theme) => unknown)(theme)
-        : factory,
+      typeof factory === "function" ? (factory as (t: typeof theme) => unknown)(theme) : factory,
   },
   useUnistyles: () => ({ theme }),
 }));
@@ -112,10 +110,7 @@ describe("BrowserStreamViewport", () => {
   it("renders the latest JPEG frame in responsive image view", () => {
     act(() => {
       root?.render(
-        <BrowserStreamViewport
-          frame="test-base64-frame-payload"
-          url="https://example.com"
-        />,
+        <BrowserStreamViewport frame="test-base64-frame-payload" url="https://example.com" />,
       );
     });
 
@@ -138,12 +133,7 @@ describe("BrowserStreamViewport", () => {
 
   it("renders canvas element when renderMode is canvas", () => {
     act(() => {
-      root?.render(
-        <BrowserStreamViewport
-          renderMode="canvas"
-          frame="base64-frame-canvas"
-        />,
-      );
+      root?.render(<BrowserStreamViewport renderMode="canvas" frame="base64-frame-canvas" />);
     });
 
     const canvas = container?.querySelector('[data-testid="browser-stream-canvas"]');
@@ -172,12 +162,7 @@ describe("BrowserStreamViewport", () => {
   it("triggers onRefresh callback when Refresh button is pressed", () => {
     const handleRefresh = vi.fn();
     act(() => {
-      root?.render(
-        <BrowserStreamViewport
-          frame="some-frame"
-          onRefresh={handleRefresh}
-        />,
-      );
+      root?.render(<BrowserStreamViewport frame="some-frame" onRefresh={handleRefresh} />);
     });
 
     const refreshBtn = container?.querySelector('[data-testid="browser-stream-refresh-btn"]');
@@ -193,12 +178,7 @@ describe("BrowserStreamViewport", () => {
   it("renders and triggers onClosePiP when provided", () => {
     const handleClosePiP = vi.fn();
     act(() => {
-      root?.render(
-        <BrowserStreamViewport
-          frame="some-frame"
-          onClosePiP={handleClosePiP}
-        />,
-      );
+      root?.render(<BrowserStreamViewport frame="some-frame" onClosePiP={handleClosePiP} />);
     });
 
     const closeBtn = container?.querySelector('[data-testid="browser-stream-close-pip-btn"]');

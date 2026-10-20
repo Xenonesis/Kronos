@@ -47,17 +47,17 @@ const { theme } = vi.hoisted(() => ({
 vi.mock("react-native-unistyles", () => ({
   StyleSheet: {
     create: (factory: unknown) =>
-      typeof factory === "function"
-        ? (factory as (t: typeof theme) => unknown)(theme)
-        : factory,
+      typeof factory === "function" ? (factory as (t: typeof theme) => unknown)(theme) : factory,
   },
   useUnistyles: () => ({ theme }),
   withUnistyles: (c: unknown) => c,
 }));
 
 vi.mock("lucide-react-native", () => {
-  const createIcon = (name: string) => ({ style: _style, ...props }: Record<string, unknown>) =>
-    React.createElement("span", { ...props, "data-icon": name });
+  const createIcon =
+    (name: string) =>
+    ({ style: _style, ...props }: Record<string, unknown>) =>
+      React.createElement("span", { ...props, "data-icon": name });
   return {
     AlertCircle: createIcon("AlertCircle"),
     CornerDownLeft: createIcon("CornerDownLeft"),
@@ -87,9 +87,7 @@ vi.mock("react-native", async (importOriginal) => {
       [key: string]: unknown;
     }) => {
       const resolvedChildren =
-        typeof children === "function"
-          ? children({ hovered: false, pressed: false })
-          : children;
+        typeof children === "function" ? children({ hovered: false, pressed: false }) : children;
       return React.createElement(
         "button",
         {
@@ -150,9 +148,7 @@ describe("Diff Comment Model & Formatter", () => {
       expect(result).toContain(
         'User commented on src/server.ts at line 120: "Use 8080 as fallback instead"',
       );
-      expect(result).toContain(
-        "Original line:\n```\nconst port = process.env.PORT || 3000;\n```",
-      );
+      expect(result).toContain("Original line:\n```\nconst port = process.env.PORT || 3000;\n```");
     });
 
     it("includes diff hunk when present", () => {
@@ -223,7 +219,7 @@ describe("Diff Comment Model & Formatter", () => {
     });
 
     it("handles multiline feedback and special characters", () => {
-      const multilineFeedback = 'Please ensure:\n1. Non-null\n2. Escaped quotes: "foo" and \'bar\'';
+      const multilineFeedback = "Please ensure:\n1. Non-null\n2. Escaped quotes: \"foo\" and 'bar'";
       const annotation: DiffAnnotation = {
         filePath: "src/parser.ts",
         lineNumber: 99,
@@ -233,9 +229,7 @@ describe("Diff Comment Model & Formatter", () => {
       };
 
       const result = formatDiffAnnotationPrompt(annotation);
-      expect(result).toBe(
-        `User commented on src/parser.ts at line 99: "${multilineFeedback}"`,
-      );
+      expect(result).toBe(`User commented on src/parser.ts at line 99: "${multilineFeedback}"`);
     });
   });
 
@@ -442,9 +436,7 @@ describe("DiffCommentCard Component", () => {
     );
 
     expect(onSuccess).toHaveBeenCalledTimes(1);
-    expect(onSuccess).toHaveBeenCalledWith(
-      expect.stringContaining("Check dependency array"),
-    );
+    expect(onSuccess).toHaveBeenCalledWith(expect.stringContaining("Check dependency array"));
   });
 
   it("dispatches via sendAgentMessage if client only supports sendAgentMessage", async () => {
@@ -627,10 +619,7 @@ describe("DiffCommentCard Component", () => {
     });
 
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock).toHaveBeenCalledWith(
-      "agent-kbd",
-      expect.stringContaining("Shortcut comment"),
-    );
+    expect(sendMock).toHaveBeenCalledWith("agent-kbd", expect.stringContaining("Shortcut comment"));
   });
 
   it("handles Cmd+Enter (metaKey) keyboard shortcut to submit", async () => {

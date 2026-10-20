@@ -59,9 +59,7 @@ export function formatDiffAnnotationPrompt(
   const lineNumber = annotation.lineNumber;
   const feedback = annotation.feedbackText.trim();
 
-  const sections: string[] = [
-    `User commented on ${filePath} at line ${lineNumber}: "${feedback}"`,
-  ];
+  const sections: string[] = [`User commented on ${filePath} at line ${lineNumber}: "${feedback}"`];
 
   const includeOriginal = options?.includeOriginalLine ?? true;
   const includeHunk = options?.includeDiffHunk ?? true;
@@ -127,10 +125,7 @@ export function validateDiffAnnotation(
     errors.push({ field: "lineNumber", message: "Line number must be a positive integer" });
   }
 
-  if (
-    typeof annotation.feedbackText !== "string" ||
-    annotation.feedbackText.trim().length === 0
-  ) {
+  if (typeof annotation.feedbackText !== "string" || annotation.feedbackText.trim().length === 0) {
     errors.push({ field: "feedbackText", message: "Feedback text must be a non-empty string" });
   }
 

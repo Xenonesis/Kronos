@@ -1,11 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import {
-  FlatList,
-  Platform,
-  Pressable,
-  Text,
-  View,
-} from "react-native";
+import { FlatList, Platform, Pressable, Text, View } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import {
   Bot,
@@ -23,10 +17,7 @@ import {
 } from "lucide-react-native";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import {
-  OmpSessionInspectorModal,
-  type OmpSessionDetailData,
-} from "./omp-session-inspector-modal";
+import { OmpSessionInspectorModal, type OmpSessionDetailData } from "./omp-session-inspector-modal";
 
 export interface OmpSessionItem {
   id: string;
@@ -55,7 +46,8 @@ export function OmpSessionsView({
   const [sessions, setSessions] = useState<OmpSessionItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [filterProjectOnly, setFilterProjectOnly] = useState(Boolean(currentProjectCwd));
-  const [selectedSessionForInspect, setSelectedSessionForInspect] = useState<OmpSessionDetailData | null>(null);
+  const [selectedSessionForInspect, setSelectedSessionForInspect] =
+    useState<OmpSessionDetailData | null>(null);
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   const [inspectLoading, setInspectLoading] = useState(false);
 
@@ -224,7 +216,10 @@ export function OmpSessionsView({
               style={[styles.filterToggle, filterProjectOnly && styles.filterToggleActive]}
               onPress={() => setFilterProjectOnly(!filterProjectOnly)}
             >
-              <Folder size={13} color={filterProjectOnly ? "#ffffff" : theme.colors.foregroundMuted} />
+              <Folder
+                size={13}
+                color={filterProjectOnly ? "#ffffff" : theme.colors.foregroundMuted}
+              />
               <Text
                 style={[
                   styles.filterToggleText,

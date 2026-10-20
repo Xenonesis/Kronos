@@ -1,7 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { Square, ArrowUpRight, Edit3, Trash2, Send, X } from "lucide-react";
-import type { MarkupPoint, MarkupShape, MarkupShapeType, BrowserAnnotationPayload } from "./browser-markup-types";
+import type {
+  MarkupPoint,
+  MarkupShape,
+  MarkupShapeType,
+  BrowserAnnotationPayload,
+} from "./browser-markup-types";
 
 export interface BrowserMarkupOverlayProps {
   active: boolean;
@@ -45,7 +50,12 @@ export function BrowserMarkupOverlay({
       ctx.lineJoin = "round";
 
       if (shape.type === "rect" || shape.type === "crop") {
-        if (shape.x !== undefined && shape.y !== undefined && shape.width !== undefined && shape.height !== undefined) {
+        if (
+          shape.x !== undefined &&
+          shape.y !== undefined &&
+          shape.width !== undefined &&
+          shape.height !== undefined
+        ) {
           ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
           if (shape.type === "crop") {
             ctx.fillStyle = "rgba(16, 185, 129, 0.15)";
@@ -53,7 +63,12 @@ export function BrowserMarkupOverlay({
           }
         }
       } else if (shape.type === "arrow") {
-        if (shape.startX !== undefined && shape.startY !== undefined && shape.endX !== undefined && shape.endY !== undefined) {
+        if (
+          shape.startX !== undefined &&
+          shape.startY !== undefined &&
+          shape.endX !== undefined &&
+          shape.endY !== undefined
+        ) {
           ctx.beginPath();
           ctx.moveTo(shape.startX, shape.startY);
           ctx.lineTo(shape.endX, shape.endY);
@@ -64,9 +79,15 @@ export function BrowserMarkupOverlay({
           const headLen = 12;
           ctx.beginPath();
           ctx.moveTo(shape.endX, shape.endY);
-          ctx.lineTo(shape.endX - headLen * Math.cos(angle - Math.PI / 6), shape.endY - headLen * Math.sin(angle - Math.PI / 6));
+          ctx.lineTo(
+            shape.endX - headLen * Math.cos(angle - Math.PI / 6),
+            shape.endY - headLen * Math.sin(angle - Math.PI / 6),
+          );
           ctx.moveTo(shape.endX, shape.endY);
-          ctx.lineTo(shape.endX - headLen * Math.cos(angle + Math.PI / 6), shape.endY - headLen * Math.sin(angle + Math.PI / 6));
+          ctx.lineTo(
+            shape.endX - headLen * Math.cos(angle + Math.PI / 6),
+            shape.endY - headLen * Math.sin(angle + Math.PI / 6),
+          );
           ctx.stroke();
         }
       } else if (shape.type === "freehand") {
@@ -144,7 +165,9 @@ export function BrowserMarkupOverlay({
     } else if (currentTool === "arrow") {
       setCurrentShape({ ...currentShape, endX: currentX, endY: currentY });
     } else if (currentTool === "freehand") {
-      const points = currentShape.points ? [...currentShape.points, { x: currentX, y: currentY }] : [{ x: currentX, y: currentY }];
+      const points = currentShape.points
+        ? [...currentShape.points, { x: currentX, y: currentY }]
+        : [{ x: currentX, y: currentY }];
       setCurrentShape({ ...currentShape, points });
     }
   };
@@ -233,7 +256,9 @@ export function BrowserMarkupOverlay({
             onPress={() => setCurrentTool("crop")}
             accessibilityLabel="Crop Area"
           >
-            <Text style={[styles.cropLabel, currentTool === "crop" && styles.cropLabelActive]}>CROP</Text>
+            <Text style={[styles.cropLabel, currentTool === "crop" && styles.cropLabelActive]}>
+              CROP
+            </Text>
           </Pressable>
 
           <View style={styles.divider} />

@@ -4,7 +4,10 @@ import { useDraftStore } from "@/stores/draft-store";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { useToast } from "@/contexts/toast-context";
 
-export function useSendBrowserUrlToAgent(input?: { serverId?: string; workspaceId?: string | null }) {
+export function useSendBrowserUrlToAgent(input?: {
+  serverId?: string;
+  workspaceId?: string | null;
+}) {
   const toast = useToast();
   const serverId = input?.serverId ?? "default";
 

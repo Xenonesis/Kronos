@@ -239,9 +239,7 @@ export function BrowserStreamViewport({
             ) : (
               <>
                 <Monitor size={32} color={theme.colors.foregroundMuted} />
-                <Text style={styles.placeholderTitle}>
-                  {title || "No live stream"}
-                </Text>
+                <Text style={styles.placeholderTitle}>{title || "No live stream"}</Text>
                 <Text style={styles.placeholderText}>
                   Waiting for active browser session frames
                 </Text>

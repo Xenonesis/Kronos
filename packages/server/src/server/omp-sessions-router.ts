@@ -68,7 +68,10 @@ export function createOmpSessionsRouter(logger: Logger): Router {
   // 1. List OMP sessions (supports ?cwd=... to filter by current project or all)
   router.get("/", async (req, res) => {
     try {
-      const cwd = typeof req.query.cwd === "string" && req.query.cwd.trim() ? req.query.cwd.trim() : undefined;
+      const cwd =
+        typeof req.query.cwd === "string" && req.query.cwd.trim()
+          ? req.query.cwd.trim()
+          : undefined;
       const limit = typeof req.query.limit === "string" ? parseInt(req.query.limit, 10) : 50;
 
       const sessions = await listOmpImportableSessions({
@@ -90,13 +93,26 @@ export function createOmpSessionsRouter(logger: Logger): Router {
               if (entry.type === "model_change" && typeof entry.model === "string") {
                 model = entry.model;
               }
-              if (entry.type === "thinking_level_change" && typeof entry.thinkingLevel === "string") {
+              if (
+                entry.type === "thinking_level_change" &&
+                typeof entry.thinkingLevel === "string"
+              ) {
                 thinkingOptionId = entry.thinkingLevel;
               }
               const msg = entry.message;
-              if (msg && typeof msg === "object" && "content" in msg && Array.isArray(msg.content)) {
+              if (
+                msg &&
+                typeof msg === "object" &&
+                "content" in msg &&
+                Array.isArray(msg.content)
+              ) {
                 for (const part of msg.content) {
-                  if (part && typeof part === "object" && "type" in part && part.type === "toolCall") {
+                  if (
+                    part &&
+                    typeof part === "object" &&
+                    "type" in part &&
+                    part.type === "toolCall"
+                  ) {
                     toolCallCount += 1;
                   }
                 }
@@ -139,7 +155,9 @@ export function createOmpSessionsRouter(logger: Logger): Router {
       const cwd = typeof req.query.cwd === "string" ? req.query.cwd : undefined;
 
       // If idOrPath is full filename like 2026-09-26T..._01a0dd04-... extract suffix or UUID
-      const candidateUuid = idOrPath.includes("_") ? idOrPath.split("_").pop() ?? idOrPath : idOrPath;
+      const candidateUuid = idOrPath.includes("_")
+        ? (idOrPath.split("_").pop() ?? idOrPath)
+        : idOrPath;
       const sessionFile =
         (await resolveOmpSessionFile(candidateUuid, { cwd })) ??
         (await resolveOmpSessionFile(idOrPath, { cwd }));
@@ -187,7 +205,10 @@ export function createOmpSessionsRouter(logger: Logger): Router {
         if (msg) {
           const rawRole = typeof msg.role === "string" ? msg.role : "custom";
           const role: OmpSessionDetails["turns"][number]["role"] =
-            rawRole === "user" || rawRole === "assistant" || rawRole === "toolResult" || rawRole === "system"
+            rawRole === "user" ||
+            rawRole === "assistant" ||
+            rawRole === "toolResult" ||
+            rawRole === "system"
               ? rawRole
               : "custom";
           let text: string | undefined;
@@ -199,13 +220,19 @@ export function createOmpSessionsRouter(logger: Logger): Router {
             const textParts: string[] = [];
             for (const part of msg.content) {
               if (!part || typeof part !== "object") continue;
-              if ("type" in part && part.type === "text" && "text" in part && typeof part.text === "string") {
+              if (
+                "type" in part &&
+                part.type === "text" &&
+                "text" in part &&
+                typeof part.text === "string"
+              ) {
                 textParts.push(part.text);
               } else if ("type" in part && part.type === "toolCall") {
                 totalToolCalls += 1;
                 const toolName = "name" in part && typeof part.name === "string" ? part.name : "";
                 const args = "arguments" in part ? part.arguments : undefined;
-                const callId = "id" in part && typeof part.id === "string" ? part.id : `call-${totalToolCalls}`;
+                const callId =
+                  "id" in part && typeof part.id === "string" ? part.id : `call-${totalToolCalls}`;
                 toolCalls.push({
                   id: callId,
                   name: toolName,

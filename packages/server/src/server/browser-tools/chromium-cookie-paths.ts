@@ -13,14 +13,18 @@ export function readChromiumCookiesForHost(
 
   if (platform === "win32") {
     const localAppData = process.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
-    if (browser === "chrome") userDataDir = path.join(localAppData, "Google", "Chrome", "User Data");
-    else if (browser === "edge") userDataDir = path.join(localAppData, "Microsoft", "Edge", "User Data");
-    else if (browser === "brave") userDataDir = path.join(localAppData, "BraveSoftware", "Brave-Browser", "User Data");
+    if (browser === "chrome")
+      userDataDir = path.join(localAppData, "Google", "Chrome", "User Data");
+    else if (browser === "edge")
+      userDataDir = path.join(localAppData, "Microsoft", "Edge", "User Data");
+    else if (browser === "brave")
+      userDataDir = path.join(localAppData, "BraveSoftware", "Brave-Browser", "User Data");
   } else if (platform === "darwin") {
     const appSupport = path.join(home, "Library", "Application Support");
     if (browser === "chrome") userDataDir = path.join(appSupport, "Google", "Chrome");
     else if (browser === "edge") userDataDir = path.join(appSupport, "Microsoft Edge");
-    else if (browser === "brave") userDataDir = path.join(appSupport, "BraveSoftware", "Brave-Browser");
+    else if (browser === "brave")
+      userDataDir = path.join(appSupport, "BraveSoftware", "Brave-Browser");
   } else if (platform === "linux") {
     const config = path.join(home, ".config");
     if (browser === "chrome") userDataDir = path.join(config, "google-chrome");

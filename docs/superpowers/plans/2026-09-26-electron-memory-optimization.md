@@ -21,19 +21,25 @@
 ### Task 1: Chromium Flags & Memory Pressure Hooks
 
 **Files:**
+
 - Modify: `packages/desktop/src/main.ts`
 - Create: `packages/desktop/src/features/memory-optimizer.ts`
 - Test: `packages/desktop/src/features/memory-optimizer.test.ts`
 
 **Interfaces:**
+
 - Produces: `setupMemoryOptimization(app: Electron.App): void`
 
 - [ ] **Step 1: Write the failing unit test**
 
 Create `packages/desktop/src/features/memory-optimizer.test.ts`:
+
 ```typescript
 import { describe, it, expect, vi } from "vitest";
-import { configureChromiumMemoryFlags, registerMemoryPressureHandlers } from "./memory-optimizer.js";
+import {
+  configureChromiumMemoryFlags,
+  registerMemoryPressureHandlers,
+} from "./memory-optimizer.js";
 
 describe("memory-optimizer", () => {
   it("appends required memory and tab-discarding flags", () => {
@@ -71,6 +77,7 @@ Expected: FAIL (module not found)
 - [ ] **Step 3: Implement memory-optimizer module**
 
 Create `packages/desktop/src/features/memory-optimizer.ts`:
+
 ```typescript
 export interface CommandLineInterface {
   appendSwitch(key: string, value?: string): void;
@@ -86,7 +93,9 @@ export function configureChromiumMemoryFlags(commandLine: CommandLineInterface):
   }
 }
 
-export function registerMemoryPressureHandlers(app: { on: (event: string, cb: (...args: any[]) => void) => void }): void {
+export function registerMemoryPressureHandlers(app: {
+  on: (event: string, cb: (...args: any[]) => void) => void;
+}): void {
   app.on("render-process-gone", (_event, details) => {
     if (details.reason === "killed" || details.reason === "crashed") {
       // Reclaim / clean orphan references
@@ -118,16 +127,19 @@ git commit -m "feat(desktop): configure chromium memory flags and pressure handl
 ### Task 2: Webview Inactive Tab Hibernation State Machine
 
 **Files:**
+
 - Create: `packages/desktop/src/features/browser-webviews/hibernation.ts`
 - Test: `packages/desktop/src/features/browser-webviews/hibernation.test.ts`
 - Modify: `packages/desktop/src/features/browser-webviews/registry.ts`
 
 **Interfaces:**
+
 - Produces: `TabHibernationManager` class with `markActive(id)`, `markIdle(id)`, `shouldHibernate(id)`.
 
 - [ ] **Step 1: Write failing unit test**
 
 Create `packages/desktop/src/features/browser-webviews/hibernation.test.ts`:
+
 ```typescript
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TabHibernationManager } from "./hibernation.js";
@@ -170,17 +182,21 @@ Expected: FAIL (module not found)
 - [ ] **Step 3: Implement TabHibernationManager**
 
 Create `packages/desktop/src/features/browser-webviews/hibernation.ts`:
+
 ```typescript
 export interface HibernationOptions {
   idleTimeoutMs: number;
 }
 
 export class TabHibernationManager {
-  private tabs = new Map<string, {
-    state: "ACTIVE" | "IDLE" | "HIBERNATED";
-    hasActiveCdp: boolean;
-    idleTimer?: ReturnType<typeof setTimeout>;
-  }>();
+  private tabs = new Map<
+    string,
+    {
+      state: "ACTIVE" | "IDLE" | "HIBERNATED";
+      hasActiveCdp: boolean;
+      idleTimer?: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   constructor(private options: HibernationOptions = { idleTimeoutMs: 60000 }) {}
 
@@ -246,16 +262,19 @@ git commit -m "feat(desktop): add TabHibernationManager for browser webviews"
 ### Task 3: Server Idle Cache Pruning
 
 **Files:**
+
 - Modify: `packages/server/src/server.ts` or session management
 - Create: `packages/server/src/utils/memory-pruner.ts`
 - Test: `packages/server/src/utils/memory-pruner.test.ts`
 
 **Interfaces:**
+
 - Produces: `runServerIdlePruning(sessionCount: number): void`
 
 - [ ] **Step 1: Write failing test**
 
 Create `packages/server/src/utils/memory-pruner.test.ts`:
+
 ```typescript
 import { describe, it, expect, vi } from "vitest";
 import { runServerIdlePruning } from "./memory-pruner.js";
@@ -291,6 +310,7 @@ Expected: FAIL
 - [ ] **Step 3: Implement memory-pruner**
 
 Create `packages/server/src/utils/memory-pruner.ts`:
+
 ```typescript
 export function runServerIdlePruning(activeSessionCount: number): void {
   if (activeSessionCount === 0 && typeof (globalThis as any).gc === "function") {

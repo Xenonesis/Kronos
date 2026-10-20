@@ -247,15 +247,12 @@ export function detectAgentEnvironments(
   options?: DetectEnvironmentsOptions,
 ): AgentEnvironmentInfo[] {
   const env = options?.env ?? process.env;
-  const home =
-    options?.home ?? env.HOME ?? env.USERPROFILE ?? os.homedir();
+  const home = options?.home ?? env.HOME ?? env.USERPROFILE ?? os.homedir();
 
   const claudeBase = env.CLAUDE_CONFIG_DIR
     ? path.resolve(env.CLAUDE_CONFIG_DIR)
     : path.join(home, ".claude");
-  const codexBase = env.CODEX_HOME
-    ? path.resolve(env.CODEX_HOME)
-    : path.join(home, ".codex");
+  const codexBase = env.CODEX_HOME ? path.resolve(env.CODEX_HOME) : path.join(home, ".codex");
   const opencodeBase = env.OPENCODE_HOME
     ? path.resolve(env.OPENCODE_HOME)
     : path.join(home, ".opencode");
