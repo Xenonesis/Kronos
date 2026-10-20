@@ -88,23 +88,13 @@ jobs:
               }
           fi
 
-  publish-tauri:
+  publish-macos:
     needs: [create-release]
-    if: ${{ always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') && ((github.event_name == 'workflow_dispatch' && (github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.os)) || (github.event_name == 'push' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'desktop-v') || startsWith(github.ref_name, format('desktop-{0}-v', matrix.os))))) }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            os: macos
-          - platform: ubuntu-22.04
-            os: linux
-          - platform: windows-latest
-            os: windows
+    if: ${{ always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') && ((github.event_name == 'workflow_dispatch' && (github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos')) || (github.event_name == 'push' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'desktop-v') || startsWith(github.ref_name, 'desktop-macos-v')))) }}
     permissions:
       contents: write
       packages: read
-    runs-on: ${{ matrix.platform }}
+    runs-on: macos-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -128,12 +118,6 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Linux dependencies
-        if: matrix.os == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libasound2-dev libssl-dev
-
       - name: Install JS dependencies
         run: node scripts/npm-retry.mjs ci
         env:
@@ -152,7 +136,6 @@ jobs:
             process.exit(0);
           }
 
-          // Update packages/desktop-tauri/package.json
           const pkgPath = path.join('packages', 'desktop-tauri', 'package.json');
           if (fs.existsSync(pkgPath)) {
             const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
@@ -161,7 +144,6 @@ jobs:
             console.log(`Updated ${pkgPath} to ${version}`);
           }
 
-          // Update packages/desktop-tauri/src-tauri/tauri.conf.json
           const tauriConfPath = path.join('packages', 'desktop-tauri', 'src-tauri', 'tauri.conf.json');
           if (fs.existsSync(tauriConfPath)) {
             const conf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
@@ -196,12 +178,125 @@ jobs:
       - name: Upload artifacts to workflow run
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-${{ matrix.os }}
+          name: desktop-macos
           path: |
-            packages/desktop-tauri/src-tauri/target/release/bundle/nsis/*.exe
-            packages/desktop-tauri/src-tauri/target/release/bundle/msi/*.msi
             packages/desktop-tauri/src-tauri/target/release/bundle/dmg/*.dmg
             packages/desktop-tauri/src-tauri/target/release/bundle/macos/*.app
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Ensure release artifacts uploaded
+        if: env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          files=(
+            packages/desktop-tauri/src-tauri/target/release/bundle/dmg/*.dmg
+          )
+          if (( ${#files[@]} > 0 )); then
+            echo "Uploading artifacts to release $RELEASE_TAG: ${files[*]}"
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "${{ github.repository }}" || true
+          fi
+
+  publish-linux:
+    needs: [create-release]
+    if: ${{ always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') && ((github.event_name == 'workflow_dispatch' && (github.event.inputs.platform == 'all' || github.event.inputs.platform == 'linux')) || (github.event_name == 'push' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'desktop-v') || startsWith(github.ref_name, 'desktop-linux-v')))) }}
+    permissions:
+      contents: write
+      packages: read
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.CHECKOUT_REF }}
+
+      - name: Resolve release metadata
+        shell: bash
+        run: node scripts/emit-release-env.mjs --source-tag "$SOURCE_TAG" >> "$GITHUB_ENV"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@boudra"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libasound2-dev libssl-dev
+
+      - name: Install JS dependencies
+        run: node scripts/npm-retry.mjs ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set desktop package version from tag
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+
+          const version = process.env.DESKTOP_VERSION;
+          if (!version) {
+            console.log('DESKTOP_VERSION not set, skipping version update');
+            process.exit(0);
+          }
+
+          const pkgPath = path.join('packages', 'desktop-tauri', 'package.json');
+          if (fs.existsSync(pkgPath)) {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+            pkg.version = version;
+            fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+            console.log(`Updated ${pkgPath} to ${version}`);
+          }
+
+          const tauriConfPath = path.join('packages', 'desktop-tauri', 'src-tauri', 'tauri.conf.json');
+          if (fs.existsSync(tauriConfPath)) {
+            const conf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
+            conf.version = version;
+            fs.writeFileSync(tauriConfPath, `${JSON.stringify(conf, null, 2)}\n`);
+            console.log(`Updated ${tauriConfPath} to ${version}`);
+          }
+          NODE
+
+      - name: Build server dependencies & prepare dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build:server:clean
+          node packages/desktop-tauri/prepare-dist.mjs
+
+      - name: Build Tauri app and publish to GitHub Releases
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: "packages/desktop-tauri"
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: "Paseo ${{ env.RELEASE_TAG }}"
+          releaseBody: "See release notes for Paseo ${{ env.RELEASE_TAG }}."
+          releaseDraft: true
+          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
+          includeRelease: ${{ env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true' }}
+
+      - name: Upload artifacts to workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux
+          path: |
             packages/desktop-tauri/src-tauri/target/release/bundle/deb/*.deb
             packages/desktop-tauri/src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: ignore
@@ -215,9 +310,6 @@ jobs:
         run: |
           shopt -s nullglob
           files=(
-            packages/desktop-tauri/src-tauri/target/release/bundle/nsis/*.exe
-            packages/desktop-tauri/src-tauri/target/release/bundle/msi/*.msi
-            packages/desktop-tauri/src-tauri/target/release/bundle/dmg/*.dmg
             packages/desktop-tauri/src-tauri/target/release/bundle/deb/*.deb
             packages/desktop-tauri/src-tauri/target/release/bundle/appimage/*.AppImage
           )
@@ -226,9 +318,122 @@ jobs:
             gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "${{ github.repository }}" || true
           fi
 
+  publish-windows:
+    needs: [create-release]
+    if: ${{ always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') && ((github.event_name == 'workflow_dispatch' && (github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows')) || (github.event_name == 'push' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'desktop-v') || startsWith(github.ref_name, 'desktop-windows-v')))) }}
+    permissions:
+      contents: write
+      packages: read
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.CHECKOUT_REF }}
+
+      - name: Resolve release metadata
+        shell: bash
+        run: node scripts/emit-release-env.mjs --source-tag "$SOURCE_TAG" >> "$GITHUB_ENV"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@boudra"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install JS dependencies
+        run: node scripts/npm-retry.mjs ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set desktop package version from tag
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+
+          const version = process.env.DESKTOP_VERSION;
+          if (!version) {
+            console.log('DESKTOP_VERSION not set, skipping version update');
+            process.exit(0);
+          }
+
+          const pkgPath = path.join('packages', 'desktop-tauri', 'package.json');
+          if (fs.existsSync(pkgPath)) {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+            pkg.version = version;
+            fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+            console.log(`Updated ${pkgPath} to ${version}`);
+          }
+
+          const tauriConfPath = path.join('packages', 'desktop-tauri', 'src-tauri', 'tauri.conf.json');
+          if (fs.existsSync(tauriConfPath)) {
+            const conf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
+            conf.version = version;
+            fs.writeFileSync(tauriConfPath, `${JSON.stringify(conf, null, 2)}\n`);
+            console.log(`Updated ${tauriConfPath} to ${version}`);
+          }
+          NODE
+
+      - name: Build server dependencies & prepare dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build:server:clean
+          node packages/desktop-tauri/prepare-dist.mjs
+
+      - name: Build Tauri app and publish to GitHub Releases
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: "packages/desktop-tauri"
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: "Paseo ${{ env.RELEASE_TAG }}"
+          releaseBody: "See release notes for Paseo ${{ env.RELEASE_TAG }}."
+          releaseDraft: true
+          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
+          includeRelease: ${{ env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true' }}
+
+      - name: Upload artifacts to workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: |
+            packages/desktop-tauri/src-tauri/target/release/bundle/nsis/*.exe
+            packages/desktop-tauri/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Ensure release artifacts uploaded
+        if: env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          files=(
+            packages/desktop-tauri/src-tauri/target/release/bundle/nsis/*.exe
+            packages/desktop-tauri/src-tauri/target/release/bundle/msi/*.msi
+          )
+          if (( ${#files[@]} > 0 )); then
+            echo "Uploading artifacts to release $RELEASE_TAG: ${files[*]}"
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "${{ github.repository }}" || true
+          fi
+
   finalize-release:
-    needs: [create-release, publish-tauri]
-    if: ${{ always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.publish != 'false') && (needs.publish-tauri.result == 'success' || needs.publish-tauri.result == 'skipped') }}
+    needs: [create-release, publish-macos, publish-linux, publish-windows]
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.publish != 'false') && (needs.publish-macos.result == 'success' || needs.publish-macos.result == 'skipped') && (needs.publish-linux.result == 'success' || needs.publish-linux.result == 'skipped') && (needs.publish-windows.result == 'success' || needs.publish-windows.result == 'skipped') && (needs.publish-macos.result == 'success' || needs.publish-linux.result == 'success' || needs.publish-windows.result == 'success') }}
     permissions:
       contents: write
     runs-on: ubuntu-latest
