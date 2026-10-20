@@ -3,9 +3,13 @@ import { expect, test, type Locator, type Page } from "playwright/test";
 const desktopName =
   "Paseo desktop app with coding agents, a conversation, and a code diff open side by side";
 
+// The homepage is the Kronos landing page, which has no hero mockup. The mockup
+// lives on the per-agent pages, which still render the shared landing page.
+const MOCKUP_PAGE = "/codex";
+
 async function openHomepage(page: Page) {
   await page.setViewportSize({ width: 1512, height: 930 });
-  await page.goto("/");
+  await page.goto(MOCKUP_PAGE);
   await expect(page.getByRole("button", { name: "Build", exact: true })).toBeVisible();
 }
 

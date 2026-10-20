@@ -43,7 +43,7 @@ function DownloadThanks() {
 
   return (
     <SiteShell width="default">
-      <h1 className="text-3xl font-medium tracking-tight mb-4">Thanks for downloading Paseo</h1>
+      <h1 className="text-3xl font-medium tracking-tight mb-4">Thanks for downloading Kronos</h1>
       <p className="text-lg text-white/70 leading-relaxed max-w-2xl">
         Get help, share feedback, and follow along.
       </p>

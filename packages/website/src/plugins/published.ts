@@ -4,6 +4,7 @@ import {
   PublishedPluginDetailSchema,
 } from "@getpaseo/protocol/plugin-registry";
 import { getBlockingColdCache, type WebsiteCacheContext } from "../github-cache";
+import { SITE_ORIGIN } from "../meta";
 import { handlePluginThumbnailRequest } from "./thumbnails";
 import { CATEGORIES } from "./categories";
 import { type InstallCounts, readInstallCounts, recordClientInstall } from "./installs";
@@ -82,7 +83,7 @@ export async function handlePluginRegistryRequest(
       paths.add(`/plugins/${plugin.id.split("/")[0]}`);
       paths.add(`/plugins/${plugin.id}`);
     }
-    const urls = [...paths].sort().map((path) => `<url><loc>https://paseo.sh${path}</loc></url>`);
+    const urls = [...paths].sort().map((path) => `<url><loc>${SITE_ORIGIN}${path}</loc></url>`);
     return new Response(
       `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.join("")}</urlset>`,
       {

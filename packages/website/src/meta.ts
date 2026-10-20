@@ -1,4 +1,4 @@
-const SITE_ORIGIN = "https://xenonesis.github.io/Kronos";
+export const SITE_ORIGIN = "https://xenonesis.github.io/Kronos";
 
 export function pageMeta(title: string, description: string, path: string, image?: string) {
   let cleanPath = "";

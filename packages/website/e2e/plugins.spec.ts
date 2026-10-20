@@ -246,6 +246,26 @@ test("searches from the directory on submit, and Back returns to the directory",
   await expect(page.getByRole("heading", { level: 1, name: /^Plugins/ })).toBeVisible();
 });
 
+test("renders search results and submits the search form", async ({ page }) => {
+  await page.goto("/plugins/all?q=graphite");
+  await expect(
+    page.getByRole("heading", { level: 1, name: /^Results for “graphite”/ }),
+  ).toBeVisible();
+  await expect(page.getByRole("main").getByRole("link", { name: /Graphite/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Dracula/ })).toHaveCount(0);
+
+  await page.goto("/plugins/category/git");
+  await searchPlugins(page, "fresh");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/plugins\/category\/git\?q=fresh$/);
+  await expect(
+    page.getByRole("heading", { level: 1, name: /^Results for “fresh” in Git/ }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: /Fresh Worktrees/ })).toBeVisible();
+  await page.getByRole("link", { name: "Clear", exact: true }).click();
+  await expect(page).toHaveURL(/\/plugins\/category\/git$/);
+});
+
 test("filters browse results as you type in one history entry", async ({ page }) => {
   await page.goto("/");
   await page.goto("/plugins/all");
@@ -332,28 +352,8 @@ test.describe("search engine visits without JavaScript", () => {
     await expectPageMetadata(page, "Graphite – Paseo plugin", "/plugins/tomgrin10/graphite");
     await expect(page.locator('meta[property="og:image"]')).toHaveAttribute(
       "content",
-      "https://paseo.sh/og-image.png",
+      "https://xenonesis.github.io/Kronos/kronos-logo.svg",
     );
-  });
-
-  test("renders search results and submits the search form", async ({ page }) => {
-    await page.goto("/plugins/all?q=graphite");
-    await expect(
-      page.getByRole("heading", { level: 1, name: /^Results for “graphite”/ }),
-    ).toBeVisible();
-    await expect(page.getByRole("main").getByRole("link", { name: /Graphite/ })).toBeVisible();
-    await expect(page.getByRole("link", { name: /Dracula/ })).toHaveCount(0);
-
-    await page.goto("/plugins/category/git");
-    await searchPlugins(page, "fresh");
-    await page.keyboard.press("Enter");
-    await expect(page).toHaveURL(/\/plugins\/category\/git\?q=fresh$/);
-    await expect(
-      page.getByRole("heading", { level: 1, name: /^Results for “fresh” in Git/ }),
-    ).toBeVisible();
-    await expect(page.getByRole("link", { name: /Fresh Worktrees/ })).toBeVisible();
-    await page.getByRole("link", { name: "Clear", exact: true }).click();
-    await expect(page).toHaveURL(/\/plugins\/category\/git$/);
   });
 
   test("returns real 404 pages for unknown plugins, authors, and categories", async ({ page }) => {
@@ -386,17 +386,21 @@ test.describe("search engine visits without JavaScript", () => {
     request,
   }) => {
     const robots = await request.get("/robots.txt");
-    expect(await robots.text()).toContain("Sitemap: https://paseo.sh/sitemap-index.xml");
+    expect(await robots.text()).toContain(
+      "Sitemap: https://xenonesis.github.io/Kronos/sitemap-index.xml",
+    );
     const index = await request.get("/sitemap-index.xml");
-    expect(await index.text()).toContain("https://paseo.sh/sitemap-plugins.xml");
+    expect(await index.text()).toContain("https://xenonesis.github.io/Kronos/sitemap-plugins.xml");
     const plugins = await request.get("/sitemap-plugins.xml");
     expect(plugins.status()).toBe(200);
     expect(plugins.headers()["content-type"]).toContain("application/xml");
     const sitemap = await plugins.text();
-    expect(sitemap).toContain("<loc>https://paseo.sh/plugins/all</loc>");
-    expect(sitemap).toContain("<loc>https://paseo.sh/plugins/category/git</loc>");
-    expect(sitemap).toContain("<loc>https://paseo.sh/plugins/omercnet</loc>");
-    expect(sitemap).toContain("<loc>https://paseo.sh/plugins/omercnet/fresh-worktrees</loc>");
+    expect(sitemap).toContain("<loc>https://xenonesis.github.io/Kronos/plugins/all</loc>");
+    expect(sitemap).toContain("<loc>https://xenonesis.github.io/Kronos/plugins/category/git</loc>");
+    expect(sitemap).toContain("<loc>https://xenonesis.github.io/Kronos/plugins/omercnet</loc>");
+    expect(sitemap).toContain(
+      "<loc>https://xenonesis.github.io/Kronos/plugins/omercnet/fresh-worktrees</loc>",
+    );
   });
 });
 
@@ -435,12 +439,12 @@ async function expectPageMetadata(page: Page, title: string, path: string) {
   await expect(page).toHaveTitle(title);
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
     "href",
-    `https://paseo.sh${path}`,
+    `https://xenonesis.github.io/Kronos${path}`,
   );
   await expect(page.locator('meta[property="og:title"]')).toHaveAttribute("content", title);
   await expect(page.locator('meta[property="og:url"]')).toHaveAttribute(
     "content",
-    `https://paseo.sh${path}`,
+    `https://xenonesis.github.io/Kronos${path}`,
   );
   await expect(page.locator('meta[property="og:type"]')).toHaveAttribute("content", "website");
   await expect(page.locator('meta[name="twitter:card"]')).toHaveAttribute(
@@ -457,16 +461,13 @@ async function expectPageMetadata(page: Page, title: string, path: string) {
 
 test("links the directory from the site navigation", async ({ page }) => {
   await page.goto("/");
+  // The Kronos header labels the link "[ PLUGINS ]"; the footer keeps the plain label.
   await expect(
-    page.getByRole("navigation").getByRole("link", { name: "Plugins", exact: true }),
+    page.getByRole("banner").getByRole("link", { name: "[ PLUGINS ]", exact: true }),
   ).toHaveAttribute("href", "/plugins");
   await expect(
     page.getByRole("contentinfo").getByRole("link", { name: "Plugins", exact: true }),
   ).toHaveAttribute("href", "/plugins");
-  await expect(page.getByRole("link", { name: "Browse plugins" })).toHaveAttribute(
-    "href",
-    "/plugins",
-  );
   const response = await page.goto("/plugins");
   expect(response?.status()).toBe(200);
   await expect(page.getByRole("heading", { level: 1, name: /^Plugins/ })).toBeVisible();

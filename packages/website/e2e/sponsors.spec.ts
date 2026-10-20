@@ -1,6 +1,8 @@
 import { expect, test } from "playwright/test";
 
-const PAGES = ["/", "/docs/connectivity", "/changelog"];
+// The homepage is the Kronos landing page, which has no sponsors section. The
+// sponsors band lives in the site footer, which every other page renders.
+const PAGES = ["/docs", "/changelog", "/download/thanks"];
 
 for (const path of PAGES) {
   test(`${path} shows the sponsors and invites the next one`, async ({ page }) => {

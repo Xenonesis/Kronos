@@ -139,8 +139,16 @@ export default defineConfig(({ mode }): UserConfig => {
           semicolons: true,
         },
         prerender: {
-          enabled: true,
+          // Only the static Pages build prerenders. The worker build renders
+          // per request, and prerendering there would cost a full crawl for
+          // output nothing reads.
+          enabled: mode === "pages",
           failOnError: false,
+          // The thanks page renders the file the query string names, so a
+          // prerendered copy would carry whichever file the crawler happened to
+          // land on. It is a one-shot download hand-off, not a page worth
+          // prerendering.
+          filter: (page: { path: string }) => !page.path.startsWith("/download/thanks"),
         },
         pages: sitemapPages,
         sitemap: {
