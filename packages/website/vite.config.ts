@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { defineConfig, type UserConfig } from "vite";
+import { defineConfig, loadEnv, type UserConfig } from "vite";
 import tsConfigPaths from "vite-tsconfig-paths";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import { cloudflare } from "@cloudflare/vite-plugin";
@@ -8,7 +8,19 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 const repoRoot = path.resolve(__dirname, "../..");
-const siteHost = process.env.VITE_SITE_HOST || "https://xenonesis.github.io/Kronos";
+const DEFAULT_SITE_HOST = "https://xenonesis.github.io/Kronos";
+
+/**
+ * The site is served from a GitHub Pages subpath, so the production build has to
+ * emit `/Kronos/`-prefixed asset and route URLs. The e2e suite, however, builds
+ * and previews the same app at the server root, where a `/Kronos/` base makes
+ * every route 404 and every link point at a path the test server does not
+ * serve. The Pages build runs in `pages` mode, which loads `.env.pages` and
+ * sets `VITE_BASE_PATH`; every other build gets the root.
+ */
+function resolveBasePath(env: Record<string, string>): string {
+  return env.VITE_BASE_PATH ?? "/";
+}
 
 function discoverDocsRoutes(): string[] {
   const docsDir = path.join(repoRoot, "public-docs");
@@ -102,9 +114,11 @@ const sitemapPages = [
   path: routePath,
 }));
 
-export default defineConfig((): UserConfig => {
+export default defineConfig(({ mode }): UserConfig => {
+  const env = loadEnv(mode, __dirname, "");
+  const siteHost = env.VITE_SITE_HOST || DEFAULT_SITE_HOST;
   return {
-    base: process.env.VITE_BASE_PATH || "/Kronos/",
+    base: resolveBasePath(env),
     server: {
       host: "0.0.0.0",
       port: 8082,

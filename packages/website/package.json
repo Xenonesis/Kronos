@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:pages": "vite build && node scripts/prepare-github-pages.mjs",
+    "build:pages": "vite build --mode pages && node scripts/prepare-github-pages.mjs",
     "preview": "vite preview",
     "typecheck": "tsgo --noEmit",
     "deploy": "npm run build && wrangler deploy",
