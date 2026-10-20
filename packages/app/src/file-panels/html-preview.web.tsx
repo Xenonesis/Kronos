@@ -281,7 +281,7 @@ export function FileHtmlPreview({
   );
 
   return (
-    <View style={styles.container} testID={testID}>
+    <View style={styles.container} testID={testID ? `${testID}-shell` : undefined}>
       {/* 1. Top Browser Tabs Bar matching Orca */}
       <BrowserTabBar
         tabs={tabItems}
@@ -318,6 +318,8 @@ export function FileHtmlPreview({
             <iframe
               key={activeTab.id}
               ref={iframeRef}
+              data-testid={testID}
+              title={activeTab.title || "HTML Preview"}
               srcDoc={inlinedDocument}
               style={iframeInnerStyle}
               sandbox={SANDBOX}
@@ -328,6 +330,8 @@ export function FileHtmlPreview({
             <iframe
               key={activeTab.id}
               ref={iframeRef}
+              data-testid={testID}
+              title={activeTab.title || "HTML Preview"}
               src={resolveIframeTargetUrl(activeTab.url)}
               style={iframeInnerStyle}
               sandbox={SANDBOX}
