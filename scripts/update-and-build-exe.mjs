@@ -24,13 +24,57 @@ function getLatestExe(nsisDir) {
   return path.join(nsisDir, files[0]);
 }
 
+function getChangedFiles(oldHead, newHead) {
+  if (!oldHead || !newHead || oldHead === newHead) return [];
+  try {
+    const files = execSync(`git diff --name-only ${oldHead} ${newHead}`, { cwd: rootDir })
+      .toString()
+      .trim()
+      .split(/\r?\n/)
+      .filter(Boolean);
+    console.log(`\x1b[36mℹ ${files.length} file(s) changed in this update.\x1b[0m`);
+    return files;
+  } catch {
+    return [];
+  }
+}
+
+const SERVER_SOURCE_PREFIXES = [
+  "packages/protocol/",
+  "packages/client/",
+  "packages/relay/",
+  "packages/highlight/",
+  "packages/plugin/",
+  "packages/server/",
+];
+
+const SHARED_BUILD_FILES = new Set(["package.json", "package-lock.json"]);
+
+function touchesSources(changedFiles, prefixes) {
+  return changedFiles.some(
+    (file) => prefixes.some((prefix) => file.startsWith(prefix)) || SHARED_BUILD_FILES.has(file),
+  );
+}
+
+function needsServerBuild({ force, serverDistExists, changedFiles }) {
+  if (force || !serverDistExists) return true;
+  if (changedFiles.length === 0) return true;
+  return touchesSources(changedFiles, SERVER_SOURCE_PREFIXES);
+}
+
+function needsAppBuild({ force, appDistExists, changedFiles }) {
+  if (force || !appDistExists) return true;
+  if (changedFiles.length === 0) return true;
+  return touchesSources(changedFiles, ["packages/app/"]);
+}
+
 async function main() {
   console.log("\x1b[1m\x1b[32m=== Kronos Desktop Auto-Pull & .EXE Builder ===\x1b[0m");
 
-  const args = process.argv.slice(2);
-  const force = args.includes("--force");
-  const quick = args.includes("--quick") || args.includes("--portable");
-  const publish = args.includes("--publish");
+  const args = new Set(process.argv.slice(2));
+  const force = args.has("--force");
+  const quick = args.has("--quick") || args.has("--portable");
+  const publish = args.has("--publish");
 
   const nsisDir = path.join(
     rootDir,
@@ -65,55 +109,25 @@ async function main() {
     newHead = execSync("git rev-parse HEAD", { cwd: rootDir }).toString().trim();
   } catch {}
 
-  let changedFiles = [];
-  if (oldHead && newHead && oldHead !== newHead) {
-    try {
-      changedFiles = execSync(`git diff --name-only ${oldHead} ${newHead}`, { cwd: rootDir })
-        .toString()
-        .trim()
-        .split(/\r?\n/)
-        .filter(Boolean);
-      console.log(`\x1b[36mℹ ${changedFiles.length} file(s) changed in this update.\x1b[0m`);
-    } catch {}
-  }
+  const changedFiles = getChangedFiles(oldHead, newHead);
 
-  const serverDistExists = existsSync(path.join(rootDir, "packages/desktop-tauri/server-dist/dist"));
+  const serverDistExists = existsSync(
+    path.join(rootDir, "packages/desktop-tauri/server-dist/dist"),
+  );
   const appDistExists = existsSync(path.join(rootDir, "packages/app/dist"));
   const isUpToDate = oldHead && newHead && oldHead === newHead;
 
   if (isUpToDate && !force && existingExe && existsSync(existingExe)) {
     console.log("\n\x1b[32m✔ Repository already up to date! Existing installer found:\x1b[0m");
     console.log(`  \x1b[37mPath:\x1b[0m ${existingExe}`);
-    console.log("\x1b[90m(Run with '--force' to rebuild anyway: update-desktop-exe.bat --force)\x1b[0m");
+    console.log(
+      "\x1b[90m(Run with '--force' to rebuild anyway: update-desktop-exe.bat --force)\x1b[0m",
+    );
     return;
   }
 
-  const serverNeedsBuild =
-    force ||
-    !serverDistExists ||
-    changedFiles.length === 0 ||
-    changedFiles.some(
-      (f) =>
-        f.startsWith("packages/protocol/") ||
-        f.startsWith("packages/client/") ||
-        f.startsWith("packages/relay/") ||
-        f.startsWith("packages/highlight/") ||
-        f.startsWith("packages/plugin/") ||
-        f.startsWith("packages/server/") ||
-        f === "package.json" ||
-        f === "package-lock.json",
-    );
-
-  const appNeedsBuild =
-    force ||
-    !appDistExists ||
-    changedFiles.length === 0 ||
-    changedFiles.some(
-      (f) =>
-        f.startsWith("packages/app/") ||
-        f === "package.json" ||
-        f === "package-lock.json",
-    );
+  const serverNeedsBuild = needsServerBuild({ force, serverDistExists, changedFiles });
+  const appNeedsBuild = needsAppBuild({ force, appDistExists, changedFiles });
 
   // Step 2: Build internal packages
   console.log("\n\x1b[33m[2/5] Core packages & server build...\x1b[0m");
@@ -142,7 +156,9 @@ async function main() {
 
   // Step 5: Compile Tauri Executable / Installer
   if (quick) {
-    console.log("\n\x1b[33m[5/5] Compiling Fast Release Binary (skipping NSIS compression)...\x1b[0m");
+    console.log(
+      "\n\x1b[33m[5/5] Compiling Fast Release Binary (skipping NSIS compression)...\x1b[0m",
+    );
     run(
       "cargo build --release --manifest-path src-tauri/Cargo.toml",
       path.join(rootDir, "packages", "desktop-tauri"),
