@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDiffAnnotation,
   type DiffAnnotation,
@@ -102,6 +102,11 @@ vi.mock("react-native", async (importOriginal) => {
     },
   };
 });
+
+/** Whether the validation reported an error for the given field. */
+function hasErrorForField(result: { errors: Array<{ field: string }> }, field: string): boolean {
+  return result.errors.some((error) => error.field === field);
+}
 
 describe("Diff Comment Model & Formatter", () => {
   describe("formatDiffAnnotationPrompt", () => {
@@ -263,7 +268,7 @@ describe("Diff Comment Model & Formatter", () => {
         feedbackText: "note",
       });
       expect(result1.isValid).toBe(false);
-      expect(result1.errors.some((e) => e.field === "filePath")).toBe(true);
+      expect(hasErrorForField(result1, "filePath")).toBe(true);
 
       const result2 = validateDiffAnnotation({
         filePath: "   ",
@@ -271,7 +276,7 @@ describe("Diff Comment Model & Formatter", () => {
         feedbackText: "note",
       });
       expect(result2.isValid).toBe(false);
-      expect(result2.errors.some((e) => e.field === "filePath")).toBe(true);
+      expect(hasErrorForField(result2, "filePath")).toBe(true);
     });
 
     it("rejects non-positive, non-integer, or non-finite lineNumber", () => {
@@ -283,7 +288,7 @@ describe("Diff Comment Model & Formatter", () => {
           feedbackText: "note",
         });
         expect(result.isValid).toBe(false);
-        expect(result.errors.some((e) => e.field === "lineNumber")).toBe(true);
+        expect(hasErrorForField(result, "lineNumber")).toBe(true);
       }
     });
 
@@ -294,7 +299,7 @@ describe("Diff Comment Model & Formatter", () => {
         feedbackText: "",
       });
       expect(result1.isValid).toBe(false);
-      expect(result1.errors.some((e) => e.field === "feedbackText")).toBe(true);
+      expect(hasErrorForField(result1, "feedbackText")).toBe(true);
 
       const result2 = validateDiffAnnotation({
         filePath: "src/file.ts",
@@ -302,7 +307,7 @@ describe("Diff Comment Model & Formatter", () => {
         feedbackText: "    \t\n   ",
       });
       expect(result2.isValid).toBe(false);
-      expect(result2.errors.some((e) => e.field === "feedbackText")).toBe(true);
+      expect(hasErrorForField(result2, "feedbackText")).toBe(true);
     });
 
     it("rejects invalid side value", () => {
@@ -313,7 +318,7 @@ describe("Diff Comment Model & Formatter", () => {
         side: "middle" as unknown as "old",
       });
       expect(result.isValid).toBe(false);
-      expect(result.errors.some((e) => e.field === "side")).toBe(true);
+      expect(hasErrorForField(result, "side")).toBe(true);
     });
   });
 

@@ -12,37 +12,65 @@ vi.mock("expo-clipboard", () => ({
   getStringAsync: vi.fn(),
 }));
 
+vi.mock("react-native-reanimated", () => ({
+  default: { View: "div" },
+  FadeIn: { duration: () => undefined },
+  FadeOut: { duration: () => undefined },
+  Keyframe: class {
+    duration() {
+      return this;
+    }
+  },
+  runOnJS: (fn: unknown) => fn,
+  useAnimatedStyle: (factory: () => unknown) => factory(),
+  useSharedValue: (value: unknown) => ({ value }),
+}));
+
 const { theme } = vi.hoisted(() => ({
   theme: {
     colors: {
       background: "#000",
       foreground: "#fff",
       foregroundMuted: "#888",
+      foregroundExtraMuted: "#777",
       border: "#222",
+      borderAccent: "#444",
+      accent: "#0a84ff",
+      accentForeground: "#fff",
+      destructive: "#ff453a",
+      destructiveForeground: "#fff",
+      interactionHighlight: "rgba(255,255,255,0.08)",
+      popover: "#181818",
+      popoverForeground: "#fff",
       surface0: "#111",
       surface1: "#181818",
       surface2: "#222",
       surface3: "#333",
+      surfaceSidebarHover: "#222",
+      palette: {
+        green: { 500: "#22c55e" },
+        red: { 500: "#ef4444" },
+        zinc: { 600: "#52525b" },
+      },
     },
-    spacing: { 1: 4, 1.5: 6, 2: 8, 3: 12, 4: 16, 6: 24 },
+    spacing: { 0.5: 2, 1: 4, 1.5: 6, 2: 8, 3: 12, 4: 16, 6: 24, 8: 32 },
     iconSize: { xs: 12, sm: 14, md: 16, lg: 20 },
     borderWidth: { 1: 1, 2: 2 },
     fontSize: { sm: 12, base: 14, lg: 16 },
     fontWeight: { normal: "400", medium: "500", semibold: "600" },
-    borderRadius: { sm: 4, md: 6, lg: 8, full: 999 },
+    borderRadius: { sm: 4, md: 6, lg: 8, xl: 12, full: 999 },
     opacity: { 50: 0.5 },
     shadow: { md: {} },
   },
 }));
 
-vi.mock("react-native-reanimated", () => ({
-  default: { View: "div" },
-}));
-
+// The shared `react-native-unistyles` stub in `packages/app/test-stubs` carries a
+// narrower theme than the browser pane reads, so this file mocks the module
+// itself with the tokens the pane's components use.
 vi.mock("react-native-unistyles", () => ({
   StyleSheet: {
     create: (factory: unknown) =>
-      factory instanceof Function ? (factory as (t: unknown) => unknown)(theme) : factory,
+      typeof factory === "function" ? (factory as (t: unknown) => unknown)(theme) : factory,
     absoluteFillObject: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
   },
   useUnistyles: () => ({
@@ -53,38 +81,24 @@ vi.mock("react-native-unistyles", () => ({
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
-  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({ children }: { children: React.ReactNode }) => children,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => children,
+  TooltipContent: ({ children }: { children: React.ReactNode }) => children,
 }));
 
-vi.mock("lucide-react-native", () => {
+vi.mock("lucide-react-native", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
   const createIcon =
     (name: string) =>
     ({ style: _style, ...props }: Record<string, unknown>) =>
       React.createElement("span", { ...props, "data-icon": name });
-  return {
-    ArrowLeft: createIcon("ArrowLeft"),
-    ArrowRight: createIcon("ArrowRight"),
-    Bot: createIcon("Bot"),
-    Check: createIcon("Check"),
-    Chrome: createIcon("Chrome"),
-    Compass: createIcon("Compass"),
-    Copy: createIcon("Copy"),
-    Download: createIcon("Download"),
-    ExternalLink: createIcon("ExternalLink"),
-    FileText: createIcon("FileText"),
-    Globe: createIcon("Globe"),
-    KeyRound: createIcon("KeyRound"),
-    Maximize: createIcon("Maximize"),
-    Monitor: createIcon("Monitor"),
-    MousePointer2: createIcon("MousePointer2"),
-    Plus: createIcon("Plus"),
-    RotateCw: createIcon("RotateCw"),
-    Smartphone: createIcon("Smartphone"),
-    Tablet: createIcon("Tablet"),
-    X: createIcon("X"),
-  };
+  // The icon set is large and the modules under test import different slices of
+  // it, so every icon resolves to the same stub rather than a fixed list that a
+  // new import would break.
+  return new Proxy(actual, {
+    get: (target, property: string) =>
+      typeof target[property] === "undefined" ? createIcon(property) : target[property],
+  });
 });
 
 import {

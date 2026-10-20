@@ -1,14 +1,99 @@
-import React, { useState } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import React, { useCallback, useMemo, useState } from "react";
+import { Text, View } from "react-native";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Check, Globe, Compass, FileText, KeyRound, X } from "lucide-react-native";
 import { Button } from "@/components/ui/button";
+import { PressHighlight } from "@/components/ui/press-highlight";
+import { EditingTextInput as TextInput } from "@/components/ui/text-input";
+import type { Theme } from "@/styles/theme";
+
+type ImportSource = "chrome" | "edge" | "manual";
+
+const ThemedCheck = withUnistyles(Check);
+const ThemedGlobe = withUnistyles(Globe);
+const ThemedCompass = withUnistyles(Compass);
+const ThemedFileText = withUnistyles(FileText);
+const ThemedKeyRound = withUnistyles(KeyRound);
+const ThemedX = withUnistyles(X);
+
+const foregroundIconMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 
 export interface BrowserImportDialogProps {
   visible: boolean;
   onClose: () => void;
-  onImport: (cookiesText: string, source: "chrome" | "edge" | "manual") => void;
+  onImport: (cookiesText: string, source: ImportSource) => void;
   testID?: string;
+}
+
+const SOURCE_ROWS: {
+  source: ImportSource;
+  testID: string;
+  title: string;
+  description: string;
+  Icon: typeof ThemedGlobe;
+}[] = [
+  {
+    source: "chrome",
+    testID: "import-source-chrome",
+    title: "Google Chrome",
+    description: "Auto-detect session cookies from default Chrome profile",
+    Icon: ThemedGlobe,
+  },
+  {
+    source: "edge",
+    testID: "import-source-edge",
+    title: "Microsoft Edge",
+    description: "Auto-detect cookies from Edge profile",
+    Icon: ThemedCompass,
+  },
+  {
+    source: "manual",
+    testID: "import-source-manual",
+    title: "Paste Cookies / Storage JSON",
+    description: "Enter custom Cookie header or token JSON",
+    Icon: ThemedFileText,
+  },
+];
+
+function ImportSourceRow({
+  source,
+  testID,
+  title,
+  description,
+  Icon,
+  selected,
+  onSelect,
+}: {
+  source: ImportSource;
+  testID: string;
+  title: string;
+  description: string;
+  Icon: typeof ThemedGlobe;
+  selected: boolean;
+  onSelect: (source: ImportSource) => void;
+}) {
+  const handlePress = useCallback(() => {
+    onSelect(source);
+  }, [onSelect, source]);
+
+  const accessibilityState = useMemo(() => ({ selected }), [selected]);
+
+  return (
+    <PressHighlight
+      accessibilityRole="button"
+      accessibilityState={accessibilityState}
+      style={[styles.sourceItem, selected && styles.sourceItemActive]}
+      onPress={handlePress}
+      testID={testID}
+    >
+      <Icon size={18} uniProps={foregroundIconMapping} />
+      <View style={styles.sourceTextCol}>
+        <Text style={styles.sourceTitle}>{title}</Text>
+        <Text style={styles.sourceDesc}>{description}</Text>
+      </View>
+      {selected ? <ThemedCheck size={16} uniProps={foregroundIconMapping} /> : null}
+    </PressHighlight>
+  );
 }
 
 export function BrowserImportDialog({
@@ -17,33 +102,38 @@ export function BrowserImportDialog({
   onImport,
   testID = "browser-import-dialog",
 }: BrowserImportDialogProps) {
-  const { theme } = useUnistyles();
   const [manualCookies, setManualCookies] = useState("");
-  const [selectedSource, setSelectedSource] = useState<"chrome" | "edge" | "manual">("chrome");
+  const [selectedSource, setSelectedSource] = useState<ImportSource>("chrome");
   const [importedStatus, setImportedStatus] = useState<string | null>(null);
 
-  if (!visible) return null;
-
-  const handleExecuteImport = () => {
+  const handleExecuteImport = useCallback(() => {
     onImport(manualCookies, selectedSource);
     setImportedStatus(`Imported session data from ${selectedSource}`);
     setTimeout(() => {
       onClose();
       setImportedStatus(null);
     }, 800);
-  };
+  }, [manualCookies, onClose, onImport, selectedSource]);
+
+  if (!visible) return null;
 
   return (
     <View style={styles.overlay} testID={testID}>
       <View style={styles.dialog}>
         <View style={styles.header}>
           <View style={styles.headerTitleRow}>
-            <KeyRound size={16} color={theme.colors.foreground} />
+            <ThemedKeyRound size={16} uniProps={foregroundIconMapping} />
             <Text style={styles.title}>Import Browser Session & Cookies</Text>
           </View>
-          <Pressable onPress={onClose} style={styles.closeBtn} testID="browser-import-close-btn">
-            <X size={16} color={theme.colors.foregroundMuted} />
-          </Pressable>
+          <Button
+            size="xs"
+            variant="ghost"
+            onPress={onClose}
+            style={styles.closeBtn}
+            testID="browser-import-close-btn"
+          >
+            <ThemedX size={16} uniProps={foregroundIconMapping} />
+          </Button>
         </View>
 
         <Text style={styles.subtitle}>
@@ -53,50 +143,18 @@ export function BrowserImportDialog({
 
         {/* Source Selector */}
         <View style={styles.sourceList}>
-          <Pressable
-            style={[styles.sourceItem, selectedSource === "chrome" && styles.sourceItemActive]}
-            onPress={() => setSelectedSource("chrome")}
-            testID="import-source-chrome"
-          >
-            <Globe size={18} color={theme.colors.foreground} />
-            <View style={styles.sourceTextCol}>
-              <Text style={styles.sourceTitle}>Google Chrome</Text>
-              <Text style={styles.sourceDesc}>
-                Auto-detect session cookies from default Chrome profile
-              </Text>
-            </View>
-            {selectedSource === "chrome" ? (
-              <Check size={16} color={theme.colors.foreground} />
-            ) : null}
-          </Pressable>
-
-          <Pressable
-            style={[styles.sourceItem, selectedSource === "edge" && styles.sourceItemActive]}
-            onPress={() => setSelectedSource("edge")}
-            testID="import-source-edge"
-          >
-            <Compass size={18} color={theme.colors.foreground} />
-            <View style={styles.sourceTextCol}>
-              <Text style={styles.sourceTitle}>Microsoft Edge</Text>
-              <Text style={styles.sourceDesc}>Auto-detect cookies from Edge profile</Text>
-            </View>
-            {selectedSource === "edge" ? <Check size={16} color={theme.colors.foreground} /> : null}
-          </Pressable>
-
-          <Pressable
-            style={[styles.sourceItem, selectedSource === "manual" && styles.sourceItemActive]}
-            onPress={() => setSelectedSource("manual")}
-            testID="import-source-manual"
-          >
-            <FileText size={18} color={theme.colors.foreground} />
-            <View style={styles.sourceTextCol}>
-              <Text style={styles.sourceTitle}>Paste Cookies / Storage JSON</Text>
-              <Text style={styles.sourceDesc}>Enter custom Cookie header or token JSON</Text>
-            </View>
-            {selectedSource === "manual" ? (
-              <Check size={16} color={theme.colors.foreground} />
-            ) : null}
-          </Pressable>
+          {SOURCE_ROWS.map((row) => (
+            <ImportSourceRow
+              key={row.source}
+              source={row.source}
+              testID={row.testID}
+              title={row.title}
+              description={row.description}
+              Icon={row.Icon}
+              selected={selectedSource === row.source}
+              onSelect={setSelectedSource}
+            />
+          ))}
         </View>
 
         {/* Manual Input if selected */}
@@ -105,8 +163,8 @@ export function BrowserImportDialog({
             style={styles.textInput}
             multiline
             placeholder="session_id=xyz; auth_token=abc..."
-            placeholderTextColor={theme.colors.foregroundMuted}
-            value={manualCookies}
+            placeholderTextColor={styles.placeholder.color}
+            initialValue={manualCookies}
             onChangeText={setManualCookies}
             testID="browser-import-manual-input"
           />
@@ -218,6 +276,9 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
     fontSize: theme.fontSize.sm,
     textAlignVertical: "top",
+  },
+  placeholder: {
+    color: theme.colors.foregroundMuted,
   },
   statusSuccess: {
     fontSize: theme.fontSize.sm,

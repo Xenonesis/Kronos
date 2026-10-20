@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   BrowserGrabAccessibility,
   BrowserGrabComputedStyles,
@@ -74,23 +74,28 @@ function getReactFiberFromElement(element: Element): FiberLike | null {
   return null;
 }
 
+function readNameProperty(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== "object" && typeof value !== "function") return null;
+  const record = value as { displayName?: unknown; name?: unknown };
+  if (typeof record.displayName === "string" && record.displayName) return record.displayName;
+  if (typeof record.name === "string" && record.name) return record.name;
+  return null;
+}
+
 function getComponentNameFromType(type: unknown): string | null {
   if (!type) return null;
   if (typeof type === "string") return type;
   if (typeof type === "function") {
-    const fn = type as { displayName?: unknown; name?: unknown };
-    if (typeof fn.displayName === "string" && fn.displayName) return fn.displayName;
-    if (typeof fn.name === "string" && fn.name) return fn.name;
-    return null;
+    return readNameProperty(type);
   }
   if (typeof type === "object") {
     const obj = type as Record<string, unknown>;
-    if (typeof obj.displayName === "string" && obj.displayName) return obj.displayName;
-    if (typeof obj.name === "string" && obj.name) return obj.name;
+    const ownName = readNameProperty(obj);
+    if (ownName) return ownName;
     if (typeof obj.render === "object" && obj.render !== null) {
-      const render = obj.render as { displayName?: unknown; name?: unknown };
-      if (typeof render.displayName === "string" && render.displayName) return render.displayName;
-      if (typeof render.name === "string" && render.name) return render.name;
+      const renderName = readNameProperty(obj.render);
+      if (renderName) return renderName;
     }
     if (typeof obj.type === "object" && obj.type !== null) {
       return getComponentNameFromType(obj.type);
@@ -195,35 +200,50 @@ export function extractComputedStyles(element: Element): BrowserGrabComputedStyl
   }
 }
 
+const INPUT_ROLES: Record<string, string> = {
+  checkbox: "checkbox",
+  radio: "radio",
+};
+
+const TAG_ROLES: Record<string, string> = {
+  button: "button",
+  select: "combobox",
+  textarea: "textbox",
+  nav: "navigation",
+  main: "main",
+};
+
+function resolveImplicitRole(element: Element): string | undefined {
+  const tag = element.tagName.toLowerCase();
+  if (tag === "a") {
+    return element.hasAttribute("href") ? "link" : undefined;
+  }
+  if (tag === "input") {
+    const type = element.getAttribute("type") || "text";
+    return INPUT_ROLES[type] ?? "textbox";
+  }
+  if (/^h[1-6]$/.test(tag)) return "heading";
+  return TAG_ROLES[tag];
+}
+
+function resolveLabelledByText(element: Element): string | undefined {
+  const id = element.getAttribute("aria-labelledby");
+  if (!id || !element.ownerDocument) return undefined;
+  const labelEl = element.ownerDocument.getElementById(id);
+  if (!labelEl || !labelEl.textContent) return undefined;
+  return labelEl.textContent.trim();
+}
+
 export function extractAccessibility(element: Element): BrowserGrabAccessibility | undefined {
   try {
     const roleAttr = element.getAttribute("role");
-    let role = roleAttr || undefined;
-    if (!role) {
-      const tag = element.tagName.toLowerCase();
-      if (tag === "button") role = "button";
-      else if (tag === "a" && element.hasAttribute("href")) role = "link";
-      else if (tag === "input") {
-        const type = element.getAttribute("type") || "text";
-        role = type === "checkbox" ? "checkbox" : type === "radio" ? "radio" : "textbox";
-      } else if (tag === "select") role = "combobox";
-      else if (tag === "textarea") role = "textbox";
-      else if (/^h[1-6]$/.test(tag)) role = "heading";
-      else if (tag === "nav") role = "navigation";
-      else if (tag === "main") role = "main";
-    }
+    const role = roleAttr || resolveImplicitRole(element);
 
     const ariaLabel = element.getAttribute("aria-label") || undefined;
 
     let accessibleName: string | undefined = ariaLabel;
-    if (!accessibleName && element.hasAttribute("aria-labelledby")) {
-      const id = element.getAttribute("aria-labelledby");
-      if (id && element.ownerDocument) {
-        const labelEl = element.ownerDocument.getElementById(id);
-        if (labelEl && labelEl.textContent) {
-          accessibleName = labelEl.textContent.trim();
-        }
-      }
+    if (!accessibleName) {
+      accessibleName = resolveLabelledByText(element);
     }
     if (!accessibleName && element.tagName.toLowerCase() === "img") {
       accessibleName = element.getAttribute("alt") || undefined;
@@ -410,6 +430,97 @@ export function buildInspectTargetInfo(
   };
 }
 
+const OVERLAY_STYLE: React.CSSProperties = {
+  position: "absolute",
+  top: 0,
+  left: 0,
+  right: 0,
+  bottom: 0,
+  zIndex: 99999,
+  cursor: "crosshair",
+  pointerEvents: "auto",
+};
+
+const HIGHLIGHT_STYLE: React.CSSProperties = {
+  position: "absolute",
+  border: "2px solid #22c55e",
+  backgroundColor: "rgba(34, 197, 94, 0.2)",
+  boxShadow: "0 0 0 1px rgba(0,0,0,0.4), inset 0 0 0 1px rgba(255,255,255,0.4)",
+  pointerEvents: "none",
+  transition: "all 0.05s ease-out",
+  borderRadius: "2px",
+};
+
+const HIGHLIGHT_LABEL_STYLE: React.CSSProperties = {
+  position: "absolute",
+  bottom: "100%",
+  left: 0,
+  marginBottom: 4,
+  backgroundColor: "#15803d",
+  color: "#ffffff",
+  fontSize: "11px",
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+  fontWeight: 600,
+  padding: "2px 6px",
+  borderRadius: "4px",
+  whiteSpace: "nowrap",
+  boxShadow: "0 2px 4px rgba(0,0,0,0.3)",
+};
+
+function buildHighlightLabel(targetInfo: InspectTargetInfo): string {
+  const elRect = targetInfo.rect;
+  const id = targetInfo.id ? `#${targetInfo.id}` : "";
+  const cls = targetInfo.className
+    ? `.${targetInfo.className.trim().split(/\s+/).slice(0, 2).join(".")}`
+    : "";
+  const compPrefix = targetInfo.component ? `<${targetInfo.component}> ` : "";
+  return `${compPrefix}${targetInfo.tag}${id}${cls} (${Math.round(elRect.width)}×${Math.round(elRect.height)})`;
+}
+
+/** The element under the pointer inside the inspected frame, if it is a real target. */
+function resolveTargetAtPoint(
+  iframe: HTMLIFrameElement,
+  clientX: number,
+  clientY: number,
+): Element | null {
+  const doc = iframe.contentDocument || iframe.contentWindow?.document;
+  if (!doc) return null;
+  const iframeRect = iframe.getBoundingClientRect();
+  const target = doc.elementFromPoint(clientX - iframeRect.left, clientY - iframeRect.top);
+  if (!target || target === doc.documentElement || target === doc.body) return null;
+  return target;
+}
+
+function InspectHighlight({
+  rect,
+}: {
+  rect: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    label: string;
+    targetInfo: InspectTargetInfo;
+  };
+}) {
+  const style = useMemo(
+    () => ({
+      ...HIGHLIGHT_STYLE,
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+    }),
+    [rect.height, rect.left, rect.top, rect.width],
+  );
+
+  return (
+    <div style={style}>
+      <div style={HIGHLIGHT_LABEL_STYLE}>{rect.label}</div>
+    </div>
+  );
+}
+
 export function InteractiveInspectOverlay({
   active,
   iframeRef,
@@ -434,133 +545,83 @@ export function InteractiveInspectOverlay({
     }
   }, [active]);
 
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      const iframe = iframeRef.current;
+      if (!iframe) return;
+      try {
+        const target = resolveTargetAtPoint(iframe, e.clientX, e.clientY);
+        if (!target) {
+          setHighlightRect(null);
+          hoveredTargetRef.current = null;
+          return;
+        }
+
+        const targetInfo = buildInspectTargetInfo(target, iframe);
+        const elRect = targetInfo.rect;
+
+        hoveredTargetRef.current = targetInfo;
+        setHighlightRect({
+          left: elRect.left,
+          top: elRect.top,
+          width: elRect.width,
+          height: elRect.height,
+          label: buildHighlightLabel(targetInfo),
+          targetInfo,
+        });
+      } catch {
+        // If cross-origin, ignore
+      }
+    },
+    [iframeRef],
+  );
+
+  const handleClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const iframe = iframeRef.current;
+      let selected = hoveredTargetRef.current || highlightRect?.targetInfo;
+
+      if (!selected && iframe) {
+        try {
+          const target = resolveTargetAtPoint(iframe, e.clientX, e.clientY);
+          if (target) {
+            selected = buildInspectTargetInfo(target, iframe);
+          }
+        } catch {
+          // cross-origin
+        }
+      }
+
+      if (selected) {
+        onSelectElement(selected);
+      } else {
+        onCancel();
+      }
+    },
+    [highlightRect?.targetInfo, iframeRef, onCancel, onSelectElement],
+  );
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      onCancel();
+    },
+    [onCancel],
+  );
+
   if (!active) return null;
 
   return (
     <div
-      style={{
-        position: "absolute",
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: 99999,
-        cursor: "crosshair",
-        pointerEvents: "auto",
-      }}
-      onMouseMove={(e) => {
-        const iframe = iframeRef.current;
-        if (!iframe) return;
-        try {
-          const doc = iframe.contentDocument || iframe.contentWindow?.document;
-          if (!doc) return;
-
-          const iframeRect = iframe.getBoundingClientRect();
-          const relX = e.clientX - iframeRect.left;
-          const relY = e.clientY - iframeRect.top;
-
-          const target = doc.elementFromPoint(relX, relY);
-          if (!target || target === doc.documentElement || target === doc.body) {
-            setHighlightRect(null);
-            hoveredTargetRef.current = null;
-            return;
-          }
-
-          const targetInfo = buildInspectTargetInfo(target, iframe);
-          const elRect = targetInfo.rect;
-          const tag = targetInfo.tag;
-          const id = targetInfo.id ? `#${targetInfo.id}` : "";
-          const cls = targetInfo.className
-            ? `.${targetInfo.className.trim().split(/\s+/).slice(0, 2).join(".")}`
-            : "";
-          const compPrefix = targetInfo.component ? `<${targetInfo.component}> ` : "";
-          const label = `${compPrefix}${tag}${id}${cls} (${Math.round(elRect.width)}×${Math.round(elRect.height)})`;
-
-          hoveredTargetRef.current = targetInfo;
-          setHighlightRect({
-            left: elRect.left,
-            top: elRect.top,
-            width: elRect.width,
-            height: elRect.height,
-            label,
-            targetInfo,
-          });
-        } catch {
-          // If cross-origin, ignore
-        }
-      }}
-      onClick={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        const iframe = iframeRef.current;
-        let selected = hoveredTargetRef.current || highlightRect?.targetInfo;
-
-        if (!selected && iframe) {
-          try {
-            const doc = iframe.contentDocument || iframe.contentWindow?.document;
-            if (doc) {
-              const iframeRect = iframe.getBoundingClientRect();
-              const relX = e.clientX - iframeRect.left;
-              const relY = e.clientY - iframeRect.top;
-              const target = doc.elementFromPoint(relX, relY);
-              if (target && target !== doc.documentElement && target !== doc.body) {
-                selected = buildInspectTargetInfo(target, iframe);
-              }
-            }
-          } catch {
-            // cross-origin
-          }
-        }
-
-        if (selected) {
-          onSelectElement(selected);
-        } else {
-          onCancel();
-        }
-      }}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        onCancel();
-      }}
+      style={OVERLAY_STYLE}
+      onMouseMove={handleMouseMove}
+      onClick={handleClick}
+      onContextMenu={handleContextMenu}
     >
-      {highlightRect ? (
-        <div
-          style={{
-            position: "absolute",
-            left: highlightRect.left,
-            top: highlightRect.top,
-            width: highlightRect.width,
-            height: highlightRect.height,
-            border: "2px solid #22c55e",
-            backgroundColor: "rgba(34, 197, 94, 0.2)",
-            boxShadow: "0 0 0 1px rgba(0,0,0,0.4), inset 0 0 0 1px rgba(255,255,255,0.4)",
-            pointerEvents: "none",
-            transition: "all 0.05s ease-out",
-            borderRadius: "2px",
-          }}
-        >
-          <div
-            style={{
-              position: "absolute",
-              bottom: "100%",
-              left: 0,
-              marginBottom: 4,
-              backgroundColor: "#15803d",
-              color: "#ffffff",
-              fontSize: "11px",
-              fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-              fontWeight: 600,
-              padding: "2px 6px",
-              borderRadius: "4px",
-              whiteSpace: "nowrap",
-              boxShadow: "0 2px 4px rgba(0,0,0,0.3)",
-            }}
-          >
-            {highlightRect.label}
-          </div>
-        </div>
-      ) : null}
+      {highlightRect ? <InspectHighlight rect={highlightRect} /> : null}
     </div>
   );
 }

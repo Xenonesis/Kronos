@@ -1,14 +1,14 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useState } from "react";
 import {
   type NativeSyntheticEvent,
   Text,
-  TextInput,
   type TextInputKeyPressEventData,
   View,
 } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { AlertCircle, CornerDownLeft, MessageSquare } from "lucide-react-native";
 import { Button } from "@/components/ui/button";
+import { EditingTextInput } from "@/components/ui/text-input";
 import {
   type DiffAnnotation,
   formatDiffAnnotationPrompt,
@@ -18,6 +18,11 @@ import {
 export interface DiffCommentClient {
   send: (agentId: string, prompt: string) => Promise<unknown> | unknown;
 }
+
+const DIFF_SIDE_LABELS: Record<"old" | "new", string> = {
+  old: "base",
+  new: "head",
+};
 
 export type CompatibleDiffCommentClient =
   | DiffCommentClient
@@ -179,7 +184,7 @@ export function DiffCommentCard({
   );
 
   const headerLabel = `${annotation.filePath}:${annotation.lineNumber}`;
-  const sideLabel = annotation.side === "old" ? "base" : annotation.side === "new" ? "head" : null;
+  const sideLabel = annotation.side ? (DIFF_SIDE_LABELS[annotation.side] ?? null) : null;
 
   return (
     <View style={styles.card} testID={testID}>
@@ -210,12 +215,12 @@ export function DiffCommentCard({
         </View>
       ) : null}
 
-      <TextInput
+      <EditingTextInput
         style={styles.textInput}
         multiline
         placeholder={placeholder ?? "Leave a comment for the agent... (Ctrl+Enter to send)"}
         placeholderTextColor={styles.placeholder.color}
-        value={feedback}
+        initialValue={feedback}
         onChangeText={handleTextChange}
         editable={!disabled && !isSubmitting}
         autoFocus={autoFocus}

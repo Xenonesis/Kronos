@@ -1,8 +1,17 @@
-import React, { useMemo } from "react";
-import { Pressable, Text, View } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import React, { useCallback, useMemo } from "react";
+import { Text, View } from "react-native";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Copy, ExternalLink, Globe, RotateCw } from "lucide-react-native";
 import { Button } from "@/components/ui/button";
+import type { Theme } from "@/styles/theme";
+
+const ThemedCopy = withUnistyles(Copy);
+const ThemedExternalLink = withUnistyles(ExternalLink);
+const ThemedGlobe = withUnistyles(Globe);
+const ThemedRotateCw = withUnistyles(RotateCw);
+
+const foregroundIconMapping = (theme: Theme) => ({ color: theme.colors.foreground });
+const mutedIconMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
 export interface BrowserLoadFailureOverlayProps {
   currentUrl: string;
@@ -43,16 +52,27 @@ export function BrowserLoadFailureOverlay({
   onOpenExternally,
   testID = "browser-load-failure-overlay",
 }: BrowserLoadFailureOverlayProps) {
-  const { theme } = useUnistyles();
   const host = useMemo(() => parseHostFromUrl(currentUrl), [currentUrl]);
   const httpsUrl = useMemo(() => getHttpsRecoveryUrl(currentUrl), [currentUrl]);
+
+  const handleTryHttps = useCallback(() => {
+    if (httpsUrl) onTryHttps?.(httpsUrl);
+  }, [httpsUrl, onTryHttps]);
+
+  const handleCopyAddress = useCallback(() => {
+    onCopyAddress(currentUrl);
+  }, [currentUrl, onCopyAddress]);
+
+  const handleOpenExternally = useCallback(() => {
+    onOpenExternally?.(currentUrl);
+  }, [currentUrl, onOpenExternally]);
 
   return (
     <View style={styles.container} testID={testID}>
       <View style={styles.card}>
         {/* Globe icon circle */}
         <View style={styles.iconCircle}>
-          <Globe size={24} color={theme.colors.foregroundMuted} />
+          <ThemedGlobe size={24} uniProps={mutedIconMapping} />
         </View>
 
         {/* Heading */}
@@ -72,7 +92,7 @@ export function BrowserLoadFailureOverlay({
               size="sm"
               variant="default"
               style={styles.actionBtn}
-              onPress={() => onTryHttps(httpsUrl)}
+              onPress={handleTryHttps}
               testID="browser-try-https-btn"
             >
               Try HTTPS
@@ -86,7 +106,7 @@ export function BrowserLoadFailureOverlay({
             onPress={onRetry}
             testID="browser-retry-btn"
           >
-            <RotateCw size={14} color={theme.colors.foreground} />
+            <ThemedRotateCw size={14} uniProps={foregroundIconMapping} />
             <Text style={styles.btnText}>Retry</Text>
           </Button>
 
@@ -94,24 +114,26 @@ export function BrowserLoadFailureOverlay({
             size="sm"
             variant="outline"
             style={styles.actionBtn}
-            onPress={() => onCopyAddress(currentUrl)}
+            onPress={handleCopyAddress}
             testID="browser-copy-btn"
           >
-            <Copy size={14} color={theme.colors.foreground} />
+            <ThemedCopy size={14} uniProps={foregroundIconMapping} />
             <Text style={styles.btnText}>Copy Address</Text>
           </Button>
         </View>
 
         {/* Open Externally Link Button */}
         {onOpenExternally ? (
-          <Pressable
+          <Button
+            size="sm"
+            variant="ghost"
             style={styles.externalLinkRow}
-            onPress={() => onOpenExternally(currentUrl)}
+            onPress={handleOpenExternally}
             testID="browser-open-external-btn"
           >
-            <ExternalLink size={14} color={theme.colors.foregroundMuted} />
+            <ThemedExternalLink size={14} uniProps={mutedIconMapping} />
             <Text style={styles.externalLinkText}>Open Externally</Text>
-          </Pressable>
+          </Button>
         ) : null}
       </View>
     </View>

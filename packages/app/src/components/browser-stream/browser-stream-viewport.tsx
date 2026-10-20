@@ -1,16 +1,18 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, type ReactElement } from "react";
 import {
   Image,
   Platform,
-  Pressable,
   Text,
   View,
+  type ImageSourcePropType,
   type StyleProp,
   type ViewStyle,
 } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Globe, Monitor, RefreshCw, X } from "lucide-react-native";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
+import type { Theme } from "@/styles/theme";
 
 export interface BrowserStreamFrameMetadata {
   timestamp?: number;
@@ -77,6 +79,97 @@ export interface BrowserStreamViewportProps {
   testID?: string;
 }
 
+const foregroundMutedIconMapping = (theme: Theme) => ({
+  color: theme.colors.foregroundMuted,
+});
+const foregroundIconMapping = (theme: Theme) => ({
+  color: theme.colors.foreground,
+});
+
+const ThemedGlobe = withUnistyles(Globe);
+const ThemedMonitor = withUnistyles(Monitor);
+const ThemedRefreshCw = withUnistyles(RefreshCw);
+const ThemedX = withUnistyles(X);
+const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
+
+/** The canvas fills the viewport and keeps the frame's aspect ratio. */
+const canvasStyle = {
+  width: "100%",
+  height: "100%",
+  objectFit: "contain",
+  display: "block",
+} as const;
+
+function BrowserStreamPlaceholder({
+  isLoading,
+  title,
+}: {
+  isLoading: boolean;
+  title?: string;
+}): ReactElement {
+  if (isLoading) {
+    return (
+      <View testID="browser-stream-placeholder" style={styles.placeholderContainer}>
+        <ThemedLoadingSpinner size="large" uniProps={foregroundMutedIconMapping} />
+        <Text style={styles.placeholderText}>Connecting to browser stream...</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View testID="browser-stream-placeholder" style={styles.placeholderContainer}>
+      <ThemedMonitor size={32} uniProps={foregroundMutedIconMapping} />
+      <Text style={styles.placeholderTitle}>{title || "No live stream"}</Text>
+      <Text style={styles.placeholderText}>Waiting for active browser session frames</Text>
+    </View>
+  );
+}
+
+/**
+ * The viewport surface: a canvas on web in canvas mode, an image otherwise, and the
+ * placeholder when there is no frame at all.
+ */
+function BrowserStreamSurface({
+  imageUri,
+  imageSource,
+  isLoading,
+  title,
+  renderMode,
+  canvasRef,
+}: {
+  imageUri: string | null;
+  imageSource: ImageSourcePropType | undefined;
+  isLoading: boolean;
+  title?: string;
+  renderMode: "image" | "canvas";
+  canvasRef: React.RefObject<HTMLCanvasElement | null>;
+}): ReactElement {
+  if (!imageUri) {
+    return <BrowserStreamPlaceholder isLoading={isLoading} title={title} />;
+  }
+
+  if (renderMode === "canvas" && Platform.OS === "web") {
+    return (
+      <canvas
+        ref={canvasRef as unknown as React.LegacyRef<HTMLCanvasElement>}
+        data-testid="browser-stream-canvas"
+        style={canvasStyle}
+      />
+    );
+  }
+
+  return (
+    <Image
+      testID="browser-stream-image"
+      accessibilityRole="image"
+      accessibilityLabel="Live browser screencast"
+      source={imageSource}
+      style={styles.streamImage}
+      resizeMode="contain"
+    />
+  );
+}
+
 export function BrowserStreamViewport({
   frame,
   url,
@@ -89,7 +182,6 @@ export function BrowserStreamViewport({
   style,
   testID = "browser-stream-viewport",
 }: BrowserStreamViewportProps) {
-  const { theme } = useUnistyles();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const imageUri = useMemo(() => {
@@ -116,6 +208,11 @@ export function BrowserStreamViewport({
     return "about:blank";
   }, [url, frame]);
 
+  const imageSource = useMemo<ImageSourcePropType | undefined>(
+    () => (imageUri ? { uri: imageUri } : undefined),
+    [imageUri],
+  );
+
   useEffect(() => {
     if (
       renderMode === "canvas" &&
@@ -134,23 +231,37 @@ export function BrowserStreamViewport({
       if (ctx) {
         const win = window as unknown as Window & typeof globalThis;
         const img = new win.Image();
-        img.onload = () => {
+        const handleLoad = () => {
           canvas.width = img.naturalWidth || 1280;
           canvas.height = img.naturalHeight || 720;
           ctx.drawImage(img, 0, 0);
         };
+        img.addEventListener("load", handleLoad);
         img.src = imageUri;
+        return () => {
+          img.removeEventListener("load", handleLoad);
+        };
       }
     }
+    return undefined;
   }, [renderMode, imageUri]);
+
   const showClosePiP = Boolean(onClosePiP && isPiP !== false);
+
+  const handleRefresh = useCallback(() => {
+    onRefresh?.();
+  }, [onRefresh]);
+
+  const handleClosePiP = useCallback(() => {
+    onClosePiP?.();
+  }, [onClosePiP]);
 
   return (
     <View testID={testID} style={[styles.container, style]}>
       {/* Top chrome with active URL and mini toolbar */}
       <View style={styles.header}>
         <View style={styles.urlContainer}>
-          <Globe size={13} color={theme.colors.foregroundMuted} />
+          <ThemedGlobe size={13} uniProps={foregroundMutedIconMapping} />
           <Text
             testID="browser-stream-url"
             accessibilityLabel={`Active URL: ${activeUrl}`}
@@ -169,84 +280,43 @@ export function BrowserStreamViewport({
               accessibilityLabel="Loading stream"
               style={styles.loadingWrapper}
             >
-              <LoadingSpinner size="small" color={theme.colors.foregroundMuted} />
+              <ThemedLoadingSpinner size="small" uniProps={foregroundMutedIconMapping} />
             </View>
           ) : null}
 
-          <Pressable
+          <ToolbarButton
             testID="browser-stream-refresh-btn"
-            accessibilityRole="button"
-            accessibilityLabel="Refresh"
-            onPress={onRefresh}
+            label="Refresh"
+            onPress={handleRefresh}
             disabled={!onRefresh}
-            style={({ pressed }) => [
-              styles.toolbarButton,
-              pressed ? styles.toolbarButtonPressed : null,
-              !onRefresh ? styles.toolbarButtonDisabled : null,
-            ]}
+            compact
           >
-            <RefreshCw size={13} color={theme.colors.foreground} />
-          </Pressable>
+            <ThemedRefreshCw size={13} uniProps={foregroundIconMapping} />
+          </ToolbarButton>
 
           {showClosePiP ? (
-            <Pressable
+            <ToolbarButton
               testID="browser-stream-close-pip-btn"
-              accessibilityRole="button"
-              accessibilityLabel="Close PiP"
-              onPress={onClosePiP}
-              style={({ pressed }) => [
-                styles.toolbarButton,
-                pressed ? styles.toolbarButtonPressed : null,
-              ]}
+              label="Close PiP"
+              onPress={handleClosePiP}
+              compact
             >
-              <X size={14} color={theme.colors.foreground} />
-            </Pressable>
+              <ThemedX size={14} uniProps={foregroundIconMapping} />
+            </ToolbarButton>
           ) : null}
         </View>
       </View>
 
       {/* Responsive canvas/image viewport */}
       <View style={styles.viewport}>
-        {imageUri ? (
-          renderMode === "canvas" && Platform.OS === "web" ? (
-            <canvas
-              ref={canvasRef as unknown as React.LegacyRef<HTMLCanvasElement>}
-              data-testid="browser-stream-canvas"
-              style={{
-                width: "100%",
-                height: "100%",
-                objectFit: "contain",
-                display: "block",
-              }}
-            />
-          ) : (
-            <Image
-              testID="browser-stream-image"
-              accessibilityRole="image"
-              accessibilityLabel="Live browser screencast"
-              source={{ uri: imageUri }}
-              style={styles.streamImage}
-              resizeMode="contain"
-            />
-          )
-        ) : (
-          <View testID="browser-stream-placeholder" style={styles.placeholderContainer}>
-            {isLoading ? (
-              <>
-                <LoadingSpinner size="large" color={theme.colors.foregroundMuted} />
-                <Text style={styles.placeholderText}>Connecting to browser stream...</Text>
-              </>
-            ) : (
-              <>
-                <Monitor size={32} color={theme.colors.foregroundMuted} />
-                <Text style={styles.placeholderTitle}>{title || "No live stream"}</Text>
-                <Text style={styles.placeholderText}>
-                  Waiting for active browser session frames
-                </Text>
-              </>
-            )}
-          </View>
-        )}
+        <BrowserStreamSurface
+          imageUri={imageUri}
+          imageSource={imageSource}
+          isLoading={isLoading}
+          title={title}
+          renderMode={renderMode}
+          canvasRef={canvasRef}
+        />
       </View>
     </View>
   );
@@ -289,18 +359,6 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[1],
-  },
-  toolbarButton: {
-    padding: theme.spacing[1],
-    borderRadius: theme.borderRadius.sm,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  toolbarButtonPressed: {
-    backgroundColor: theme.colors.surface2,
-  },
-  toolbarButtonDisabled: {
-    opacity: 0.35,
   },
   loadingWrapper: {
     marginRight: theme.spacing[1],

@@ -4,7 +4,7 @@ import { useIsFocused } from "expo-router/react-navigation";
 import { router } from "expo-router";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { ChevronLeft, Import, Bot, Layers } from "lucide-react-native";
-import { OmpSessionsView, type OmpSessionItem } from "@/desktop/omp";
+import { OmpSessionsView } from "@/desktop/omp";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { MenuHeader } from "@/components/headers/menu-header";
@@ -24,6 +24,9 @@ import { buildOpenProjectRoute } from "@/utils/host-routes";
 const SEARCH_DEBOUNCE_MS = 200;
 
 const sessionsHostOptionTestID = (serverId: string) => `sessions-host-filter-item-${serverId}`;
+
+/** Which session list the screen is showing. */
+type SessionViewMode = "paseo" | "omp";
 
 /**
  * A host that failed while others answered. Without this the list silently
@@ -71,13 +74,82 @@ export function SessionsScreen() {
   return <SessionsScreenContent />;
 }
 
+/** The switcher between the Paseo app's own sessions and the OMP CLI's sessions. */
+function SessionViewModeTabs({
+  activeViewMode,
+  onSelectViewMode,
+}: {
+  activeViewMode: SessionViewMode;
+  onSelectViewMode: (mode: SessionViewMode) => void;
+}): ReactElement {
+  const handleSelectPaseo = useCallback(() => onSelectViewMode("paseo"), [onSelectViewMode]);
+  const handleSelectOmp = useCallback(() => onSelectViewMode("omp"), [onSelectViewMode]);
+
+  return (
+    <View style={styles.viewModeTabs}>
+      <Button
+        variant={activeViewMode === "paseo" ? "secondary" : "ghost"}
+        size="xs"
+        leftIcon={Layers}
+        onPress={handleSelectPaseo}
+      >
+        Paseo Sessions
+      </Button>
+      <Button
+        variant={activeViewMode === "omp" ? "secondary" : "ghost"}
+        size="xs"
+        leftIcon={Bot}
+        onPress={handleSelectOmp}
+      >
+        OMP CLI Sessions
+      </Button>
+    </View>
+  );
+}
+
+/** The empty state a search-narrowed list shows, with the way out of the query. */
+function SessionsEmptyState({
+  emptyText,
+  isSearching,
+  onClearSearch,
+  onBack,
+  onImport,
+  t,
+}: {
+  emptyText: string;
+  isSearching: boolean;
+  onClearSearch: () => void;
+  onBack: () => void;
+  onImport: () => void;
+  t: TFunction;
+}): ReactElement {
+  return (
+    <View style={styles.emptyContainer} testID="sessions-empty">
+      <Text style={styles.emptyText}>{emptyText}</Text>
+      {isSearching ? (
+        <Button variant="ghost" onPress={onClearSearch}>
+          {t("sessions.actions.clearSearch")}
+        </Button>
+      ) : (
+        <Button variant="ghost" leftIcon={ChevronLeft} onPress={onBack}>
+          Back
+        </Button>
+      )}
+      <Button variant="ghost" leftIcon={Import} onPress={onImport}>
+        {t("importSession.title")}
+      </Button>
+    </View>
+  );
+}
+
 function SessionsScreenContent() {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
   const importSession = useImportSession();
+  const { open: openImportSession } = importSession;
   const hosts = useHosts();
   const [selectedHost, setSelectedHost] = useState(ALL_HOSTS_OPTION_ID);
-  const [activeViewMode, setActiveViewMode] = useState<"paseo" | "omp">("paseo");
+  const [activeViewMode, setActiveViewMode] = useState<SessionViewMode>("paseo");
   const [searchInput, setSearchInput] = useState("");
   const search = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS).trim();
   const historyServerId = selectedHost === ALL_HOSTS_OPTION_ID ? null : selectedHost;
@@ -130,6 +202,14 @@ function SessionsScreenContent() {
 
   const handleClearSearch = useCallback(() => setSearchInput(""), []);
 
+  const handleSelectViewMode = useCallback((mode: SessionViewMode) => {
+    setActiveViewMode(mode);
+  }, []);
+
+  const handleSelectResumeSession = useCallback(() => {
+    openImportSession();
+  }, [openImportSession]);
+
   const listFooterComponent = useMemo(() => {
     // COMPAT(historyPagination): old daemons return a truncated relevance page.
     // Added in v0.8.0; remove after 2027-03-16 once the daemon floor supports search pagination.
@@ -156,30 +236,12 @@ function SessionsScreenContent() {
     <View style={styles.container}>
       <MenuHeader title={t("sessions.title")} />
       {/* Switcher tabs between Paseo App Sessions & OMP External Sessions */}
-      <View style={styles.viewModeTabs}>
-        <Button
-          variant={activeViewMode === "paseo" ? "secondary" : "ghost"}
-          size="xs"
-          leftIcon={Layers}
-          onPress={() => setActiveViewMode("paseo")}
-        >
-          Paseo Sessions
-        </Button>
-        <Button
-          variant={activeViewMode === "omp" ? "secondary" : "ghost"}
-          size="xs"
-          leftIcon={Bot}
-          onPress={() => setActiveViewMode("omp")}
-        >
-          OMP CLI Sessions
-        </Button>
-      </View>
+      <SessionViewModeTabs
+        activeViewMode={activeViewMode}
+        onSelectViewMode={handleSelectViewMode}
+      />
       {activeViewMode === "omp" ? (
-        <OmpSessionsView
-          onSelectResumeSession={(ompSession) => {
-            importSession.open();
-          }}
-        />
+        <OmpSessionsView onSelectResumeSession={handleSelectResumeSession} />
       ) : (
         <>
           {showFilterRow ? (
@@ -220,21 +282,14 @@ function SessionsScreenContent() {
             </View>
           ) : null}
           {!isInitialLoad && !showLoadError && agents.length === 0 ? (
-            <View style={styles.emptyContainer} testID="sessions-empty">
-              <Text style={styles.emptyText}>{emptyText}</Text>
-              {isSearching ? (
-                <Button variant="ghost" onPress={handleClearSearch}>
-                  {t("sessions.actions.clearSearch")}
-                </Button>
-              ) : (
-                <Button variant="ghost" leftIcon={ChevronLeft} onPress={handleBack}>
-                  Back
-                </Button>
-              )}
-              <Button variant="ghost" leftIcon={Import} onPress={importSession.open}>
-                {t("importSession.title")}
-              </Button>
-            </View>
+            <SessionsEmptyState
+              emptyText={emptyText}
+              isSearching={isSearching}
+              onClearSearch={handleClearSearch}
+              onBack={handleBack}
+              onImport={importSession.open}
+              t={t}
+            />
           ) : null}
           {!isInitialLoad && !showLoadError && agents.length > 0 ? (
             <AgentList

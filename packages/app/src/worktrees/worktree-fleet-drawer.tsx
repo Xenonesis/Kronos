@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { Archive, Bot, Folder, GitBranch, Plus, RotateCw, Trash2 } from "lucide-react-native";
+import { Bot, Folder, GitBranch, Plus, RotateCw, Trash2 } from "lucide-react-native";
 import type { Theme } from "@/styles/theme";
 import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,10 @@ const ThemedPlus = withUnistyles(Plus);
 const ThemedRotateCw = withUnistyles(RotateCw);
 const ThemedTrash = withUnistyles(Trash2);
 
+const refreshIcon = <ThemedRotateCw size={14} uniProps={foregroundMutedColor} />;
+const newWorktreeIcon = <ThemedPlus size={14} uniProps={foregroundMutedColor} />;
+const archiveIcon = <ThemedTrash size={14} uniProps={foregroundMutedColor} />;
+
 function resolveStatusVariant(status: WorktreeFleetStatus): StatusBadgeVariant {
   switch (status) {
     case "active":
@@ -58,6 +62,212 @@ function resolveStatusVariant(status: WorktreeFleetStatus): StatusBadgeVariant {
     default:
       return "muted";
   }
+}
+
+/** The agent's dot is live while it is running or mid-turn. */
+function isAgentActive(status: string, turn?: string): boolean {
+  return status === "running" || Boolean(turn && turn !== "idle");
+}
+
+/** The error a failed listing reports, whatever shape the daemon sent it in. */
+function resolveLoadErrorMessage(error: unknown): string {
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error && typeof error === "object" && "message" in error) {
+    return String(error.message);
+  }
+  return "Failed to list worktrees";
+}
+
+/** The error a failed archive reports, whatever shape the daemon sent it in. */
+function resolveArchiveErrorMessage(error: unknown): string {
+  if (error && typeof error === "object" && "message" in error) {
+    return String(error.message);
+  }
+  return "Failed to archive worktree";
+}
+
+/** One worktree: its branch, path, the agents on it, and the actions that apply. */
+function WorktreeFleetCard({
+  item,
+  isArchiving,
+  onSwitchWorktree,
+  onArchiveWorktree,
+}: {
+  item: WorktreeFleetItem;
+  isArchiving: boolean;
+  onSwitchWorktree: (item: WorktreeFleetItem) => void;
+  onArchiveWorktree: (item: WorktreeFleetItem) => void;
+}): React.ReactElement {
+  const { t } = useTranslation();
+  const statusVariant = resolveStatusVariant(item.status);
+
+  const handleSwitch = useCallback(() => {
+    onSwitchWorktree(item);
+  }, [item, onSwitchWorktree]);
+
+  const handleArchive = useCallback(() => {
+    void onArchiveWorktree(item);
+  }, [item, onArchiveWorktree]);
+
+  return (
+    <View
+      style={[styles.worktreeCard, item.isCurrent && styles.worktreeCardCurrent]}
+      testID={`worktree-item-${item.worktreePath}`}
+    >
+      <View style={styles.cardHeader}>
+        <View style={styles.branchHeaderLeft}>
+          <ThemedGitBranch size={16} uniProps={foregroundMutedColor} />
+          <Text
+            style={styles.branchNameText}
+            testID={`worktree-branch-${item.branchName}`}
+            numberOfLines={1}
+          >
+            {item.branchName}
+          </Text>
+          {item.isCurrent ? (
+            <StatusBadge label={t("worktrees.currentBadge", "Current")} variant="success" />
+          ) : null}
+        </View>
+        <StatusBadge label={item.status.toUpperCase()} variant={statusVariant} />
+      </View>
+
+      <View style={styles.pathRow}>
+        <ThemedFolder size={12} uniProps={foregroundMutedColor} />
+        <Text
+          style={styles.pathText}
+          numberOfLines={1}
+          testID={`worktree-path-${item.worktreePath}`}
+        >
+          {item.worktreePath}
+        </Text>
+      </View>
+
+      {/* Associated Agent Indicators */}
+      <View style={styles.agentsContainer} testID={`worktree-agents-${item.worktreePath}`}>
+        {item.agents.length > 0 ? (
+          item.agents.map((agent) => (
+            <View key={agent.id} style={styles.agentChip}>
+              <ThemedBot size={12} uniProps={foregroundMutedColor} />
+              <Text style={styles.agentTitleText} numberOfLines={1}>
+                {agent.title || agent.id.slice(0, 8)}
+              </Text>
+              <View
+                style={[
+                  styles.agentStatusDot,
+                  isAgentActive(agent.status, agent.turn)
+                    ? styles.agentStatusRunning
+                    : styles.agentStatusIdle,
+                ]}
+              />
+            </View>
+          ))
+        ) : (
+          <Text style={styles.noAgentsText}>{t("worktrees.noAgents", "No active agents")}</Text>
+        )}
+      </View>
+
+      {/* Actions Row */}
+      <View style={styles.cardActions}>
+        <Button
+          size="sm"
+          variant={item.isCurrent ? "outline" : "default"}
+          disabled={item.isCurrent}
+          onPress={handleSwitch}
+          testID={`switch-worktree-button-${item.worktreePath}`}
+        >
+          {item.isCurrent
+            ? t("worktrees.activeCheckout", "Current Checkout")
+            : t("worktrees.switchToWorktree", "Switch to Worktree")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          leftIcon={archiveIcon}
+          onPress={handleArchive}
+          loading={isArchiving}
+          testID={`archive-worktree-button-${item.worktreePath}`}
+        >
+          {t("common.actions.archive", "Archive")}
+        </Button>
+      </View>
+    </View>
+  );
+}
+
+/** The list body: loading, a failed listing, an empty fleet, or the worktrees themselves. */
+function WorktreeFleetList({
+  items,
+  isLoading,
+  loadError,
+  archivingPath,
+  onRetry,
+  onSwitchWorktree,
+  onArchiveWorktree,
+}: {
+  items: WorktreeFleetItem[];
+  isLoading: boolean;
+  loadError: string | null;
+  archivingPath: string | null;
+  onRetry: () => void;
+  onSwitchWorktree: (item: WorktreeFleetItem) => void;
+  onArchiveWorktree: (item: WorktreeFleetItem) => void;
+}): React.ReactElement {
+  const { t } = useTranslation();
+
+  if (isLoading && items.length === 0) {
+    return (
+      <View style={styles.loadingContainer}>
+        <LoadingSpinner size="small" color="#888" />
+        <Text style={styles.loadingText}>
+          {t("worktrees.loading", "Loading active worktrees...")}
+        </Text>
+      </View>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <View style={styles.errorContainer}>
+        <Text style={styles.errorText}>{loadError}</Text>
+        <Button size="sm" variant="outline" onPress={onRetry}>
+          {t("common.actions.retry", "Retry")}
+        </Button>
+      </View>
+    );
+  }
+
+  if (items.length === 0) {
+    return (
+      <View style={styles.emptyContainer} testID="worktrees-empty-state">
+        <ThemedGitBranch size={32} uniProps={foregroundMutedColor} />
+        <Text style={styles.emptyTitle}>
+          {t("worktrees.noWorktrees", "No active worktrees found")}
+        </Text>
+        <Text style={styles.emptySubtitle}>
+          {t(
+            "worktrees.emptyDescription",
+            "Create a separate worktree to develop features or run agents in isolated checkouts.",
+          )}
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.itemsList}>
+      {items.map((item) => (
+        <WorktreeFleetCard
+          key={item.worktreePath}
+          item={item}
+          isArchiving={archivingPath === item.worktreePath}
+          onSwitchWorktree={onSwitchWorktree}
+          onArchiveWorktree={onArchiveWorktree}
+        />
+      ))}
+    </View>
+  );
 }
 
 export function WorktreeFleetDrawer({
@@ -122,13 +332,7 @@ export function WorktreeFleetDrawer({
 
       const result = await listFn.call(client, { cwd });
       if (result.error) {
-        const errorMsg =
-          typeof result.error === "string"
-            ? result.error
-            : result.error && typeof result.error === "object" && "message" in result.error
-              ? String(result.error.message)
-              : "Failed to list worktrees";
-        setLoadError(errorMsg);
+        setLoadError(resolveLoadErrorMessage(result.error));
       } else {
         setRawWorktrees(result.worktrees ?? []);
       }
@@ -215,6 +419,16 @@ export function WorktreeFleetDrawer({
     }
   }, [client, cwd, worktreeSlug, refName, t, toast, fetchWorktrees]);
 
+  const handleToggleCreateForm = useCallback(() => {
+    setIsCreating((prev) => !prev);
+    setCreateError(null);
+  }, []);
+
+  const handleCancelCreateForm = useCallback(() => {
+    setIsCreating(false);
+    setCreateError(null);
+  }, []);
+
   const handleSwitchWorktree = useCallback(
     (item: WorktreeFleetItem) => {
       if (onSwitchWorktree) {
@@ -264,11 +478,7 @@ export function WorktreeFleetDrawer({
           );
           await fetchWorktrees();
         } else {
-          const errMessage =
-            result.error && typeof result.error === "object" && "message" in result.error
-              ? String(result.error.message)
-              : "Failed to archive worktree";
-          toast.show(errMessage);
+          toast.show(resolveArchiveErrorMessage(result.error));
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Error archiving worktree";
@@ -300,7 +510,7 @@ export function WorktreeFleetDrawer({
             <Button
               size="sm"
               variant="outline"
-              leftIcon={<ThemedRotateCw size={14} uniProps={foregroundMutedColor} />}
+              leftIcon={refreshIcon}
               onPress={fetchWorktrees}
               loading={isLoading}
               testID="refresh-worktrees-button"
@@ -310,11 +520,8 @@ export function WorktreeFleetDrawer({
             <Button
               size="sm"
               variant="default"
-              leftIcon={<ThemedPlus size={14} uniProps={foregroundMutedColor} />}
-              onPress={() => {
-                setIsCreating((prev) => !prev);
-                setCreateError(null);
-              }}
+              leftIcon={newWorktreeIcon}
+              onPress={handleToggleCreateForm}
               testID="new-worktree-button"
             >
               {isCreating
@@ -367,10 +574,7 @@ export function WorktreeFleetDrawer({
               <Button
                 size="sm"
                 variant="ghost"
-                onPress={() => {
-                  setIsCreating(false);
-                  setCreateError(null);
-                }}
+                onPress={handleCancelCreateForm}
                 disabled={isSubmitting}
                 testID="create-worktree-cancel-button"
               >
@@ -390,134 +594,15 @@ export function WorktreeFleetDrawer({
         ) : null}
 
         {/* Worktree Items List */}
-        {isLoading && worktreeItems.length === 0 ? (
-          <View style={styles.loadingContainer}>
-            <LoadingSpinner size="small" color="#888" />
-            <Text style={styles.loadingText}>
-              {t("worktrees.loading", "Loading active worktrees...")}
-            </Text>
-          </View>
-        ) : loadError ? (
-          <View style={styles.errorContainer}>
-            <Text style={styles.errorText}>{loadError}</Text>
-            <Button size="sm" variant="outline" onPress={fetchWorktrees}>
-              {t("common.actions.retry", "Retry")}
-            </Button>
-          </View>
-        ) : worktreeItems.length === 0 ? (
-          <View style={styles.emptyContainer} testID="worktrees-empty-state">
-            <ThemedGitBranch size={32} uniProps={foregroundMutedColor} />
-            <Text style={styles.emptyTitle}>
-              {t("worktrees.noWorktrees", "No active worktrees found")}
-            </Text>
-            <Text style={styles.emptySubtitle}>
-              {t(
-                "worktrees.emptyDescription",
-                "Create a separate worktree to develop features or run agents in isolated checkouts.",
-              )}
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.itemsList}>
-            {worktreeItems.map((item) => {
-              const statusVariant = resolveStatusVariant(item.status);
-              const isArchiving = archivingPath === item.worktreePath;
-
-              return (
-                <View
-                  key={item.worktreePath}
-                  style={[styles.worktreeCard, item.isCurrent && styles.worktreeCardCurrent]}
-                  testID={`worktree-item-${item.worktreePath}`}
-                >
-                  <View style={styles.cardHeader}>
-                    <View style={styles.branchHeaderLeft}>
-                      <ThemedGitBranch size={16} uniProps={foregroundMutedColor} />
-                      <Text
-                        style={styles.branchNameText}
-                        testID={`worktree-branch-${item.branchName}`}
-                        numberOfLines={1}
-                      >
-                        {item.branchName}
-                      </Text>
-                      {item.isCurrent ? (
-                        <StatusBadge
-                          label={t("worktrees.currentBadge", "Current")}
-                          variant="success"
-                        />
-                      ) : null}
-                    </View>
-                    <StatusBadge label={item.status.toUpperCase()} variant={statusVariant} />
-                  </View>
-
-                  <View style={styles.pathRow}>
-                    <ThemedFolder size={12} uniProps={foregroundMutedColor} />
-                    <Text
-                      style={styles.pathText}
-                      numberOfLines={1}
-                      testID={`worktree-path-${item.worktreePath}`}
-                    >
-                      {item.worktreePath}
-                    </Text>
-                  </View>
-
-                  {/* Associated Agent Indicators */}
-                  <View
-                    style={styles.agentsContainer}
-                    testID={`worktree-agents-${item.worktreePath}`}
-                  >
-                    {item.agents.length > 0 ? (
-                      item.agents.map((agent) => (
-                        <View key={agent.id} style={styles.agentChip}>
-                          <ThemedBot size={12} uniProps={foregroundMutedColor} />
-                          <Text style={styles.agentTitleText} numberOfLines={1}>
-                            {agent.title || agent.id.slice(0, 8)}
-                          </Text>
-                          <View
-                            style={[
-                              styles.agentStatusDot,
-                              agent.status === "running" || (agent.turn && agent.turn !== "idle")
-                                ? styles.agentStatusRunning
-                                : styles.agentStatusIdle,
-                            ]}
-                          />
-                        </View>
-                      ))
-                    ) : (
-                      <Text style={styles.noAgentsText}>
-                        {t("worktrees.noAgents", "No active agents")}
-                      </Text>
-                    )}
-                  </View>
-
-                  {/* Actions Row */}
-                  <View style={styles.cardActions}>
-                    <Button
-                      size="sm"
-                      variant={item.isCurrent ? "outline" : "default"}
-                      disabled={item.isCurrent}
-                      onPress={() => handleSwitchWorktree(item)}
-                      testID={`switch-worktree-button-${item.worktreePath}`}
-                    >
-                      {item.isCurrent
-                        ? t("worktrees.activeCheckout", "Current Checkout")
-                        : t("worktrees.switchToWorktree", "Switch to Worktree")}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      leftIcon={<ThemedTrash size={14} uniProps={foregroundMutedColor} />}
-                      onPress={() => handleArchiveWorktree(item)}
-                      loading={isArchiving}
-                      testID={`archive-worktree-button-${item.worktreePath}`}
-                    >
-                      {t("common.actions.archive", "Archive")}
-                    </Button>
-                  </View>
-                </View>
-              );
-            })}
-          </View>
-        )}
+        <WorktreeFleetList
+          items={worktreeItems}
+          isLoading={isLoading}
+          loadError={loadError}
+          archivingPath={archivingPath}
+          onRetry={fetchWorktrees}
+          onSwitchWorktree={handleSwitchWorktree}
+          onArchiveWorktree={handleArchiveWorktree}
+        />
       </View>
     </AdaptiveModalSheet>
   );

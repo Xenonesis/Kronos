@@ -1,8 +1,18 @@
-import React from "react";
-import { Pressable, Text, View } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import React, { useCallback, useMemo } from "react";
+import { Text, View } from "react-native";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Globe, Plus, X } from "lucide-react-native";
 import { parseHostFromUrl } from "./browser-load-failure-overlay";
+import { PressHighlight } from "@/components/ui/press-highlight";
+import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
+import type { Theme } from "@/styles/theme";
+
+const ThemedGlobe = withUnistyles(Globe);
+const ThemedPlus = withUnistyles(Plus);
+const ThemedX = withUnistyles(X);
+
+const foregroundIconMapping = (theme: Theme) => ({ color: theme.colors.foreground });
+const mutedIconMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
 export interface BrowserTabItem {
   id: string;
@@ -20,6 +30,69 @@ export interface BrowserTabBarProps {
   testID?: string;
 }
 
+function BrowserTab({
+  tab,
+  isActive,
+  canClose,
+  onSelectTab,
+  onCloseTab,
+}: {
+  tab: BrowserTabItem;
+  isActive: boolean;
+  canClose: boolean;
+  onSelectTab: (tabId: string) => void;
+  onCloseTab: (tabId: string) => void;
+}) {
+  const displayLabel = tab.title?.trim() || parseHostFromUrl(tab.url) || "New Tab";
+
+  const handleSelect = useCallback(() => {
+    onSelectTab(tab.id);
+  }, [onSelectTab, tab.id]);
+
+  const handleClose = useCallback(
+    (e: { stopPropagation: () => void }) => {
+      e.stopPropagation();
+      onCloseTab(tab.id);
+    },
+    [onCloseTab, tab.id],
+  );
+
+  const accessibilityState = useMemo(() => ({ selected: isActive }), [isActive]);
+
+  return (
+    <PressHighlight
+      accessibilityRole="button"
+      accessibilityState={accessibilityState}
+      style={[styles.tab, isActive ? styles.tabActive : styles.tabInactive]}
+      onPress={handleSelect}
+      testID={`browser-tab-${tab.id}`}
+    >
+      <ThemedGlobe
+        size={13}
+        uniProps={isActive ? foregroundIconMapping : mutedIconMapping}
+        style={styles.tabIcon}
+      />
+      <Text
+        style={[styles.tabTitle, isActive ? styles.tabTitleActive : styles.tabTitleInactive]}
+        numberOfLines={1}
+      >
+        {displayLabel}
+      </Text>
+      {canClose ? (
+        <ToolbarButton
+          label="Close Tab"
+          tooltip="Close Tab"
+          onPress={handleClose}
+          style={styles.closeBtn}
+          testID={`browser-tab-close-${tab.id}`}
+        >
+          <ThemedX size={12} uniProps={mutedIconMapping} />
+        </ToolbarButton>
+      ) : null}
+    </PressHighlight>
+  );
+}
+
 export function BrowserTabBar({
   tabs,
   activeTabId,
@@ -28,62 +101,30 @@ export function BrowserTabBar({
   onNewTab,
   testID = "browser-tab-bar",
 }: BrowserTabBarProps) {
-  const { theme } = useUnistyles();
-
   return (
     <View style={styles.container} testID={testID}>
       <View style={styles.tabsList}>
-        {tabs.map((tab) => {
-          const isActive = tab.id === activeTabId;
-          const displayLabel = tab.title?.trim() || parseHostFromUrl(tab.url) || "New Tab";
-
-          return (
-            <Pressable
-              key={tab.id}
-              style={[styles.tab, isActive ? styles.tabActive : styles.tabInactive]}
-              onPress={() => onSelectTab(tab.id)}
-              testID={`browser-tab-${tab.id}`}
-            >
-              <Globe
-                size={13}
-                color={isActive ? theme.colors.foreground : theme.colors.foregroundMuted}
-                style={styles.tabIcon}
-              />
-              <Text
-                style={[
-                  styles.tabTitle,
-                  isActive ? styles.tabTitleActive : styles.tabTitleInactive,
-                ]}
-                numberOfLines={1}
-              >
-                {displayLabel}
-              </Text>
-              {tabs.length > 1 ? (
-                <Pressable
-                  style={styles.closeBtn}
-                  onPress={(e) => {
-                    e.stopPropagation();
-                    onCloseTab(tab.id);
-                  }}
-                  testID={`browser-tab-close-${tab.id}`}
-                  accessibilityLabel="Close Tab"
-                >
-                  <X size={12} color={theme.colors.foregroundMuted} />
-                </Pressable>
-              ) : null}
-            </Pressable>
-          );
-        })}
+        {tabs.map((tab) => (
+          <BrowserTab
+            key={tab.id}
+            tab={tab}
+            isActive={tab.id === activeTabId}
+            canClose={tabs.length > 1}
+            onSelectTab={onSelectTab}
+            onCloseTab={onCloseTab}
+          />
+        ))}
 
         {/* Plus button for new tab */}
-        <Pressable
-          style={styles.newTabBtn}
+        <ToolbarButton
+          label="New Tab"
+          tooltip="New Tab"
           onPress={onNewTab}
+          style={styles.newTabBtn}
           testID="browser-new-tab-btn"
-          accessibilityLabel="New Tab"
         >
-          <Plus size={14} color={theme.colors.foregroundMuted} />
-        </Pressable>
+          <ThemedPlus size={14} uniProps={mutedIconMapping} />
+        </ToolbarButton>
       </View>
     </View>
   );

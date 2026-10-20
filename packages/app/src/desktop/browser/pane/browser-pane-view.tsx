@@ -15,6 +15,16 @@ import { InteractiveInspectOverlay, type InspectTargetInfo } from "./interactive
 import { formatGrabPayloadAsText, type BrowserGrabPayload } from "./browser-grab-payload";
 import { BrowserMarkupOverlay } from "./browser-markup-overlay";
 import type { BrowserAnnotationPayload } from "./browser-markup-types";
+
+/**
+ * The browser pane loads a site the user explicitly navigated to, through the
+ * daemon proxy. It is not agent-written markup, so it keeps a real origin and
+ * runs scripts: `allow-same-origin` is what lets the page behave like a site,
+ * and what lets the element inspector read the frame's document.
+ */
+const REMOTE_IFRAME_SANDBOX =
+  "allow-scripts allow-same-origin allow-forms allow-popups allow-modals";
+
 export interface BrowserPaneViewProps {
   browserId: string;
   serverId?: string;
@@ -258,6 +268,13 @@ export function BrowserPaneView({
     void sendToAgent(activeTab.url, activeTab.title);
   }, [activeTab.title, activeTab.url, sendToAgent]);
 
+  const handleOpenImport = useCallback(() => setIsImportOpen(true), []);
+  const handleCloseImport = useCallback(() => setIsImportOpen(false), []);
+  const handleToggleInspect = useCallback(() => setIsInspectActive((prev) => !prev), []);
+  const handleCancelInspect = useCallback(() => setIsInspectActive(false), []);
+  const handleToggleMarkup = useCallback(() => setIsMarkupActive((prev) => !prev), []);
+  const handleCloseMarkup = useCallback(() => setIsMarkupActive(false), []);
+
   // Inject inspector and listen for selected elements
   const injectInspectorIntoIframe = useCallback(() => {
     try {
@@ -312,7 +329,7 @@ export function BrowserPaneView({
     };
     window.addEventListener("message", handleWindowMessage);
     return () => window.removeEventListener("message", handleWindowMessage);
-  }, [activeTab.url, sendToAgent, toast]);
+  }, [activeTab.title, activeTab.url, sendToAgent, toast]);
   const handleImportSession = useCallback(
     async (cookiesText: string, source: "chrome" | "edge" | "manual") => {
       try {
@@ -363,6 +380,54 @@ export function BrowserPaneView({
     [tabs],
   );
 
+  const iframeStyle = useMemo(
+    () =>
+      ({
+        width: "100%",
+        height: "100%",
+        border: "none",
+        display: activeTab.hasLoadError ? "none" : "block",
+      }) as React.CSSProperties,
+    [activeTab.hasLoadError],
+  );
+
+  const handleIframeLoad = useCallback(() => {
+    injectInspectorIntoIframe();
+    setTabs((prev) =>
+      prev.map((t) => (t.id === activeTabId ? { ...t, isLoading: false, hasLoadError: false } : t)),
+    );
+  }, [activeTabId, injectInspectorIntoIframe]);
+
+  const handleIframeError = useCallback(() => {
+    setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, hasLoadError: true } : t)));
+  }, [activeTabId]);
+
+  const handleSelectInspectedElement = useCallback(
+    (target: InspectTargetInfo) => {
+      const elementDesc = `${target.tag}${target.id ? `#${target.id}` : ""}: "${(target.textSnippet || target.textContent || "").slice(0, 40)}"`;
+      toast.show(`Selected element: ${elementDesc}`);
+      setIsInspectActive(false);
+      const payload: BrowserGrabPayload = {
+        url: activeTab.url || target.payload?.url || "",
+        title: activeTab.title || target.payload?.title,
+        target,
+        timestamp: target.payload?.timestamp ?? Date.now(),
+      };
+      const formattedText = formatGrabPayloadAsText(payload);
+      void sendToAgent(activeTab.url, formattedText);
+    },
+    [activeTab.title, activeTab.url, sendToAgent, toast],
+  );
+
+  const handleSendMarkupToAgent = useCallback(
+    (payload: BrowserAnnotationPayload) => {
+      const summary = `Visual Annotation on ${payload.url}:\n${payload.textComment ? `Note: "${payload.textComment}"\n` : ""}${payload.shapes.length} shape(s) drawn (viewport: ${payload.viewport.width}x${payload.viewport.height}).`;
+      toast.show("Annotation sent to agent");
+      void sendToAgent(payload.url, summary);
+    },
+    [sendToAgent, toast],
+  );
+
   return (
     <View style={styles.container} testID={testID}>
       {/* 1. Top Browser Tabs Bar matching Orca */}
@@ -385,13 +450,13 @@ export function BrowserPaneView({
         onGoBack={handleGoBack}
         onGoForward={handleGoForward}
         onReload={handleReload}
-        onOpenImport={() => setIsImportOpen(true)}
+        onOpenImport={handleOpenImport}
         onSendToAgent={handleSendToAgent}
         onCopyAddress={handleCopyAddress}
         onOpenExternally={handleOpenExternally}
-        onToggleInspect={() => setIsInspectActive((prev) => !prev)}
+        onToggleInspect={handleToggleInspect}
         isInspectActive={isInspectActive}
-        onToggleMarkup={() => setIsMarkupActive((prev) => !prev)}
+        onToggleMarkup={handleToggleMarkup}
         isMarkupActive={isMarkupActive}
         onSelectViewportPreset={setViewportPreset}
       />
@@ -403,25 +468,13 @@ export function BrowserPaneView({
               key={activeTab.id}
               ref={iframeRef}
               src={resolveIframeTargetUrl(activeTab.url)}
-              style={{
-                width: "100%",
-                height: "100%",
-                border: "none",
-                display: activeTab.hasLoadError ? "none" : "block",
-              }}
-              onLoad={() => {
-                injectInspectorIntoIframe();
-                setTabs((prev) =>
-                  prev.map((t) =>
-                    t.id === activeTabId ? { ...t, isLoading: false, hasLoadError: false } : t,
-                  ),
-                );
-              }}
-              onError={() =>
-                setTabs((prev) =>
-                  prev.map((t) => (t.id === activeTabId ? { ...t, hasLoadError: true } : t)),
-                )
-              }
+              // A remote site the user asked to visit, not agent-written markup,
+              // so it keeps a real origin and may run scripts. `allow-same-origin`
+              // is also what lets the inspector reach into the frame's document.
+              sandbox={REMOTE_IFRAME_SANDBOX}
+              style={iframeStyle}
+              onLoad={handleIframeLoad}
+              onError={handleIframeError}
             />
           ) : null}
 
@@ -429,20 +482,8 @@ export function BrowserPaneView({
           <InteractiveInspectOverlay
             active={isInspectActive}
             iframeRef={iframeRef}
-            onSelectElement={(target) => {
-              const elementDesc = `${target.tag}${target.id ? `#${target.id}` : ""}: "${(target.textSnippet || target.textContent || "").slice(0, 40)}"`;
-              toast.show(`Selected element: ${elementDesc}`);
-              setIsInspectActive(false);
-              const payload: BrowserGrabPayload = {
-                url: activeTab.url || target.payload?.url || "",
-                title: activeTab.title || target.payload?.title,
-                target,
-                timestamp: target.payload?.timestamp ?? Date.now(),
-              };
-              const formattedText = formatGrabPayloadAsText(payload);
-              void sendToAgent(activeTab.url, formattedText);
-            }}
-            onCancel={() => setIsInspectActive(false)}
+            onSelectElement={handleSelectInspectedElement}
+            onCancel={handleCancelInspect}
           />
 
           {/* Visual Annotation & Markup Overlay */}
@@ -450,12 +491,8 @@ export function BrowserPaneView({
             active={isMarkupActive}
             url={activeTab.url}
             title={activeTab.title}
-            onClose={() => setIsMarkupActive(false)}
-            onSendToAgent={(payload: BrowserAnnotationPayload) => {
-              const summary = `Visual Annotation on ${payload.url}:\n${payload.textComment ? `Note: "${payload.textComment}"\n` : ""}${payload.shapes.length} shape(s) drawn (viewport: ${payload.viewport.width}x${payload.viewport.height}).`;
-              toast.show("Annotation sent to agent");
-              void sendToAgent(payload.url, summary);
-            }}
+            onClose={handleCloseMarkup}
+            onSendToAgent={handleSendMarkupToAgent}
           />
           {/* 4. Orca-style Load Failure Overlay (exact match for user image) */}
           {activeTab.hasLoadError ? (
@@ -473,7 +510,7 @@ export function BrowserPaneView({
       {/* 5. Cookie / Auth Import Dialog */}
       <BrowserImportDialog
         visible={isImportOpen}
-        onClose={() => setIsImportOpen(false)}
+        onClose={handleCloseImport}
         onImport={handleImportSession}
       />
     </View>

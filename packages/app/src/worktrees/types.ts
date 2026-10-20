@@ -169,12 +169,14 @@ export function transformWorktrees(options: TransformWorktreesOptions): Worktree
       status = "error";
     }
 
-    const branchName =
-      raw.branchName && raw.branchName.length > 0
-        ? raw.branchName
-        : raw.head
-          ? raw.head.slice(0, 7)
-          : "detached";
+    // A named branch wins; a detached head falls back to the short commit hash, and a
+    // worktree with neither is detached.
+    let branchName = "detached";
+    if (raw.branchName && raw.branchName.length > 0) {
+      branchName = raw.branchName;
+    } else if (raw.head) {
+      branchName = raw.head.slice(0, 7);
+    }
 
     return {
       worktreePath: raw.worktreePath,

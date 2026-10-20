@@ -238,6 +238,43 @@ vi.mock("@/stores/session-store", () => ({
   ),
 }));
 
+/**
+ * The suite nests `describe > describe > it > waitFor > callback`, one level
+ * past the repo's callback-nesting limit. Naming the innermost assertion and
+ * calling it from the `waitFor` callback keeps the nesting at three.
+ */
+type MockFn = ReturnType<typeof vi.fn>;
+
+function expectBranchRendered(): void {
+  expect(screen.getByTestId("worktree-branch-feat-1")).toBeDefined();
+}
+
+function expectCreateCalled(mockCreate: MockFn): void {
+  expect(mockCreate).toHaveBeenCalledWith({
+    cwd: "/repos/main",
+    worktreeSlug: "feature-xyz",
+    refName: "main",
+  });
+}
+
+function expectArchiveButtonRendered(): void {
+  expect(screen.getByTestId("archive-worktree-button-/repos/main/feat-to-delete")).toBeDefined();
+}
+
+function expectArchiveCalled(confirmDialog: MockFn, mockArchive: MockFn): void {
+  expect(confirmDialog).toHaveBeenCalled();
+  expect(mockArchive).toHaveBeenCalledWith({
+    worktreePath: "/repos/main/feat-to-delete",
+    repoRoot: "/repos/main",
+    branchName: "feat-to-delete",
+    workspaceId: undefined,
+  });
+}
+
+function expectSwitchButtonRendered(): void {
+  expect(screen.getByTestId("switch-worktree-button-/repos/main/feat-switch")).toBeDefined();
+}
+
 describe("Worktree Fleet Manager", () => {
   afterEach(() => {
     cleanup();
@@ -497,9 +534,7 @@ describe("Worktree Fleet Manager", () => {
         }),
       );
 
-      await waitFor(() => {
-        expect(screen.getByTestId("worktree-branch-feat-1")).toBeDefined();
-      });
+      await waitFor(expectBranchRendered);
 
       expect(screen.getByText("feat-1")).toBeDefined();
       expect(screen.getByTestId("worktree-path-/repos/main/feat-1")).toBeDefined();
@@ -545,13 +580,7 @@ describe("Worktree Fleet Manager", () => {
       const submitButton = screen.getByTestId("create-worktree-submit-button");
       fireEvent.click(submitButton);
 
-      await waitFor(() => {
-        expect(mockCreate).toHaveBeenCalledWith({
-          cwd: "/repos/main",
-          worktreeSlug: "feature-xyz",
-          refName: "main",
-        });
-      });
+      await waitFor(expectCreateCalled.bind(null, mockCreate));
 
       expect(mockToastShow).toHaveBeenCalled();
     });
@@ -582,26 +611,14 @@ describe("Worktree Fleet Manager", () => {
         }),
       );
 
-      await waitFor(() => {
-        expect(
-          screen.getByTestId("archive-worktree-button-/repos/main/feat-to-delete"),
-        ).toBeDefined();
-      });
+      await waitFor(expectArchiveButtonRendered);
 
       const archiveButton = screen.getByTestId(
         "archive-worktree-button-/repos/main/feat-to-delete",
       );
       fireEvent.click(archiveButton);
 
-      await waitFor(() => {
-        expect(mockConfirmDialog).toHaveBeenCalled();
-        expect(mockArchive).toHaveBeenCalledWith({
-          worktreePath: "/repos/main/feat-to-delete",
-          repoRoot: "/repos/main",
-          branchName: "feat-to-delete",
-          workspaceId: undefined,
-        });
-      });
+      await waitFor(expectArchiveCalled.bind(null, mockConfirmDialog, mockArchive));
 
       expect(mockToastShow).toHaveBeenCalled();
     });
@@ -635,9 +652,7 @@ describe("Worktree Fleet Manager", () => {
         }),
       );
 
-      await waitFor(() => {
-        expect(screen.getByTestId("switch-worktree-button-/repos/main/feat-switch")).toBeDefined();
-      });
+      await waitFor(expectSwitchButtonRendered);
 
       const switchButton = screen.getByTestId("switch-worktree-button-/repos/main/feat-switch");
       fireEvent.click(switchButton);

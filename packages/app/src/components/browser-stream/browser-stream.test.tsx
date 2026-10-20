@@ -13,6 +13,8 @@ const { theme } = vi.hoisted(() => ({
     borderRadius: { sm: 4, md: 6, lg: 8, xl: 12, full: 999 },
     fontSize: { xs: 11, sm: 13, base: 15 },
     fontWeight: { normal: "400", medium: "500", semibold: "600" },
+    opacity: { 50: 0.5 },
+    shadow: { md: {} },
     colors: {
       surface0: "#000000",
       surface1: "#111111",
@@ -20,8 +22,20 @@ const { theme } = vi.hoisted(() => ({
       surface3: "#333333",
       foreground: "#ffffff",
       foregroundMuted: "#aaaaaa",
+      foregroundExtraMuted: "#777777",
       border: "#444444",
+      borderAccent: "#666666",
       accent: "#0a84ff",
+      accentForeground: "#000000",
+      destructive: "#ff4444",
+      destructiveForeground: "#000000",
+      interactionHighlight: "rgba(255, 255, 255, 0.08)",
+      popover: "#222222",
+      popoverForeground: "#ffffff",
+      palette: {
+        green: { 500: "#22c55e" },
+        red: { 300: "#f87171" },
+      },
     },
   },
 }));
@@ -31,13 +45,28 @@ vi.mock("react-native-unistyles", () => ({
     create: (factory: unknown) =>
       typeof factory === "function" ? (factory as (t: typeof theme) => unknown)(theme) : factory,
   },
-  useUnistyles: () => ({ theme }),
+  useUnistyles: () => ({ theme, rt: { breakpoint: undefined } }),
+  withUnistyles:
+    (Component: React.ComponentType<Record<string, unknown>>) =>
+    ({
+      uniProps,
+      ...rest
+    }: {
+      uniProps?: (theme: unknown) => Record<string, unknown>;
+    } & Record<string, unknown>) => {
+      const themed = uniProps ? uniProps(theme) : {};
+      return React.createElement(Component, { ...rest, ...themed });
+    },
 }));
 
 vi.mock("lucide-react-native", () => {
   const createIcon = (name: string) => (props: Record<string, unknown>) =>
     React.createElement("span", { ...props, "data-icon": name });
   return {
+    Check: createIcon("Check"),
+    CheckCircle: createIcon("CheckCircle"),
+    ChevronLeft: createIcon("ChevronLeft"),
+    ChevronRight: createIcon("ChevronRight"),
     Globe: createIcon("Globe"),
     RefreshCw: createIcon("RefreshCw"),
     X: createIcon("X"),
@@ -56,6 +85,12 @@ vi.mock("@/components/ui/loading-spinner", () => ({
 
 vi.stubGlobal("React", React);
 vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+
+/** A frame with its own metadata URL, hoisted so the JSX prop is not a fresh object. */
+const frameWithMetadata = {
+  data: "abc",
+  metadata: { timestamp: 1234, url: "https://example.com/from-frame" },
+};
 
 import { BrowserStreamViewport } from "./browser-stream-viewport.js";
 
@@ -88,14 +123,7 @@ describe("BrowserStreamViewport", () => {
     expect(urlEl?.textContent).toBe("https://getpaseo.dev");
 
     act(() => {
-      root?.render(
-        <BrowserStreamViewport
-          frame={{
-            data: "abc",
-            metadata: { timestamp: 1234, url: "https://example.com/from-frame" },
-          }}
-        />,
-      );
+      root?.render(<BrowserStreamViewport frame={frameWithMetadata} />);
     });
     urlEl = container?.querySelector('[data-testid="browser-stream-url"]');
     expect(urlEl?.textContent).toBe("https://example.com/from-frame");

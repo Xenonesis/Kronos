@@ -1,6 +1,12 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { Square, ArrowUpRight, Edit3, Trash2, Send, X } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Platform, StyleSheet, Text, View } from "react-native";
+import { Square, ArrowUpRight, Edit3, Trash2, Send, X } from "lucide-react-native";
+import { Button } from "@/components/ui/button";
+import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
+import {
+  EditingTextInput as TextInput,
+  type EditingTextInputHandle,
+} from "@/components/ui/text-input";
 import type {
   MarkupPoint,
   MarkupShape,
@@ -17,6 +23,80 @@ export interface BrowserMarkupOverlayProps {
   testID?: string;
 }
 
+const CROP_FILL = "rgba(16, 185, 129, 0.15)";
+
+function drawBoxShape(ctx: CanvasRenderingContext2D, shape: MarkupShape) {
+  if (
+    shape.x === undefined ||
+    shape.y === undefined ||
+    shape.width === undefined ||
+    shape.height === undefined
+  ) {
+    return;
+  }
+  ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
+  if (shape.type === "crop") {
+    ctx.fillStyle = CROP_FILL;
+    ctx.fillRect(shape.x, shape.y, shape.width, shape.height);
+  }
+}
+
+function drawArrowShape(ctx: CanvasRenderingContext2D, shape: MarkupShape) {
+  if (
+    shape.startX === undefined ||
+    shape.startY === undefined ||
+    shape.endX === undefined ||
+    shape.endY === undefined
+  ) {
+    return;
+  }
+  ctx.beginPath();
+  ctx.moveTo(shape.startX, shape.startY);
+  ctx.lineTo(shape.endX, shape.endY);
+  ctx.stroke();
+
+  // Arrowhead
+  const angle = Math.atan2(shape.endY - shape.startY, shape.endX - shape.startX);
+  const headLen = 12;
+  ctx.beginPath();
+  ctx.moveTo(shape.endX, shape.endY);
+  ctx.lineTo(
+    shape.endX - headLen * Math.cos(angle - Math.PI / 6),
+    shape.endY - headLen * Math.sin(angle - Math.PI / 6),
+  );
+  ctx.moveTo(shape.endX, shape.endY);
+  ctx.lineTo(
+    shape.endX - headLen * Math.cos(angle + Math.PI / 6),
+    shape.endY - headLen * Math.sin(angle + Math.PI / 6),
+  );
+  ctx.stroke();
+}
+
+function drawFreehandShape(ctx: CanvasRenderingContext2D, shape: MarkupShape) {
+  if (!shape.points || shape.points.length <= 1) return;
+  ctx.beginPath();
+  ctx.moveTo(shape.points[0]!.x, shape.points[0]!.y);
+  for (let i = 1; i < shape.points.length; i++) {
+    ctx.lineTo(shape.points[i]!.x, shape.points[i]!.y);
+  }
+  ctx.stroke();
+}
+
+function drawShape(ctx: CanvasRenderingContext2D, shape: MarkupShape) {
+  ctx.strokeStyle = shape.color;
+  ctx.lineWidth = shape.lineWidth;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  if (shape.type === "rect" || shape.type === "crop") {
+    drawBoxShape(ctx, shape);
+  } else if (shape.type === "arrow") {
+    drawArrowShape(ctx, shape);
+  } else if (shape.type === "freehand") {
+    drawFreehandShape(ctx, shape);
+  }
+}
+
 export function BrowserMarkupOverlay({
   active,
   onClose,
@@ -30,6 +110,7 @@ export function BrowserMarkupOverlay({
   const [currentShape, setCurrentShape] = useState<MarkupShape | null>(null);
   const [comment, setComment] = useState("");
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const commentInputRef = useRef<EditingTextInputHandle | null>(null);
   const isDrawingRef = useRef(false);
   const startPosRef = useRef<MarkupPoint>({ x: 0, y: 0 });
 
@@ -44,62 +125,7 @@ export function BrowserMarkupOverlay({
 
     const allShapes = currentShape ? [...shapes, currentShape] : shapes;
     for (const shape of allShapes) {
-      ctx.strokeStyle = shape.color;
-      ctx.lineWidth = shape.lineWidth;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-
-      if (shape.type === "rect" || shape.type === "crop") {
-        if (
-          shape.x !== undefined &&
-          shape.y !== undefined &&
-          shape.width !== undefined &&
-          shape.height !== undefined
-        ) {
-          ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
-          if (shape.type === "crop") {
-            ctx.fillStyle = "rgba(16, 185, 129, 0.15)";
-            ctx.fillRect(shape.x, shape.y, shape.width, shape.height);
-          }
-        }
-      } else if (shape.type === "arrow") {
-        if (
-          shape.startX !== undefined &&
-          shape.startY !== undefined &&
-          shape.endX !== undefined &&
-          shape.endY !== undefined
-        ) {
-          ctx.beginPath();
-          ctx.moveTo(shape.startX, shape.startY);
-          ctx.lineTo(shape.endX, shape.endY);
-          ctx.stroke();
-
-          // Arrowhead
-          const angle = Math.atan2(shape.endY - shape.startY, shape.endX - shape.startX);
-          const headLen = 12;
-          ctx.beginPath();
-          ctx.moveTo(shape.endX, shape.endY);
-          ctx.lineTo(
-            shape.endX - headLen * Math.cos(angle - Math.PI / 6),
-            shape.endY - headLen * Math.sin(angle - Math.PI / 6),
-          );
-          ctx.moveTo(shape.endX, shape.endY);
-          ctx.lineTo(
-            shape.endX - headLen * Math.cos(angle + Math.PI / 6),
-            shape.endY - headLen * Math.sin(angle + Math.PI / 6),
-          );
-          ctx.stroke();
-        }
-      } else if (shape.type === "freehand") {
-        if (shape.points && shape.points.length > 1) {
-          ctx.beginPath();
-          ctx.moveTo(shape.points[0]!.x, shape.points[0]!.y);
-          for (let i = 1; i < shape.points.length; i++) {
-            ctx.lineTo(shape.points[i]!.x, shape.points[i]!.y);
-          }
-          ctx.stroke();
-        }
-      }
+      drawShape(ctx, shape);
     }
   }, [shapes, currentShape]);
 
@@ -119,79 +145,86 @@ export function BrowserMarkupOverlay({
     }
   }, [active, redrawCanvas]);
 
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (Platform.OS !== "web") return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (Platform.OS !== "web") return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
 
-    isDrawingRef.current = true;
-    startPosRef.current = { x, y };
+      isDrawingRef.current = true;
+      startPosRef.current = { x, y };
 
-    const newShape: MarkupShape = {
-      id: Math.random().toString(36).slice(2, 9),
-      type: currentTool,
-      color: currentTool === "crop" ? "#10b981" : "#ef4444",
-      lineWidth: currentTool === "freehand" ? 3 : 2,
-      points: currentTool === "freehand" ? [{ x, y }] : undefined,
-      x,
-      y,
-      width: 0,
-      height: 0,
-      startX: x,
-      startY: y,
-      endX: x,
-      endY: y,
-    };
-    setCurrentShape(newShape);
-  };
+      const newShape: MarkupShape = {
+        id: Math.random().toString(36).slice(2, 9),
+        type: currentTool,
+        color: currentTool === "crop" ? "#10b981" : "#ef4444",
+        lineWidth: currentTool === "freehand" ? 3 : 2,
+        points: currentTool === "freehand" ? [{ x, y }] : undefined,
+        x,
+        y,
+        width: 0,
+        height: 0,
+        startX: x,
+        startY: y,
+        endX: x,
+        endY: y,
+      };
+      setCurrentShape(newShape);
+    },
+    [currentTool],
+  );
 
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawingRef.current || !currentShape || Platform.OS !== "web") return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const currentX = e.clientX - rect.left;
-    const currentY = e.clientY - rect.top;
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (!isDrawingRef.current || !currentShape || Platform.OS !== "web") return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const currentX = e.clientX - rect.left;
+      const currentY = e.clientY - rect.top;
 
-    if (currentTool === "rect" || currentTool === "crop") {
-      const x = Math.min(startPosRef.current.x, currentX);
-      const y = Math.min(startPosRef.current.y, currentY);
-      const width = Math.abs(currentX - startPosRef.current.x);
-      const height = Math.abs(currentY - startPosRef.current.y);
-      setCurrentShape({ ...currentShape, x, y, width, height });
-    } else if (currentTool === "arrow") {
-      setCurrentShape({ ...currentShape, endX: currentX, endY: currentY });
-    } else if (currentTool === "freehand") {
-      const points = currentShape.points
-        ? [...currentShape.points, { x: currentX, y: currentY }]
-        : [{ x: currentX, y: currentY }];
-      setCurrentShape({ ...currentShape, points });
-    }
-  };
+      if (currentTool === "rect" || currentTool === "crop") {
+        const x = Math.min(startPosRef.current.x, currentX);
+        const y = Math.min(startPosRef.current.y, currentY);
+        const width = Math.abs(currentX - startPosRef.current.x);
+        const height = Math.abs(currentY - startPosRef.current.y);
+        setCurrentShape({ ...currentShape, x, y, width, height });
+      } else if (currentTool === "arrow") {
+        setCurrentShape({ ...currentShape, endX: currentX, endY: currentY });
+      } else if (currentTool === "freehand") {
+        const points = currentShape.points
+          ? [...currentShape.points, { x: currentX, y: currentY }]
+          : [{ x: currentX, y: currentY }];
+        setCurrentShape({ ...currentShape, points });
+      }
+    },
+    [currentShape, currentTool],
+  );
 
-  const handleMouseUp = () => {
+  const handleMouseUp = useCallback(() => {
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
     if (currentShape) {
       setShapes((prev) => [...prev, currentShape]);
       setCurrentShape(null);
     }
-  };
+  }, [currentShape]);
 
-  const handleClear = () => {
+  const handleClear = useCallback(() => {
     setShapes([]);
     setCurrentShape(null);
     setComment("");
+    commentInputRef.current?.replaceText("");
     if (Platform.OS === "web" && canvasRef.current) {
       const ctx = canvasRef.current.getContext("2d");
       if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
     }
-  };
+  }, []);
 
-  const handleSend = () => {
+  const handleSend = useCallback(() => {
     const canvas = canvasRef.current;
     const viewport = {
       width: canvas?.width || 800,
@@ -218,7 +251,26 @@ export function BrowserMarkupOverlay({
     });
     handleClear();
     onClose();
-  };
+  }, [comment, handleClear, onClose, onSendToAgent, shapes, title, url]);
+
+  const handleSelectRect = useCallback(() => setCurrentTool("rect"), []);
+  const handleSelectArrow = useCallback(() => setCurrentTool("arrow"), []);
+  const handleSelectFreehand = useCallback(() => setCurrentTool("freehand"), []);
+  const handleSelectCrop = useCallback(() => setCurrentTool("crop"), []);
+
+  const canvasStyle = useMemo(
+    () =>
+      ({
+        position: "absolute",
+        top: 48,
+        left: 0,
+        width: "100%",
+        height: "calc(100% - 48px)",
+        cursor: "crosshair",
+        touchAction: "none",
+      }) as React.CSSProperties,
+    [],
+  );
 
   if (!active) return null;
 
@@ -227,65 +279,80 @@ export function BrowserMarkupOverlay({
       {/* Top Toolbar */}
       <View style={styles.toolbar}>
         <View style={styles.toolGroup}>
-          <Pressable
-            style={[styles.toolBtn, currentTool === "rect" && styles.toolBtnActive]}
-            onPress={() => setCurrentTool("rect")}
-            accessibilityLabel="Rectangle Tool"
+          <ToolbarButton
+            label="Rectangle Tool"
+            tooltip="Rectangle Tool"
+            selected={currentTool === "rect"}
+            onPress={handleSelectRect}
+            style={styles.toolBtn}
           >
             <Square size={16} color={currentTool === "rect" ? "#fff" : "#94a3b8"} />
-          </Pressable>
+          </ToolbarButton>
 
-          <Pressable
-            style={[styles.toolBtn, currentTool === "arrow" && styles.toolBtnActive]}
-            onPress={() => setCurrentTool("arrow")}
-            accessibilityLabel="Arrow Tool"
+          <ToolbarButton
+            label="Arrow Tool"
+            tooltip="Arrow Tool"
+            selected={currentTool === "arrow"}
+            onPress={handleSelectArrow}
+            style={styles.toolBtn}
           >
             <ArrowUpRight size={16} color={currentTool === "arrow" ? "#fff" : "#94a3b8"} />
-          </Pressable>
+          </ToolbarButton>
 
-          <Pressable
-            style={[styles.toolBtn, currentTool === "freehand" && styles.toolBtnActive]}
-            onPress={() => setCurrentTool("freehand")}
-            accessibilityLabel="Pen Tool"
+          <ToolbarButton
+            label="Pen Tool"
+            tooltip="Pen Tool"
+            selected={currentTool === "freehand"}
+            onPress={handleSelectFreehand}
+            style={styles.toolBtn}
           >
             <Edit3 size={16} color={currentTool === "freehand" ? "#fff" : "#94a3b8"} />
-          </Pressable>
+          </ToolbarButton>
 
-          <Pressable
-            style={[styles.toolBtn, currentTool === "crop" && styles.toolBtnActive]}
-            onPress={() => setCurrentTool("crop")}
-            accessibilityLabel="Crop Area"
+          <Button
+            size="xs"
+            variant={currentTool === "crop" ? "default" : "ghost"}
+            style={styles.toolBtn}
+            onPress={handleSelectCrop}
+            testID="browser-markup-crop-btn"
           >
             <Text style={[styles.cropLabel, currentTool === "crop" && styles.cropLabelActive]}>
               CROP
             </Text>
-          </Pressable>
+          </Button>
 
           <View style={styles.divider} />
 
-          <Pressable style={styles.toolBtn} onPress={handleClear} accessibilityLabel="Clear All">
+          <ToolbarButton
+            label="Clear All"
+            tooltip="Clear All"
+            onPress={handleClear}
+            style={styles.toolBtn}
+          >
             <Trash2 size={16} color="#ef4444" />
-          </Pressable>
+          </ToolbarButton>
         </View>
 
         {/* Comment Input */}
         <TextInput
+          ref={commentInputRef}
           style={styles.commentInput}
           placeholder="Describe issue / change for agent..."
           placeholderTextColor="#64748b"
-          value={comment}
+          initialValue={comment}
           onChangeText={setComment}
+          testID="browser-markup-comment-input"
         />
 
         <View style={styles.actionGroup}>
-          <Pressable style={styles.sendBtn} onPress={handleSend}>
+          <Button size="xs" variant="default" style={styles.sendBtn} onPress={handleSend}>
             <Send size={14} color="#fff" />
             <Text style={styles.sendBtnText}>Send to Agent</Text>
-          </Pressable>
+          </Button>
 
-          <Pressable style={styles.closeBtn} onPress={onClose}>
+          <ToolbarButton label="Close" tooltip="Close" onPress={onClose} style={styles.closeBtn}>
             <X size={16} color="#94a3b8" />
-          </Pressable>
+          </ToolbarButton>
         </View>
       </View>
 
@@ -293,15 +360,7 @@ export function BrowserMarkupOverlay({
       {Platform.OS === "web" ? (
         <canvas
           ref={canvasRef as React.LegacyRef<HTMLCanvasElement>}
-          style={{
-            position: "absolute",
-            top: 48,
-            left: 0,
-            width: "100%",
-            height: "calc(100% - 48px)",
-            cursor: "crosshair",
-            touchAction: "none",
-          }}
+          style={canvasStyle}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
@@ -345,9 +404,6 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     justifyContent: "center",
     alignItems: "center",
-  },
-  toolBtnActive: {
-    backgroundColor: "#3b82f6",
   },
   cropLabel: {
     fontSize: 10,
