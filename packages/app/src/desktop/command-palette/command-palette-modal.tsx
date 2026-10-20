@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { Search, Bot, Folder, Play, Globe, Layout, Settings } from "lucide-react-native";
+import { Modal, Platform, StyleSheet, Text, View, type GestureResponderEvent } from "react-native";
+import { Search, Bot, Folder, Play, Globe } from "lucide-react-native";
+import { PressHighlight } from "@/components/ui/press-highlight";
+import { EditingTextInput, type EditingTextInputHandle } from "@/components/ui/text-input";
 import type { PaletteItem } from "./types";
 
 export interface CommandPaletteModalProps {
@@ -8,6 +10,70 @@ export interface CommandPaletteModalProps {
   onClose: () => void;
   items: PaletteItem[];
   testID?: string;
+}
+
+/** How many matches the palette shows at once. */
+const MAX_VISIBLE_ITEMS = 10;
+
+function CategoryIcon({ category }: { category: PaletteItem["category"] }): React.ReactElement {
+  switch (category) {
+    case "agents":
+      return <Bot size={16} color="#3b82f6" />;
+    case "workspaces":
+      return <Folder size={16} color="#eab308" />;
+    case "navigation":
+      return <Globe size={16} color="#10b981" />;
+    case "actions":
+    default:
+      return <Play size={16} color="#a855f7" />;
+  }
+}
+
+interface PaletteResultRowProps {
+  item: PaletteItem;
+  index: number;
+  isSelected: boolean;
+  onClose: () => void;
+  onHover: (index: number) => void;
+}
+
+/**
+ * One match. Its press and hover handlers live here, so neither is rebuilt in the parent's
+ * render scope.
+ */
+function PaletteResultRow({
+  item,
+  index,
+  isSelected,
+  onClose,
+  onHover,
+}: PaletteResultRowProps): React.ReactElement {
+  const handlePress = useCallback(() => {
+    onClose();
+    void item.run();
+  }, [item, onClose]);
+
+  const handleHoverIn = useCallback(() => {
+    onHover(index);
+  }, [index, onHover]);
+
+  return (
+    <PressHighlight
+      accessibilityRole="button"
+      style={[styles.itemRow, isSelected && styles.itemRowSelected]}
+      onPress={handlePress}
+      onHoverIn={handleHoverIn}
+    >
+      <View style={styles.itemIcon}>
+        <CategoryIcon category={item.category} />
+      </View>
+      <View style={styles.itemTextContainer}>
+        <Text style={[styles.itemTitle, isSelected && styles.itemTitleSelected]}>{item.title}</Text>
+        {item.subtitle ? <Text style={styles.itemSubtitle}>{item.subtitle}</Text> : null}
+      </View>
+      {item.shortcut ? <Text style={styles.itemShortcut}>{item.shortcut}</Text> : null}
+    </PressHighlight>
+  );
 }
 
 export function CommandPaletteModal({
@@ -18,7 +84,7 @@ export function CommandPaletteModal({
 }: CommandPaletteModalProps) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const inputRef = useRef<TextInput | null>(null);
+  const inputRef = useRef<EditingTextInputHandle | null>(null);
 
   // Filter items based on query
   const filteredItems = useMemo(() => {
@@ -31,6 +97,8 @@ export function CommandPaletteModal({
         (item.keywords && item.keywords.some((k) => k.toLowerCase().includes(lower))),
     );
   }, [items, query]);
+
+  const visibleItems = useMemo(() => filteredItems.slice(0, MAX_VISIBLE_ITEMS), [filteredItems]);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -46,6 +114,14 @@ export function CommandPaletteModal({
       }, 50);
     }
   }, [isOpen]);
+
+  const handleHover = useCallback((index: number) => {
+    setSelectedIndex(index);
+  }, []);
+
+  const handleStopPropagation = useCallback((event: GestureResponderEvent) => {
+    event.stopPropagation();
+  }, []);
 
   // Keyboard navigation
   const handleKeyDown = useCallback(
@@ -71,20 +147,6 @@ export function CommandPaletteModal({
     [filteredItems, onClose, selectedIndex],
   );
 
-  const getCategoryIcon = (category: PaletteItem["category"]) => {
-    switch (category) {
-      case "agents":
-        return <Bot size={16} color="#3b82f6" />;
-      case "workspaces":
-        return <Folder size={16} color="#eab308" />;
-      case "navigation":
-        return <Globe size={16} color="#10b981" />;
-      case "actions":
-      default:
-        return <Play size={16} color="#a855f7" />;
-    }
-  };
-
   if (!isOpen) return null;
 
   return (
@@ -95,22 +157,26 @@ export function CommandPaletteModal({
       onRequestClose={onClose}
       testID={testID}
     >
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable
+      <PressHighlight
+        accessibilityRole="button"
+        accessibilityLabel="Close command palette"
+        style={styles.backdrop}
+        onPress={onClose}
+      >
+        <PressHighlight
           style={styles.container}
-          onPress={(e) => e.stopPropagation()}
+          onPress={handleStopPropagation}
           // @ts-expect-error onKeyDown for web
           onKeyDown={Platform.OS === "web" ? handleKeyDown : undefined}
         >
           {/* Search Input Bar */}
           <View style={styles.searchBar}>
             <Search size={18} color="#94a3b8" />
-            <TextInput
+            <EditingTextInput
               ref={inputRef}
               style={styles.input}
               placeholder="Type a command, search agents, or open workspace..."
               placeholderTextColor="#64748b"
-              value={query}
               onChangeText={setQuery}
               autoFocus
             />
@@ -119,42 +185,25 @@ export function CommandPaletteModal({
 
           {/* Results List */}
           <View style={styles.list}>
-            {filteredItems.length === 0 ? (
+            {visibleItems.length === 0 ? (
               <View style={styles.emptyContainer}>
                 <Text style={styles.emptyText}>No matching commands or workspaces</Text>
               </View>
             ) : (
-              filteredItems.slice(0, 10).map((item, index) => {
-                const isSelected = index === selectedIndex;
-                return (
-                  <Pressable
-                    key={item.id}
-                    style={[styles.itemRow, isSelected && styles.itemRowSelected]}
-                    onPress={() => {
-                      onClose();
-                      void item.run();
-                    }}
-                    onHoverIn={() => setSelectedIndex(index)}
-                  >
-                    <View style={styles.itemIcon}>{getCategoryIcon(item.category)}</View>
-                    <View style={styles.itemTextContainer}>
-                      <Text style={[styles.itemTitle, isSelected && styles.itemTitleSelected]}>
-                        {item.title}
-                      </Text>
-                      {item.subtitle ? (
-                        <Text style={styles.itemSubtitle}>{item.subtitle}</Text>
-                      ) : null}
-                    </View>
-                    {item.shortcut ? (
-                      <Text style={styles.itemShortcut}>{item.shortcut}</Text>
-                    ) : null}
-                  </Pressable>
-                );
-              })
+              visibleItems.map((item, index) => (
+                <PaletteResultRow
+                  key={item.id}
+                  item={item}
+                  index={index}
+                  isSelected={index === selectedIndex}
+                  onClose={onClose}
+                  onHover={handleHover}
+                />
+              ))
             )}
           </View>
-        </Pressable>
-      </Pressable>
+        </PressHighlight>
+      </PressHighlight>
     </Modal>
   );
 }

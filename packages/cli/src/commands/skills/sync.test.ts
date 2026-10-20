@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Command, Option } from "commander";
 import { createCli } from "../../cli.js";
 import {
   detectAgentEnvironments,
@@ -12,8 +13,45 @@ import {
   runSkillsSyncCommand,
   STANDARD_SKILL_NAMES,
   syncSkills,
+  type AgentEnvironmentInfo,
+  type SkillSyncEntry,
   type SkillsSyncCommandOptions,
 } from "./sync.js";
+
+function everyEnvironmentUndetected(detected: AgentEnvironmentInfo[]): boolean {
+  return detected.every((env) => !env.isDetected);
+}
+
+function everyEnvironmentDetected(detected: AgentEnvironmentInfo[]): boolean {
+  return detected.every((env) => env.isDetected);
+}
+
+function environmentIds(detected: AgentEnvironmentInfo[]): string[] {
+  return detected.map((env) => env.id);
+}
+
+function findEnvironment(
+  detected: AgentEnvironmentInfo[],
+  id: AgentEnvironmentInfo["id"],
+): AgentEnvironmentInfo | undefined {
+  return detected.find((env) => env.id === id);
+}
+
+function allSkillsUpToDate(skills: SkillSyncEntry[] | undefined): boolean {
+  return skills?.every((skill) => skill.status === "up-to-date") ?? false;
+}
+
+function findSkillEntry(skills: SkillSyncEntry[], skillName: string): SkillSyncEntry | undefined {
+  return skills.find((skill) => skill.skill === skillName);
+}
+
+function findCommandByName(commands: Command[], name: string): Command | undefined {
+  return commands.find((command) => command.name() === name);
+}
+
+function optionLongNames(options: Option[]): (string | undefined)[] {
+  return options.map((option) => option.long);
+}
 
 describe("skills sync", () => {
   let tempHome: string;
@@ -33,17 +71,17 @@ describe("skills sync", () => {
   describe("environment detection", () => {
     it("reports all environments unconfigured when none exist", () => {
       const detected = detectAgentEnvironments({ home: tempHome, env: {} });
-      expect(detected.every((env) => !env.isDetected)).toBe(true);
-      expect(detected.map((env) => env.id)).toEqual(["claude", "codex", "opencode"]);
+      expect(everyEnvironmentUndetected(detected)).toBe(true);
+      expect(environmentIds(detected)).toEqual(["claude", "codex", "opencode"]);
     });
 
     it("detects Claude Code when ~/.claude exists", () => {
       mkdirSync(path.join(tempHome, ".claude"), { recursive: true });
 
       const detected = detectAgentEnvironments({ home: tempHome, env: {} });
-      const claude = detected.find((env) => env.id === "claude");
-      const codex = detected.find((env) => env.id === "codex");
-      const opencode = detected.find((env) => env.id === "opencode");
+      const claude = findEnvironment(detected, "claude");
+      const codex = findEnvironment(detected, "codex");
+      const opencode = findEnvironment(detected, "opencode");
 
       expect(claude?.isDetected).toBe(true);
       expect(claude?.name).toBe("Claude Code");
@@ -56,7 +94,7 @@ describe("skills sync", () => {
       mkdirSync(path.join(tempHome, ".codex"), { recursive: true });
 
       const detected = detectAgentEnvironments({ home: tempHome, env: {} });
-      const codex = detected.find((env) => env.id === "codex");
+      const codex = findEnvironment(detected, "codex");
 
       expect(codex?.isDetected).toBe(true);
       expect(codex?.name).toBe("Codex CLI");
@@ -67,7 +105,7 @@ describe("skills sync", () => {
       mkdirSync(path.join(tempHome, ".opencode"), { recursive: true });
 
       const detected = detectAgentEnvironments({ home: tempHome, env: {} });
-      const opencode = detected.find((env) => env.id === "opencode");
+      const opencode = findEnvironment(detected, "opencode");
 
       expect(opencode?.isDetected).toBe(true);
       expect(opencode?.name).toBe("OpenCode");
@@ -81,7 +119,7 @@ describe("skills sync", () => {
 
       const detected = detectAgentEnvironments({ home: tempHome, env: {} });
 
-      expect(detected.every((env) => env.isDetected)).toBe(true);
+      expect(everyEnvironmentDetected(detected)).toBe(true);
     });
 
     it("respects custom environment variables", () => {
@@ -102,9 +140,9 @@ describe("skills sync", () => {
         },
       });
 
-      const claude = detected.find((e) => e.id === "claude");
-      const codex = detected.find((e) => e.id === "codex");
-      const opencode = detected.find((e) => e.id === "opencode");
+      const claude = findEnvironment(detected, "claude");
+      const codex = findEnvironment(detected, "codex");
+      const opencode = findEnvironment(detected, "opencode");
 
       expect(claude?.isDetected).toBe(true);
       expect(claude?.targetDir).toBe(path.join(customClaude, "commands"));
@@ -167,7 +205,7 @@ describe("skills sync", () => {
       expect(secondRun.summary.totalSkipped).toBe(0);
 
       const claude = secondRun.detectedEnvironments[0];
-      expect(claude?.skills.every((s) => s.status === "up-to-date")).toBe(true);
+      expect(allSkillsUpToDate(claude?.skills)).toBe(true);
     });
 
     it("skips existing files that differ without --force", () => {
@@ -188,7 +226,7 @@ describe("skills sync", () => {
       );
 
       const claude = result.detectedEnvironments[0];
-      const handoff = claude?.skills.find((s) => s.skill === "paseo-handoff.md");
+      const handoff = findSkillEntry(claude?.skills ?? [], "paseo-handoff.md");
       expect(handoff?.status).toBe("skipped");
       expect(handoff?.reason).toContain("--force");
     });
@@ -213,7 +251,7 @@ describe("skills sync", () => {
       );
 
       const claude = result.detectedEnvironments[0];
-      const handoff = claude?.skills.find((s) => s.skill === "paseo-handoff.md");
+      const handoff = findSkillEntry(claude?.skills ?? [], "paseo-handoff.md");
       expect(handoff?.status).toBe("updated");
     });
 
@@ -307,13 +345,13 @@ describe("skills sync", () => {
   describe("CLI integration and schema", () => {
     it("registers skills and sync commands on the CLI program", () => {
       const cli = createCli();
-      const skillsCmd = cli.commands.find((c) => c.name() === "skills");
+      const skillsCmd = findCommandByName(cli.commands, "skills");
       expect(skillsCmd).toBeDefined();
 
-      const syncCmd = skillsCmd?.commands.find((c) => c.name() === "sync");
+      const syncCmd = findCommandByName(skillsCmd?.commands ?? [], "sync");
       expect(syncCmd).toBeDefined();
 
-      const options = syncCmd?.options.map((o) => o.long);
+      const options = syncCmd ? optionLongNames(syncCmd.options) : undefined;
       expect(options).toContain("--force");
       expect(options).toContain("--dry-run");
       expect(options).toContain("--home");
@@ -331,8 +369,8 @@ describe("skills sync", () => {
       };
 
       const cli = createCli();
-      const skillsCmd = cli.commands.find((c) => c.name() === "skills");
-      const syncCmd = skillsCmd?.commands.find((c) => c.name() === "sync");
+      const skillsCmd = findCommandByName(cli.commands, "skills");
+      const syncCmd = findCommandByName(skillsCmd?.commands ?? [], "sync");
       expect(syncCmd).toBeDefined();
 
       const result = await runSkillsSyncCommand(commandOptions, syncCmd!);

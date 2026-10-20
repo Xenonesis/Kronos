@@ -284,7 +284,10 @@ export function detectAgentEnvironments(
   ];
 
   return environments.map((e) => ({
-    ...e,
+    id: e.id,
+    name: e.name,
+    baseDir: e.baseDir,
+    targetDir: e.targetDir,
     isDetected: isDirectory(e.baseDir) || isDirectory(e.targetDir),
   }));
 }
@@ -326,6 +329,62 @@ export interface SyncSkillsResult {
   };
 }
 
+interface SkillSyncPlan {
+  skill: StandardSkillName;
+  filePath: string;
+  content: string;
+  force: boolean;
+  dryRun: boolean;
+}
+
+function readExistingSkillContent(filePath: string): string {
+  try {
+    return readFileSync(filePath, "utf8");
+  } catch {
+    // Unreadable file, proceed with update check
+    return "";
+  }
+}
+
+function createSkillEntry(
+  plan: SkillSyncPlan,
+  status: SkillSyncStatus,
+  reason?: string,
+): SkillSyncEntry {
+  return { skill: plan.skill, filePath: plan.filePath, status, reason };
+}
+
+function syncExistingSkill(plan: SkillSyncPlan): SkillSyncEntry {
+  const existingContent = readExistingSkillContent(plan.filePath);
+
+  if (existingContent === plan.content && !plan.force) {
+    return createSkillEntry(plan, "up-to-date", "identical content");
+  }
+
+  if (plan.force) {
+    if (!plan.dryRun) {
+      writeFileSync(plan.filePath, plan.content, "utf8");
+    }
+    return createSkillEntry(plan, "updated", "forced overwrite");
+  }
+
+  return createSkillEntry(plan, "skipped", "file exists and differs (use --force to overwrite)");
+}
+
+function syncSkillFile(plan: SkillSyncPlan): SkillSyncEntry {
+  if (!existsSync(plan.filePath)) {
+    if (!plan.dryRun) {
+      writeFileSync(plan.filePath, plan.content, "utf8");
+    }
+    return createSkillEntry(plan, "created");
+  }
+  return syncExistingSkill(plan);
+}
+
+function countStatus(totals: Record<SkillSyncStatus, number>, status: SkillSyncStatus): void {
+  totals[status] += 1;
+}
+
 export function syncSkills(options: SyncSkillsOptions = {}): SyncSkillsResult {
   const { force = false, dryRun = false, skillsDir } = options;
   const allEnvironments = detectAgentEnvironments(options);
@@ -335,10 +394,12 @@ export function syncSkills(options: SyncSkillsOptions = {}): SyncSkillsResult {
     .map((env) => ({ id: env.id, name: env.name, targetDir: env.targetDir }));
 
   const detectedResults: EnvironmentSyncResult[] = [];
-  let totalCreated = 0;
-  let totalUpdated = 0;
-  let totalSkipped = 0;
-  let totalUpToDate = 0;
+  const totals: Record<SkillSyncStatus, number> = {
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    "up-to-date": 0,
+  };
 
   for (const env of detected) {
     const entries: SkillSyncEntry[] = [];
@@ -348,58 +409,16 @@ export function syncSkills(options: SyncSkillsOptions = {}): SyncSkillsResult {
     }
 
     for (const skillName of STANDARD_SKILL_NAMES) {
-      const content = resolveSkillContent(skillName, skillsDir);
-      const filePath = path.join(env.targetDir, skillName);
-
-      if (!existsSync(filePath)) {
-        if (!dryRun) {
-          writeFileSync(filePath, content, "utf8");
-        }
-        entries.push({
-          skill: skillName,
-          filePath,
-          status: "created",
-        });
-        totalCreated++;
-      } else {
-        let existingContent = "";
-        try {
-          existingContent = readFileSync(filePath, "utf8");
-        } catch {
-          // Unreadable file, proceed with update check
-        }
-
-        const isIdentical = existingContent === content;
-
-        if (isIdentical && !force) {
-          entries.push({
-            skill: skillName,
-            filePath,
-            status: "up-to-date",
-            reason: "identical content",
-          });
-          totalUpToDate++;
-        } else if (force) {
-          if (!dryRun) {
-            writeFileSync(filePath, content, "utf8");
-          }
-          entries.push({
-            skill: skillName,
-            filePath,
-            status: "updated",
-            reason: "forced overwrite",
-          });
-          totalUpdated++;
-        } else {
-          entries.push({
-            skill: skillName,
-            filePath,
-            status: "skipped",
-            reason: "file exists and differs (use --force to overwrite)",
-          });
-          totalSkipped++;
-        }
-      }
+      const plan: SkillSyncPlan = {
+        skill: skillName,
+        filePath: path.join(env.targetDir, skillName),
+        content: resolveSkillContent(skillName, skillsDir),
+        force,
+        dryRun,
+      };
+      const entry = syncSkillFile(plan);
+      entries.push(entry);
+      countStatus(totals, entry.status);
     }
 
     detectedResults.push({
@@ -410,6 +429,11 @@ export function syncSkills(options: SyncSkillsOptions = {}): SyncSkillsResult {
       skills: entries,
     });
   }
+
+  const totalCreated = totals.created;
+  const totalUpdated = totals.updated;
+  const totalSkipped = totals.skipped;
+  const totalUpToDate = totals["up-to-date"];
 
   return {
     dryRun,

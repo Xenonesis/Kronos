@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { Browser, BrowserContext, CDPSession, Page } from "playwright";
+import type { BrowserContext, CDPSession, Page } from "playwright";
 import { PlaywrightBrowserHostClient } from "./playwright-host.js";
 import type { ScreencastFrame } from "./types.js";
 

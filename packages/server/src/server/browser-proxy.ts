@@ -57,54 +57,133 @@ export function injectBaseTagIntoHtml(html: string, targetUrl: string): string {
   return `<base href="${baseHref}">\n${cleaned}`;
 }
 
+interface CookieRequestBody {
+  host?: string;
+  cookies?: string;
+  browser?: "chrome" | "edge" | "brave";
+}
+
+/** Handles the cookie import/remember endpoint. Returns true when the request was answered. */
+function handleCookieRequest(req: Request, res: Response): boolean {
+  if (req.method !== "POST" || !req.path.endsWith("/cookies")) {
+    return false;
+  }
+
+  const { host, cookies, browser } = (req.body as CookieRequestBody) || {};
+  if (browser && host) {
+    const imported = readChromiumCookiesForHost(browser, host);
+    if (imported.cookies) {
+      setDomainCookies(host, imported.cookies);
+    }
+    res.json({ ok: true, host, count: imported.count, browser });
+    return true;
+  }
+  if (host && typeof cookies === "string") {
+    setDomainCookies(host, cookies);
+    res.json({ ok: true, host, count: cookies.split(";").length });
+    return true;
+  }
+  res.status(400).json({ error: "Missing host, cookies, or browser in body" });
+  return true;
+}
+
+function parseProxyTargetUrl(rawTarget: string): URL | null {
+  const normalized =
+    rawTarget.startsWith("http://") || rawTarget.startsWith("https://")
+      ? rawTarget
+      : `https://${rawTarget}`;
+  try {
+    return new URL(normalized);
+  } catch {
+    return null;
+  }
+}
+
+function buildOutboundCookieHeader(req: Request, parsedUrl: URL): string | undefined {
+  // Attach custom imported cookies for this domain if present
+  const customCookies = getDomainCookies(parsedUrl.host) || getDomainCookies(parsedUrl.hostname);
+  if (!customCookies) {
+    return req.headers.cookie;
+  }
+  return `${req.headers.cookie ? `${req.headers.cookie}; ` : ""}${customCookies}`;
+}
+
+/** Streams an HTML upstream response through the base-tag injector. */
+function respondWithInjectedHtml(
+  upstreamRes: http.IncomingMessage,
+  res: Response,
+  parsedUrl: URL,
+  statusCode: number,
+  sanitizedHeaders: Record<string, string | string[] | undefined>,
+): void {
+  const bodyChunks: Buffer[] = [];
+  upstreamRes.on("data", (chunk: Buffer) => {
+    bodyChunks.push(chunk);
+  });
+
+  upstreamRes.on("end", () => {
+    const rawHtml = Buffer.concat(bodyChunks).toString("utf-8");
+    const transformedHtml = injectBaseTagIntoHtml(rawHtml, parsedUrl.toString());
+
+    delete sanitizedHeaders["content-length"];
+    sanitizedHeaders["content-type"] = "text/html; charset=utf-8";
+
+    res.writeHead(statusCode, sanitizedHeaders);
+    res.end(transformedHtml);
+  });
+}
+
+function handleUpstreamResponse(
+  upstreamRes: http.IncomingMessage,
+  res: Response,
+  parsedUrl: URL,
+): void {
+  const statusCode = upstreamRes.statusCode || 200;
+
+  // Handle redirects (301, 302, 303, 307, 308)
+  if (statusCode >= 300 && statusCode < 400 && upstreamRes.headers.location) {
+    try {
+      const redirectTarget = new URL(upstreamRes.headers.location, parsedUrl).toString();
+      res.redirect(`/api/browser-proxy?url=${encodeURIComponent(redirectTarget)}`);
+      return;
+    } catch {
+      // If location is invalid, fall through
+    }
+  }
+
+  const sanitizedHeaders = sanitizeProxyHeaders(upstreamRes.headers);
+  const contentType = String(upstreamRes.headers["content-type"] || "");
+
+  if (contentType.includes("text/html")) {
+    respondWithInjectedHtml(upstreamRes, res, parsedUrl, statusCode, sanitizedHeaders);
+    return;
+  }
+
+  res.writeHead(statusCode, sanitizedHeaders);
+  upstreamRes.pipe(res);
+}
+
 export function createBrowserProxyHandler(logger?: Logger): RequestHandler {
   return (req: Request, res: Response): void => {
     // Cookie management and local browser auto-import endpoint
-    if (req.method === "POST" && req.path.endsWith("/cookies")) {
-      const { host, cookies, browser } =
-        (req.body as { host?: string; cookies?: string; browser?: "chrome" | "edge" | "brave" }) ||
-        {};
-      if (browser && host) {
-        const imported = readChromiumCookiesForHost(browser, host);
-        if (imported.cookies) {
-          setDomainCookies(host, imported.cookies);
-        }
-        res.json({ ok: true, host, count: imported.count, browser });
-        return;
-      }
-      if (host && typeof cookies === "string") {
-        setDomainCookies(host, cookies);
-        res.json({ ok: true, host, count: cookies.split(";").length });
-        return;
-      }
-      res.status(400).json({ error: "Missing host, cookies, or browser in body" });
+    if (handleCookieRequest(req, res)) {
       return;
     }
+
     const rawTarget = req.query.url;
     if (!rawTarget || typeof rawTarget !== "string") {
       res.status(400).json({ error: "Missing required 'url' query parameter" });
       return;
     }
 
-    let parsedUrl: URL;
-    try {
-      const normalized =
-        rawTarget.startsWith("http://") || rawTarget.startsWith("https://")
-          ? rawTarget
-          : `https://${rawTarget}`;
-      parsedUrl = new URL(normalized);
-    } catch {
+    const parsedUrl = parseProxyTargetUrl(rawTarget);
+    if (!parsedUrl) {
       res.status(400).json({ error: "Invalid URL parameter" });
       return;
     }
 
     const client = parsedUrl.protocol === "https:" ? https : http;
-
-    // Attach custom imported cookies for this domain if present
-    const customCookies = getDomainCookies(parsedUrl.host) || getDomainCookies(parsedUrl.hostname);
-    const outboundCookie = customCookies
-      ? `${req.headers.cookie ? `${req.headers.cookie}; ` : ""}${customCookies}`
-      : req.headers.cookie;
+    const outboundCookie = buildOutboundCookieHeader(req, parsedUrl);
 
     const proxyRequest = client.request(
       parsedUrl,
@@ -122,42 +201,7 @@ export function createBrowserProxyHandler(logger?: Logger): RequestHandler {
         },
       },
       (upstreamRes) => {
-        const statusCode = upstreamRes.statusCode || 200;
-
-        // Handle redirects (301, 302, 303, 307, 308)
-        if (statusCode >= 300 && statusCode < 400 && upstreamRes.headers.location) {
-          try {
-            const redirectTarget = new URL(upstreamRes.headers.location, parsedUrl).toString();
-            res.redirect(`/api/browser-proxy?url=${encodeURIComponent(redirectTarget)}`);
-            return;
-          } catch {
-            // If location is invalid, fall through
-          }
-        }
-
-        const sanitizedHeaders = sanitizeProxyHeaders(upstreamRes.headers);
-        const contentType = String(upstreamRes.headers["content-type"] || "");
-
-        if (contentType.includes("text/html")) {
-          let bodyChunks: Buffer[] = [];
-          upstreamRes.on("data", (chunk: Buffer) => {
-            bodyChunks.push(chunk);
-          });
-
-          upstreamRes.on("end", () => {
-            const rawHtml = Buffer.concat(bodyChunks).toString("utf-8");
-            const transformedHtml = injectBaseTagIntoHtml(rawHtml, parsedUrl.toString());
-
-            delete sanitizedHeaders["content-length"];
-            sanitizedHeaders["content-type"] = "text/html; charset=utf-8";
-
-            res.writeHead(statusCode, sanitizedHeaders);
-            res.end(transformedHtml);
-          });
-        } else {
-          res.writeHead(statusCode, sanitizedHeaders);
-          upstreamRes.pipe(res);
-        }
+        handleUpstreamResponse(upstreamRes, res, parsedUrl);
       },
     );
 

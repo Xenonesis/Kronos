@@ -28,6 +28,22 @@ import {
 
 export * from "./types.js";
 
+/**
+ * CDP reports the frame timestamp in seconds since the epoch on some versions and in
+ * milliseconds on others. Normalize both to milliseconds.
+ */
+function normalizeScreencastTimestamp(rawTimestamp: unknown): number {
+  if (typeof rawTimestamp !== "number" || rawTimestamp <= 0) {
+    return Date.now();
+  }
+  return rawTimestamp < 1e11 ? Math.round(rawTimestamp * 1000) : Math.round(rawTimestamp);
+}
+
+/** A page that cannot report its title falls back to its URL. */
+async function readPageTitle(page: Page): Promise<string> {
+  return page.title().catch(() => page.url());
+}
+
 export class PlaywrightBrowserHostClient implements BrowserHostClient {
   public readonly id = "playwright-daemon-browser-host";
   public readonly hostKind = "playwright-daemon";
@@ -213,13 +229,7 @@ export class PlaywrightBrowserHostClient implements BrowserHostClient {
 
       session.on("Page.screencastFrame", async (payload) => {
         try {
-          const rawTs = payload.metadata?.timestamp;
-          const timestamp =
-            typeof rawTs === "number" && rawTs > 0
-              ? rawTs < 1e11
-                ? Math.round(rawTs * 1000)
-                : Math.round(rawTs)
-              : Date.now();
+          const timestamp = normalizeScreencastTimestamp(payload.metadata?.timestamp);
 
           let url = "";
           try {
@@ -450,10 +460,38 @@ export class PlaywrightBrowserHostClient implements BrowserHostClient {
     const { context } = await this.ensureBrowser();
 
     switch (command.command) {
+      case "list_tabs":
+      case "new_tab":
+      case "close_tab":
+        return this.executeTabCommand(command, context);
+      case "navigate":
+      case "snapshot":
+      case "screenshot":
+      case "reload":
+      case "back":
+      case "forward":
+        return this.executeNavigationCommand(command);
+      case "click":
+      case "type":
+      case "scroll":
+      case "evaluate":
+      case "keypress":
+      case "resize":
+        return this.executeInteractionCommand(command);
+      default:
+        return { acknowledged: true };
+    }
+  }
+
+  private async executeTabCommand(
+    command: Extract<BrowserAutomationCommand, { command: "list_tabs" | "new_tab" | "close_tab" }>,
+    context: BrowserContext,
+  ): Promise<Record<string, unknown>> {
+    switch (command.command) {
       case "list_tabs": {
         const tabs = await Promise.all(
           Array.from(this.tabs.entries()).map(async ([id, page]) => {
-            const title = await page.title().catch(() => page.url());
+            const title = await readPageTitle(page);
             const url = page.url();
             const isActive = id === this.activeTabId;
             return {
@@ -478,7 +516,7 @@ export class PlaywrightBrowserHostClient implements BrowserHostClient {
         }
         return {
           browserId: tabId,
-          title: await page.title().catch(() => page.url()),
+          title: await readPageTitle(page),
           url: page.url(),
         };
       }
@@ -495,12 +533,21 @@ export class PlaywrightBrowserHostClient implements BrowserHostClient {
         }
         return { closed: true };
       }
+    }
+  }
 
+  private async executeNavigationCommand(
+    command: Extract<
+      BrowserAutomationCommand,
+      { command: "navigate" | "snapshot" | "screenshot" | "reload" | "back" | "forward" }
+    >,
+  ): Promise<Record<string, unknown>> {
+    switch (command.command) {
       case "navigate": {
         const page = this.getActivePage(command.args?.browserId);
         await page.goto(command.args.url);
         return {
-          title: await page.title().catch(() => page.url()),
+          title: await readPageTitle(page),
           url: page.url(),
         };
       }
@@ -510,7 +557,7 @@ export class PlaywrightBrowserHostClient implements BrowserHostClient {
         const content = await page.content();
         return {
           snapshot: content,
-          title: await page.title().catch(() => page.url()),
+          title: await readPageTitle(page),
           url: page.url(),
         };
       }
@@ -524,6 +571,42 @@ export class PlaywrightBrowserHostClient implements BrowserHostClient {
         };
       }
 
+      case "reload": {
+        const page = this.getActivePage(command.args?.browserId);
+        await page.reload();
+        return {
+          title: await readPageTitle(page),
+          url: page.url(),
+        };
+      }
+
+      case "back": {
+        const page = this.getActivePage(command.args?.browserId);
+        await page.goBack();
+        return {
+          title: await readPageTitle(page),
+          url: page.url(),
+        };
+      }
+
+      case "forward": {
+        const page = this.getActivePage(command.args?.browserId);
+        await page.goForward();
+        return {
+          title: await readPageTitle(page),
+          url: page.url(),
+        };
+      }
+    }
+  }
+
+  private async executeInteractionCommand(
+    command: Extract<
+      BrowserAutomationCommand,
+      { command: "click" | "type" | "scroll" | "evaluate" | "keypress" | "resize" }
+    >,
+  ): Promise<Record<string, unknown>> {
+    switch (command.command) {
       case "click": {
         const page = this.getActivePage(command.args?.browserId);
         if (command.args?.ref) {
@@ -540,6 +623,25 @@ export class PlaywrightBrowserHostClient implements BrowserHostClient {
         return { typed: true };
       }
 
+      case "keypress": {
+        const page = this.getActivePage(command.args?.browserId);
+        if (command.args?.key) {
+          await page.keyboard.press(command.args.key);
+        }
+        return { pressed: true };
+      }
+
+      case "scroll":
+      case "evaluate":
+      case "resize":
+        return this.executeViewportCommand(command);
+    }
+  }
+
+  private async executeViewportCommand(
+    command: Extract<BrowserAutomationCommand, { command: "scroll" | "evaluate" | "resize" }>,
+  ): Promise<Record<string, unknown>> {
+    switch (command.command) {
       case "scroll": {
         const page = this.getActivePage(command.args?.browserId);
         await page.mouse.wheel(command.args?.deltaX ?? 0, command.args?.deltaY ?? 0);
@@ -552,41 +654,6 @@ export class PlaywrightBrowserHostClient implements BrowserHostClient {
         return { result };
       }
 
-      case "reload": {
-        const page = this.getActivePage(command.args?.browserId);
-        await page.reload();
-        return {
-          title: await page.title().catch(() => page.url()),
-          url: page.url(),
-        };
-      }
-
-      case "back": {
-        const page = this.getActivePage(command.args?.browserId);
-        await page.goBack();
-        return {
-          title: await page.title().catch(() => page.url()),
-          url: page.url(),
-        };
-      }
-
-      case "forward": {
-        const page = this.getActivePage(command.args?.browserId);
-        await page.goForward();
-        return {
-          title: await page.title().catch(() => page.url()),
-          url: page.url(),
-        };
-      }
-
-      case "keypress": {
-        const page = this.getActivePage(command.args?.browserId);
-        if (command.args?.key) {
-          await page.keyboard.press(command.args.key);
-        }
-        return { pressed: true };
-      }
-
       case "resize": {
         const page = this.getActivePage(command.args?.browserId);
         if (command.args?.width && command.args?.height) {
@@ -597,9 +664,6 @@ export class PlaywrightBrowserHostClient implements BrowserHostClient {
         }
         return { resized: true };
       }
-
-      default:
-        return { acknowledged: true };
     }
   }
   public async close(): Promise<void> {

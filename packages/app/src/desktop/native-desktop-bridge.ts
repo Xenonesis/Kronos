@@ -11,7 +11,7 @@ export async function updateNativeTrayActiveAgents(count: number): Promise<void>
   }
   try {
     await invokeDesktopCommand("update_active_agents", { count });
-  } catch (error) {
+  } catch {
     // Graceful no-op in non-Tauri / pure web environments
   }
 }
@@ -34,7 +34,7 @@ export async function showNativeTaskCompleteNotification(input: {
       status: input.status ?? "completed",
       details: input.details ?? null,
     });
-  } catch (error) {
+  } catch {
     // Graceful no-op if notification permissions not granted
   }
 }

@@ -2934,8 +2934,15 @@ function appendOpenCodeReasoningPart(
   const isComplete = Boolean(part.time?.end);
   const materialized = state.materializedParts.get(part.id);
   if (materialized?.closed) return;
+  // A part update that carries only a streamed delta has no text yet: the reasoning text
+  // arrives with the completed part, and the delta itself arrives as its own event. Nothing
+  // to emit here, and nothing to remember — the delta owns the materialized text.
+  const partText: string | undefined = part.text;
+  if (!partText) {
+    return;
+  }
   const emittedText = materialized?.messageId === part.messageID ? materialized.emittedText : "";
-  if (!part.text.startsWith(emittedText)) {
+  if (!partText.startsWith(emittedText)) {
     if (isComplete) {
       state.onMaterializationMismatch?.({
         partId: part.id,
@@ -2945,10 +2952,10 @@ function appendOpenCodeReasoningPart(
     }
     return;
   }
-  const suffix = part.text.slice(emittedText.length);
+  const suffix = partText.slice(emittedText.length);
   state.materializedParts.set(part.id, {
     messageId: part.messageID,
-    emittedText: part.text,
+    emittedText: partText,
     closed: isComplete,
   });
   if (suffix) {
@@ -2960,43 +2967,29 @@ function appendOpenCodeReasoningPart(
   }
 }
 
-function appendOpenCodeMessagePartDelta(
-  event: Extract<OpenCodeEvent, { type: "message.part.delta" }>,
+const OPENCODE_REASONING_DELTA_FIELDS: Record<string, true> = {
+  reasoning: true,
+  reasoning_content: true,
+  reasoning_details: true,
+  thought: true,
+  thinking: true,
+};
+
+/** A delta carries reasoning when its part is a reasoning part, or its field names a reasoning field. */
+function isOpenCodeReasoningDelta(knownPartType: string | undefined, field: string): boolean {
+  if (knownPartType === "reasoning") {
+    return true;
+  }
+  return Boolean(OPENCODE_REASONING_DELTA_FIELDS[field]);
+}
+
+function appendOpenCodeAssistantTextDelta(
   state: OpenCodeEventTranslationState,
   events: AgentStreamEvent[],
+  input: { messageID: string; partID: string; delta: string },
 ): void {
-  const { sessionID, messageID, partID, field, delta } = event.properties;
-  if (sessionID !== state.sessionId) {
-    return;
-  }
-  if (!delta || !field) {
-    return;
-  }
+  const { messageID, partID, delta } = input;
   const messageRole = messageID ? state.messageRoles.get(messageID) : undefined;
-  const knownPartType = partID ? state.partTypes.get(partID) : undefined;
-  const isReasoning =
-    knownPartType === "reasoning" ||
-    field === "reasoning" ||
-    field === "reasoning_content" ||
-    field === "reasoning_details" ||
-    field === "thought" ||
-    field === "thinking";
-  if (messageID && state.compactionSummaryMessageIds.has(messageID)) {
-    return;
-  }
-
-  if (isReasoning) {
-    if (!appendOpenCodeMaterializedDelta(state, partID, messageID, delta)) return;
-    events.push({
-      type: "timeline",
-      provider: "opencode",
-      item: { type: "reasoning", text: delta },
-    });
-    return;
-  }
-  if (field !== "text") {
-    return;
-  }
   if (messageRole === "user") {
     return;
   }
@@ -3018,6 +3011,38 @@ function appendOpenCodeMessagePartDelta(
       messageId: assistantMessageId,
     },
   });
+}
+
+function appendOpenCodeMessagePartDelta(
+  event: Extract<OpenCodeEvent, { type: "message.part.delta" }>,
+  state: OpenCodeEventTranslationState,
+  events: AgentStreamEvent[],
+): void {
+  const { sessionID, messageID, partID, field, delta } = event.properties;
+  if (sessionID !== state.sessionId) {
+    return;
+  }
+  if (!delta || !field) {
+    return;
+  }
+  if (messageID && state.compactionSummaryMessageIds.has(messageID)) {
+    return;
+  }
+
+  const knownPartType = partID ? state.partTypes.get(partID) : undefined;
+  if (isOpenCodeReasoningDelta(knownPartType, field)) {
+    if (!appendOpenCodeMaterializedDelta(state, partID, messageID, delta)) return;
+    events.push({
+      type: "timeline",
+      provider: "opencode",
+      item: { type: "reasoning", text: delta },
+    });
+    return;
+  }
+  if (field !== "text") {
+    return;
+  }
+  appendOpenCodeAssistantTextDelta(state, events, { messageID, partID, delta });
 }
 
 function appendOpenCodeMaterializedDelta(
