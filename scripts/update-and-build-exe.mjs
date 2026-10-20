@@ -14,41 +14,24 @@ function run(command, cwd = rootDir) {
   execSync(command, { cwd, stdio: "inherit", shell: true });
 }
 
+function getLatestExe(nsisDir) {
+  if (!existsSync(nsisDir)) return "";
+  const files = readdirSync(nsisDir).filter((f) => f.endsWith("-setup.exe"));
+  if (files.length === 0) return "";
+  files.sort(
+    (a, b) => statSync(path.join(nsisDir, b)).mtimeMs - statSync(path.join(nsisDir, a)).mtimeMs,
+  );
+  return path.join(nsisDir, files[0]);
+}
+
 async function main() {
   console.log("\x1b[1m\x1b[32m=== Kronos Desktop Auto-Pull & .EXE Builder ===\x1b[0m");
 
-  // Step 1: Git Pull
-  console.log("\n\x1b[33m[1/5] Pulling latest changes from git...\x1b[0m");
-  try {
-    run("git pull origin main");
-  } catch {
-    console.warn(
-      "\x1b[33m⚠️ Git pull encountered an issue or working tree has changes, continuing with build...\x1b[0m",
-    );
-  }
+  const args = process.argv.slice(2);
+  const force = args.includes("--force");
+  const quick = args.includes("--quick") || args.includes("--portable");
+  const publish = args.includes("--publish");
 
-  // Step 2: Build internal packages
-  console.log("\n\x1b[33m[2/5] Building core packages & server...\x1b[0m");
-  run("npm run build --workspace=@getpaseo/protocol");
-  run("npm run build --workspace=@getpaseo/client");
-  run("npm run build --workspace=@getpaseo/relay");
-  run("npm run build --workspace=@getpaseo/highlight");
-  run("npm run build --workspace=@getpaseo/plugin");
-  run("npm run build --workspace=@getpaseo/server");
-
-  // Step 3: Export Web Bundle
-  console.log("\n\x1b[33m[3/5] Exporting frontend web bundle...\x1b[0m");
-  run("npx expo export --platform web", path.join(rootDir, "packages", "app"));
-
-  // Step 4: Prepare Server Distribution Assets
-  console.log("\n\x1b[33m[4/5] Preparing lean server-dist assets...\x1b[0m");
-  run("node prepare-dist.mjs", path.join(rootDir, "packages", "desktop-tauri"));
-
-  // Step 5: Compile Tauri NSIS Installer
-  console.log("\n\x1b[33m[5/5] Compiling Tauri NSIS installer .exe...\x1b[0m");
-  run("npx tauri build --bundles nsis", path.join(rootDir, "packages", "desktop-tauri"));
-
-  // Verification
   const nsisDir = path.join(
     rootDir,
     "packages",
@@ -59,19 +42,134 @@ async function main() {
     "bundle",
     "nsis",
   );
+  const existingExe = getLatestExe(nsisDir);
 
-  let exePath = "";
-  if (existsSync(nsisDir)) {
-    const files = readdirSync(nsisDir).filter((f) => f.endsWith("-setup.exe"));
-    if (files.length > 0) {
-      // pick newest
-      files.sort(
-        (a, b) => statSync(path.join(nsisDir, b)).mtimeMs - statSync(path.join(nsisDir, a)).mtimeMs,
-      );
-      exePath = path.join(nsisDir, files[0]);
+  // Step 1: Check Git Repository & Pull
+  console.log("\n\x1b[33m[1/5] Checking git repository status & pulling updates...\x1b[0m");
+  let oldHead = "";
+  try {
+    oldHead = execSync("git rev-parse HEAD", { cwd: rootDir }).toString().trim();
+  } catch {}
+
+  try {
+    const pullOutput = execSync("git pull origin main", { cwd: rootDir }).toString();
+    console.log(pullOutput.trim());
+  } catch {
+    console.warn(
+      "\x1b[33m⚠️ Git pull encountered an issue, proceeding with local changes...\x1b[0m",
+    );
+  }
+
+  let newHead = "";
+  try {
+    newHead = execSync("git rev-parse HEAD", { cwd: rootDir }).toString().trim();
+  } catch {}
+
+  let changedFiles = [];
+  if (oldHead && newHead && oldHead !== newHead) {
+    try {
+      changedFiles = execSync(`git diff --name-only ${oldHead} ${newHead}`, { cwd: rootDir })
+        .toString()
+        .trim()
+        .split(/\r?\n/)
+        .filter(Boolean);
+      console.log(`\x1b[36mℹ ${changedFiles.length} file(s) changed in this update.\x1b[0m`);
+    } catch {}
+  }
+
+  const serverDistExists = existsSync(path.join(rootDir, "packages/desktop-tauri/server-dist/dist"));
+  const appDistExists = existsSync(path.join(rootDir, "packages/app/dist"));
+  const isUpToDate = oldHead && newHead && oldHead === newHead;
+
+  if (isUpToDate && !force && existingExe && existsSync(existingExe)) {
+    console.log("\n\x1b[32m✔ Repository already up to date! Existing installer found:\x1b[0m");
+    console.log(`  \x1b[37mPath:\x1b[0m ${existingExe}`);
+    console.log("\x1b[90m(Run with '--force' to rebuild anyway: update-desktop-exe.bat --force)\x1b[0m");
+    return;
+  }
+
+  const serverNeedsBuild =
+    force ||
+    !serverDistExists ||
+    changedFiles.length === 0 ||
+    changedFiles.some(
+      (f) =>
+        f.startsWith("packages/protocol/") ||
+        f.startsWith("packages/client/") ||
+        f.startsWith("packages/relay/") ||
+        f.startsWith("packages/highlight/") ||
+        f.startsWith("packages/plugin/") ||
+        f.startsWith("packages/server/") ||
+        f === "package.json" ||
+        f === "package-lock.json",
+    );
+
+  const appNeedsBuild =
+    force ||
+    !appDistExists ||
+    changedFiles.length === 0 ||
+    changedFiles.some(
+      (f) =>
+        f.startsWith("packages/app/") ||
+        f === "package.json" ||
+        f === "package-lock.json",
+    );
+
+  // Step 2: Build internal packages
+  console.log("\n\x1b[33m[2/5] Core packages & server build...\x1b[0m");
+  if (serverNeedsBuild) {
+    run("npm run build --workspace=@getpaseo/protocol");
+    run("npm run build --workspace=@getpaseo/client");
+    run("npm run build --workspace=@getpaseo/relay");
+    run("npm run build --workspace=@getpaseo/highlight");
+    run("npm run build --workspace=@getpaseo/plugin");
+    run("npm run build --workspace=@getpaseo/server");
+  } else {
+    console.log("\x1b[32m⏩ [SKIP] Core packages & server unchanged. Reusing cached build.\x1b[0m");
+  }
+
+  // Step 3: Export Web Bundle
+  console.log("\n\x1b[33m[3/5] Frontend web bundle export...\x1b[0m");
+  if (appNeedsBuild) {
+    run("npx expo export --platform web", path.join(rootDir, "packages", "app"));
+  } else {
+    console.log("\x1b[32m⏩ [SKIP] Frontend files unchanged. Reusing cached web export.\x1b[0m");
+  }
+
+  // Step 4: Prepare Server Distribution Assets
+  console.log("\n\x1b[33m[4/5] Preparing lean server-dist assets...\x1b[0m");
+  run("node prepare-dist.mjs", path.join(rootDir, "packages", "desktop-tauri"));
+
+  // Step 5: Compile Tauri Executable / Installer
+  if (quick) {
+    console.log("\n\x1b[33m[5/5] Compiling Fast Release Binary (skipping NSIS compression)...\x1b[0m");
+    run(
+      "cargo build --release --manifest-path src-tauri/Cargo.toml",
+      path.join(rootDir, "packages", "desktop-tauri"),
+    );
+    const releaseExe = path.join(
+      rootDir,
+      "packages",
+      "desktop-tauri",
+      "src-tauri",
+      "target",
+      "release",
+      "paseo-desktop.exe",
+    );
+    if (existsSync(releaseExe)) {
+      const stats = statSync(releaseExe);
+      console.log("\n\x1b[1m\x1b[32m✔ SUCCESS! Fast release executable created:\x1b[0m");
+      console.log(`  \x1b[37mPath:\x1b[0m ${releaseExe}`);
+      console.log(`  \x1b[37mSize:\x1b[0m ${(stats.size / (1024 * 1024)).toFixed(2)} MB`);
+      return;
     }
   }
 
+  console.log("\n\x1b[33m[5/5] Compiling Tauri NSIS installer .exe...\x1b[0m");
+  run("npx tauri build --bundles nsis", path.join(rootDir, "packages", "desktop-tauri"));
+
+  // Verification
+  const exePath = getLatestExe(nsisDir);
   if (exePath && existsSync(exePath)) {
     const stats = statSync(exePath);
     const sizeMb = (stats.size / (1024 * 1024)).toFixed(2);
@@ -86,7 +184,7 @@ async function main() {
       console.log(`  \x1b[37mPersistent Latest Asset:\x1b[0m ${persistentPath}`);
     }
 
-    if (process.argv.includes("--publish")) {
+    if (publish) {
       console.log("\n\x1b[33m[*] Uploading latest .exe to GitHub Releases...\x1b[0m");
       try {
         execSync(

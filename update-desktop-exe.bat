@@ -4,7 +4,7 @@ cd /d "%~dp0"
 echo ===================================================
 echo     Kronos Desktop Auto-Pull and .EXE Builder
 echo ===================================================
-node scripts/update-and-build-exe.mjs
+node scripts/update-and-build-exe.mjs %*
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo [ERROR] Build failed! Check the logs above.
