@@ -414,7 +414,7 @@ function FilePanePresentation({
 
   return (
     <View style={styles.container} testID="workspace-file-pane">
-      {preview && (previewMode === "source" || panel?.id !== "builtin:html") ? (
+      {preview ? (
         <FilePanelBar
           size={preview.size}
           lineCount={lineCount}
@@ -553,22 +553,18 @@ function EditableFilePane({
 
   return (
     <View style={styles.container} testID="workspace-file-pane">
-      {showSource || panel?.id !== "builtin:html" ? (
-        <FilePanelBar
-          size={
-            snapshot.observedVersion.status === "ready"
-              ? snapshot.observedVersion.size
-              : preview.size
-          }
-          lineCount={snapshot.content.split("\n").length}
-          editorStatus={snapshot.status}
-          cursor={showSource ? cursor : undefined}
-          vimMode={showSource ? vimMode : null}
-          conflict={conflict}
-          mode={mode}
-          onModeChange={onModeChange}
-        />
-      ) : null}
+      <FilePanelBar
+        size={
+          snapshot.observedVersion.status === "ready" ? snapshot.observedVersion.size : preview.size
+        }
+        lineCount={snapshot.content.split("\n").length}
+        editorStatus={snapshot.status}
+        cursor={showSource ? cursor : undefined}
+        vimMode={showSource ? vimMode : null}
+        conflict={conflict}
+        mode={mode}
+        onModeChange={onModeChange}
+      />
       {showSource ? (
         <ThemedFileEditorView
           model={model}

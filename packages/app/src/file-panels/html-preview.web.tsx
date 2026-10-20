@@ -25,7 +25,20 @@ import {
 import { withPreviewCsp } from "./html-preview-csp";
 import { useInlinedHtmlAssets } from "./use-inlined-html-assets";
 
-const SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-modals";
+// A file preview renders agent-written HTML, so it gets the same treatment as
+// the native path: `allow-scripts` alone. That gives the frame an opaque
+// origin, so a plan page can run its own scripts (Excalidraw, charts) but
+// cannot reach the app's DOM, cookies, or storage, and cannot navigate the top
+// window. Adding `allow-same-origin` to a `srcdoc` frame is worse than a no-op:
+// the frame inherits the app's own origin, so the sandboxed document could read
+// the parent DOM and the app's storage outright. Agent-written HTML is not
+// trusted markup, and the CSP in html-preview-csp.ts is what bounds the rest.
+//
+// A remote URL is a different case: it is a real site the user asked to visit,
+// loaded through the daemon proxy. It keeps `allow-same-origin` so the site
+// behaves like a site (its own origin, its own storage) and can be inspected.
+const FILE_SANDBOX = "allow-scripts";
+const REMOTE_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-modals";
 
 interface HtmlTabState {
   id: string;
@@ -322,7 +335,7 @@ export function FileHtmlPreview({
               title={activeTab.title || "HTML Preview"}
               srcDoc={inlinedDocument}
               style={iframeInnerStyle}
-              sandbox={SANDBOX}
+              sandbox={FILE_SANDBOX}
               referrerPolicy="no-referrer"
             />
           )}
@@ -334,7 +347,7 @@ export function FileHtmlPreview({
               title={activeTab.title || "HTML Preview"}
               src={resolveIframeTargetUrl(activeTab.url)}
               style={iframeInnerStyle}
-              sandbox={SANDBOX}
+              sandbox={REMOTE_SANDBOX}
               referrerPolicy="no-referrer"
               onError={handleIframeError}
             />

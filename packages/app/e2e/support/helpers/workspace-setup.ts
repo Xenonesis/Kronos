@@ -76,7 +76,14 @@ export async function seedProjectForWorkspaceSetup(
 }
 
 export function projectNameFromPath(repoPath: string): string {
-  return repoPath.replace(/\/+$/, "").split("/").findLast(Boolean) ?? repoPath;
+  // Windows temp paths are backslash-separated, so splitting on "/" alone
+  // yields the whole path as the project name and the sidebar lookup misses.
+  return (
+    repoPath
+      .replace(/[\\/]+$/, "")
+      .split(/[\\/]/)
+      .findLast(Boolean) ?? repoPath
+  );
 }
 
 export async function openHomeWithProject(page: Page, repoPath: string): Promise<void> {

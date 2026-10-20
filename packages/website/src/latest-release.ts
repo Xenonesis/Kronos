@@ -28,14 +28,28 @@ const GITHUB_RELEASES_URL = "https://api.github.com/repos/Xenonesis/Kronos/relea
 const RELEASE_CACHE_KEY = "github-release:kronos:v1";
 const ANDROID_RELEASE_CACHE_KEY = "github-android-release:kronos:v1";
 
+/**
+ * Windows release assets are named after the build, not the brand, so the
+ * patterns below match both the Tauri NSIS output (`Kronos_0.12.0_x64-setup.exe`)
+ * and the legacy electron-builder output (`Paseo-Setup-0.12.0-x64.exe`). The
+ * architecture suffix is what separates the two Windows builds.
+ */
 function pickWindowsAssets(assets: GitHubAsset[]) {
-  const nsisSetup = assets.find((asset) => /Kronos.*-setup\.exe$/i.test(asset.name));
-  const genericKronos = assets.find((asset) => /Kronos.*\.exe$/i.test(asset.name));
-  const fallback = assets.find((asset) => asset.name.endsWith(".exe"));
-  return {
-    x64: (nsisSetup ?? genericKronos ?? fallback)?.name ?? null,
-    arm64: null,
-  };
+  const windows = assets.filter((asset) => asset.name.toLowerCase().endsWith(".exe"));
+  const arm64 =
+    windows.find((asset) => /[-_]arm64(?:[-_].*)?\.exe$/i.test(asset.name))?.name ?? null;
+
+  // Never hand an arm64 build to the x64 slot: the download link would name the
+  // wrong architecture and the installer would not run.
+  const x64Candidates = windows.filter((asset) => !/arm64/i.test(asset.name));
+  const x64 =
+    x64Candidates.find((asset) => /[-_]x64[-_]setup\.exe$/i.test(asset.name))?.name ??
+    x64Candidates.find((asset) => /[-_]x64\.exe$/i.test(asset.name))?.name ??
+    x64Candidates.find((asset) => /[-_]setup\.exe$/i.test(asset.name))?.name ??
+    x64Candidates[0]?.name ??
+    null;
+
+  return { x64, arm64 };
 }
 
 function versionFromTag(tag: string): string {

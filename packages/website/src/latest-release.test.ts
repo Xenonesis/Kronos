@@ -27,19 +27,23 @@ function desktopRelease({
   version,
   prerelease = false,
   draft = false,
+  assets,
 }: {
   version: string;
   prerelease?: boolean;
   draft?: boolean;
+  assets?: string[];
 }): GitHubRelease {
   return {
     tag_name: `v${version}`,
-    assets: [
-      { name: `Paseo-${version}-arm64.dmg` },
-      { name: "Paseo-x86_64.AppImage" },
-      { name: `Paseo-Setup-${version}-x64.exe` },
-      { name: `Paseo-Setup-${version}-arm64.exe` },
-    ],
+    assets: (
+      assets ?? [
+        `Paseo-${version}-arm64.dmg`,
+        "Paseo-x86_64.AppImage",
+        `Paseo-Setup-${version}-x64.exe`,
+        `Paseo-Setup-${version}-arm64.exe`,
+      ]
+    ).map((name) => ({ name })),
     prerelease,
     draft,
   };
@@ -91,5 +95,34 @@ describe("selectReleaseChannels", () => {
 
     expect(channels.stable.version).toBe("0.2.4");
     expect(channels.beta?.version).toBe("0.3.0-beta.1");
+  });
+
+  it("picks the Tauri NSIS x64 installer and the arm64 build apart", () => {
+    const channels = selectReleaseChannels([
+      desktopRelease({
+        version: "0.12.0",
+        assets: [
+          "Kronos-0.12.0-arm64.dmg",
+          "Kronos-0.12.0-x86_64.AppImage",
+          "Kronos_0.12.0_x64-setup.exe",
+          "Kronos_0.12.0_arm64-setup.exe",
+        ],
+      }),
+    ]);
+
+    expect(channels.stable.windowsX64Asset).toBe("Kronos_0.12.0_x64-setup.exe");
+    expect(channels.stable.windowsArm64Asset).toBe("Kronos_0.12.0_arm64-setup.exe");
+  });
+
+  it("never offers an arm64 build in the x64 slot", () => {
+    const channels = selectReleaseChannels([
+      desktopRelease({
+        version: "0.12.1",
+        assets: ["Kronos_0.12.1_arm64-setup.exe"],
+      }),
+    ]);
+
+    expect(channels.stable.windowsX64Asset).toBeNull();
+    expect(channels.stable.windowsArm64Asset).toBe("Kronos_0.12.1_arm64-setup.exe");
   });
 });
