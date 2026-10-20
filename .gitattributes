@@ -1,3 +1,15 @@
 # Patch files must keep LF endings. patch-package parses them line by line and
 # fails to match context when the working tree has CRLF (Windows autocrlf).
 patches/*.patch text eol=lf
+
+# Check out text files with LF endings everywhere. The repository stores LF
+# blobs, but a Windows `core.autocrlf=true` checkout rewrites them to CRLF.
+# The formatter and linter then report problems CI does not see, and vice
+# versa, so local and CI results drift apart. Pinning the working tree to LF
+# keeps both sides identical.
+* text=auto eol=lf
+
+# Windows scripts are the exception: cmd.exe and PowerShell need CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
