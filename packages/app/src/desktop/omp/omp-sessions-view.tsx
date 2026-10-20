@@ -1,23 +1,30 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { FlatList, Platform, Pressable, Text, View } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import {
-  Bot,
-  Calendar,
-  Clock,
-  Compass,
-  FileCode,
-  Folder,
-  Layers,
-  Play,
-  RotateCw,
-  Search,
-  Sparkles,
-  Terminal,
-} from "lucide-react-native";
+import { FlatList, Platform, Text, View } from "react-native";
+import type { ListRenderItem } from "react-native";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { Bot, Clock, FileCode, Folder, RotateCw, Sparkles, Terminal } from "lucide-react-native";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { PressHighlight } from "@/components/ui/press-highlight";
+import { mutedIconColorMapping } from "@/components/ui/icon-color";
 import { OmpSessionInspectorModal, type OmpSessionDetailData } from "./omp-session-inspector-modal";
+
+const ThemedBot = withUnistyles(Bot);
+const ThemedClock = withUnistyles(Clock);
+const ThemedFileCode = withUnistyles(FileCode);
+const ThemedFolder = withUnistyles(Folder);
+const ThemedSparkles = withUnistyles(Sparkles);
+const ThemedTerminal = withUnistyles(Terminal);
+const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
+
+/** The active filter pill paints its glyph in the same white as its label. */
+const whiteIconMapping = () => ({ color: "#ffffff" });
+
+/** The OMP glyph is always the brand green, in the pill and the page title alike. */
+const brandGreenIconMapping = () => ({ color: "#10b981" });
+
+/** The refresh glyph takes the button's own colour, which is muted for a ghost button. */
+const renderRefreshIcon = (color: string) => <RotateCw size={14} color={color} />;
 
 export interface OmpSessionItem {
   id: string;
@@ -38,11 +45,166 @@ export interface OmpSessionsViewProps {
   onSelectResumeSession?: (session: OmpSessionItem) => void;
 }
 
+function formatSessionActivity(lastActivityAt: string): string {
+  return new Date(lastActivityAt).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+const sessionKeyExtractor = (item: OmpSessionItem) => item.id;
+
+function SessionCard({
+  item,
+  isInspecting,
+  onInspect,
+  onResume,
+}: {
+  item: OmpSessionItem;
+  isInspecting: boolean;
+  onInspect: (session: OmpSessionItem) => void;
+  onResume?: (session: OmpSessionItem) => void;
+}) {
+  const handleInspect = useCallback(() => {
+    onInspect(item);
+  }, [item, onInspect]);
+
+  const handleResume = useCallback(() => {
+    onResume?.(item);
+  }, [item, onResume]);
+
+  const timeFormatted = formatSessionActivity(item.lastActivityAt);
+
+  return (
+    <View style={styles.card}>
+      <View style={styles.cardHeader}>
+        <View style={styles.cardTitleCol}>
+          <View style={styles.metaBadgeRow}>
+            <View style={styles.ompPill}>
+              <ThemedBot size={11} uniProps={brandGreenIconMapping} />
+              <Text style={styles.ompPillText}>OMP</Text>
+            </View>
+            {item.model ? (
+              <View style={styles.modelPill}>
+                <ThemedSparkles size={11} uniProps={mutedIconColorMapping} />
+                <Text style={styles.modelPillText}>{item.model}</Text>
+              </View>
+            ) : null}
+          </View>
+          <Text style={styles.cardTitle} numberOfLines={1}>
+            {item.title || item.id}
+          </Text>
+        </View>
+        <View style={styles.dateCol}>
+          <ThemedClock size={12} uniProps={mutedIconColorMapping} />
+          <Text style={styles.dateText}>{timeFormatted}</Text>
+        </View>
+      </View>
+
+      {/* Directory Path */}
+      <View style={styles.pathRow}>
+        <ThemedFolder size={12} uniProps={mutedIconColorMapping} />
+        <Text style={styles.pathText} numberOfLines={1}>
+          {item.cwd}
+        </Text>
+      </View>
+
+      {/* Prompt Preview */}
+      {item.firstPrompt ? (
+        <Text style={styles.promptPreview} numberOfLines={2}>
+          {item.firstPrompt}
+        </Text>
+      ) : null}
+
+      {/* Stats & Actions */}
+      <View style={styles.cardFooter}>
+        <View style={styles.statsRow}>
+          <View style={styles.statItem}>
+            <ThemedTerminal size={12} uniProps={mutedIconColorMapping} />
+            <Text style={styles.statText}>{item.turnCount} turns</Text>
+          </View>
+          <View style={styles.statItem}>
+            <ThemedFileCode size={12} uniProps={mutedIconColorMapping} />
+            <Text style={styles.statText}>{item.toolCallCount} tool calls</Text>
+          </View>
+        </View>
+
+        <View style={styles.actionsRow}>
+          <Button
+            variant="outline"
+            size="xs"
+            loading={isInspecting}
+            onPress={handleInspect}
+            testID={`inspect-session-${item.id}`}
+          >
+            <Text style={styles.inspectBtnText}>Inspect Diff</Text>
+          </Button>
+          {onResume ? (
+            <Button
+              variant="default"
+              size="xs"
+              onPress={handleResume}
+              testID={`resume-session-${item.id}`}
+            >
+              <Text style={styles.resumeBtnText}>Resume</Text>
+            </Button>
+          ) : null}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function OmpSessionsBody({
+  isLoading,
+  sessions,
+  filterProjectOnly,
+  renderItem,
+}: {
+  isLoading: boolean;
+  sessions: OmpSessionItem[];
+  filterProjectOnly: boolean;
+  renderItem: ListRenderItem<OmpSessionItem>;
+}) {
+  if (isLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ThemedLoadingSpinner size="small" uniProps={mutedIconColorMapping} />
+        <Text style={styles.loadingText}>Loading OMP sessions...</Text>
+      </View>
+    );
+  }
+
+  if (sessions.length === 0) {
+    return (
+      <View style={styles.emptyContainer}>
+        <ThemedBot size={36} uniProps={mutedIconColorMapping} />
+        <Text style={styles.emptyTitle}>No OMP Sessions Found</Text>
+        <Text style={styles.emptySubtitle}>
+          {filterProjectOnly
+            ? "No past OMP sessions found for this directory. Try turning off 'This Project Only'."
+            : "No past sessions found in ~/.omp/agent/sessions."}
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <FlatList
+      data={sessions}
+      keyExtractor={sessionKeyExtractor}
+      renderItem={renderItem}
+      contentContainerStyle={styles.listContent}
+    />
+  );
+}
+
 export function OmpSessionsView({
   currentProjectCwd,
   onSelectResumeSession,
 }: OmpSessionsViewProps) {
-  const { theme } = useUnistyles();
   const [sessions, setSessions] = useState<OmpSessionItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [filterProjectOnly, setFilterProjectOnly] = useState(Boolean(currentProjectCwd));
@@ -50,6 +212,7 @@ export function OmpSessionsView({
     useState<OmpSessionDetailData | null>(null);
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   const [inspectLoading, setInspectLoading] = useState(false);
+  const [inspectingSessionId, setInspectingSessionId] = useState<string | null>(null);
 
   const fetchSessions = useCallback(async () => {
     setIsLoading(true);
@@ -80,6 +243,7 @@ export function OmpSessionsView({
 
   const handleOpenInspector = useCallback(async (session: OmpSessionItem) => {
     setInspectLoading(true);
+    setInspectingSessionId(session.id);
     try {
       const res = await fetch(
         `http://127.0.0.1:6767/api/omp-sessions/${encodeURIComponent(session.id)}`,
@@ -95,6 +259,7 @@ export function OmpSessionsView({
       // failed to fetch session details
     } finally {
       setInspectLoading(false);
+      setInspectingSessionId(null);
     }
   }, []);
 
@@ -109,92 +274,29 @@ export function OmpSessionsView({
     [sessions, onSelectResumeSession],
   );
 
-  const renderSessionItem = ({ item }: { item: OmpSessionItem }) => {
-    const timeFormatted = new Date(item.lastActivityAt).toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+  const handleToggleProjectFilter = useCallback(() => {
+    setFilterProjectOnly((value) => !value);
+  }, []);
 
-    return (
-      <View style={styles.card}>
-        <View style={styles.cardHeader}>
-          <View style={styles.cardTitleCol}>
-            <View style={styles.metaBadgeRow}>
-              <View style={styles.ompPill}>
-                <Bot size={11} color="#10b981" />
-                <Text style={styles.ompPillText}>OMP</Text>
-              </View>
-              {item.model ? (
-                <View style={styles.modelPill}>
-                  <Sparkles size={11} color={theme.colors.foregroundMuted} />
-                  <Text style={styles.modelPillText}>{item.model}</Text>
-                </View>
-              ) : null}
-            </View>
-            <Text style={styles.cardTitle} numberOfLines={1}>
-              {item.title || item.id}
-            </Text>
-          </View>
-          <View style={styles.dateCol}>
-            <Clock size={12} color={theme.colors.foregroundMuted} />
-            <Text style={styles.dateText}>{timeFormatted}</Text>
-          </View>
-        </View>
+  const handleRefresh = useCallback(() => {
+    void fetchSessions();
+  }, [fetchSessions]);
 
-        {/* Directory Path */}
-        <View style={styles.pathRow}>
-          <Folder size={12} color={theme.colors.foregroundMuted} />
-          <Text style={styles.pathText} numberOfLines={1}>
-            {item.cwd}
-          </Text>
-        </View>
+  const handleCloseInspector = useCallback(() => {
+    setIsInspectorOpen(false);
+  }, []);
 
-        {/* Prompt Preview */}
-        {item.firstPrompt ? (
-          <Text style={styles.promptPreview} numberOfLines={2}>
-            {item.firstPrompt}
-          </Text>
-        ) : null}
-
-        {/* Stats & Actions */}
-        <View style={styles.cardFooter}>
-          <View style={styles.statsRow}>
-            <View style={styles.statItem}>
-              <Terminal size={12} color={theme.colors.foregroundMuted} />
-              <Text style={styles.statText}>{item.turnCount} turns</Text>
-            </View>
-            <View style={styles.statItem}>
-              <FileCode size={12} color={theme.colors.foregroundMuted} />
-              <Text style={styles.statText}>{item.toolCallCount} tool calls</Text>
-            </View>
-          </View>
-
-          <View style={styles.actionsRow}>
-            <Button
-              variant="outline"
-              size="xs"
-              onPress={() => void handleOpenInspector(item)}
-              testID={`inspect-session-${item.id}`}
-            >
-              <Text style={styles.inspectBtnText}>Inspect Diff</Text>
-            </Button>
-            {onSelectResumeSession ? (
-              <Button
-                variant="default"
-                size="xs"
-                onPress={() => onSelectResumeSession(item)}
-                testID={`resume-session-${item.id}`}
-              >
-                <Text style={styles.resumeBtnText}>Resume</Text>
-              </Button>
-            ) : null}
-          </View>
-        </View>
-      </View>
-    );
-  };
+  const renderSessionItem = useCallback<ListRenderItem<OmpSessionItem>>(
+    ({ item }) => (
+      <SessionCard
+        item={item}
+        isInspecting={inspectLoading && inspectingSessionId === item.id}
+        onInspect={handleOpenInspector}
+        onResume={onSelectResumeSession}
+      />
+    ),
+    [handleOpenInspector, inspectLoading, inspectingSessionId, onSelectResumeSession],
+  );
 
   return (
     <View style={styles.container}>
@@ -202,7 +304,7 @@ export function OmpSessionsView({
       <View style={styles.topBar}>
         <View style={styles.topBarLeft}>
           <View style={styles.titleWithIcon}>
-            <Bot size={18} color="#10b981" />
+            <ThemedBot size={18} uniProps={brandGreenIconMapping} />
             <Text style={styles.pageTitle}>OMP Sessions Explorer</Text>
           </View>
           <Text style={styles.pageSubtitle}>
@@ -212,13 +314,16 @@ export function OmpSessionsView({
 
         <View style={styles.topBarRight}>
           {currentProjectCwd ? (
-            <Pressable
+            <PressHighlight
               style={[styles.filterToggle, filterProjectOnly && styles.filterToggleActive]}
-              onPress={() => setFilterProjectOnly(!filterProjectOnly)}
+              highlightStyle={styles.pressed}
+              onPress={handleToggleProjectFilter}
+              accessibilityRole="button"
+              accessibilityLabel="This Project Only"
             >
-              <Folder
+              <ThemedFolder
                 size={13}
-                color={filterProjectOnly ? "#ffffff" : theme.colors.foregroundMuted}
+                uniProps={filterProjectOnly ? whiteIconMapping : mutedIconColorMapping}
               />
               <Text
                 style={[
@@ -228,50 +333,32 @@ export function OmpSessionsView({
               >
                 This Project Only
               </Text>
-            </Pressable>
+            </PressHighlight>
           ) : null}
 
           <Button
             variant="ghost"
             size="xs"
-            onPress={() => void fetchSessions()}
+            leftIcon={renderRefreshIcon}
+            onPress={handleRefresh}
             accessibilityLabel="Refresh sessions"
-          >
-            <RotateCw size={14} color={theme.colors.foregroundMuted} />
-          </Button>
+          />
         </View>
       </View>
 
       {/* Main Sessions List */}
-      {isLoading ? (
-        <View style={styles.loadingContainer}>
-          <LoadingSpinner color={theme.colors.foregroundMuted} />
-          <Text style={styles.loadingText}>Loading OMP sessions...</Text>
-        </View>
-      ) : sessions.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <Bot size={36} color={theme.colors.foregroundMuted} />
-          <Text style={styles.emptyTitle}>No OMP Sessions Found</Text>
-          <Text style={styles.emptySubtitle}>
-            {filterProjectOnly
-              ? "No past OMP sessions found for this directory. Try turning off 'This Project Only'."
-              : "No past sessions found in ~/.omp/agent/sessions."}
-          </Text>
-        </View>
-      ) : (
-        <FlatList
-          data={sessions}
-          keyExtractor={(item) => item.id}
-          renderItem={renderSessionItem}
-          contentContainerStyle={styles.listContent}
-        />
-      )}
+      <OmpSessionsBody
+        isLoading={isLoading}
+        sessions={sessions}
+        filterProjectOnly={filterProjectOnly}
+        renderItem={renderSessionItem}
+      />
 
       {/* Inspect Session Modal */}
       <OmpSessionInspectorModal
         visible={isInspectorOpen}
         session={selectedSessionForInspect}
-        onClose={() => setIsInspectorOpen(false)}
+        onClose={handleCloseInspector}
         onResume={handleResume}
       />
     </View>
@@ -339,6 +426,9 @@ const styles = StyleSheet.create((theme) => ({
   filterToggleTextActive: {
     color: "#ffffff",
     fontWeight: theme.fontWeight.semibold,
+  },
+  pressed: {
+    backgroundColor: theme.colors.interactionHighlight,
   },
   listContent: {
     padding: theme.spacing[4],

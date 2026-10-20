@@ -1,6 +1,10 @@
-import React, { useState } from "react";
-import { View, StyleSheet, Pressable, Platform } from "react-native";
-import { Columns, Square } from "lucide-react-native";
+import React from "react";
+import { View, StyleSheet } from "react-native";
+import { Columns } from "lucide-react-native";
+import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
+
+/** The share of the split the primary pane takes. */
+const DEFAULT_SPLIT_RATIO = 0.5;
 
 export interface SplitLayoutContainerProps {
   primary: React.ReactNode;
@@ -17,7 +21,7 @@ export function SplitLayoutContainer({
   onToggleSplit,
   testID = "split-layout-container",
 }: SplitLayoutContainerProps) {
-  const [splitRatio, setSplitRatio] = useState(0.5);
+  const splitRatio = DEFAULT_SPLIT_RATIO;
 
   if (!isSplit) {
     return (
@@ -35,13 +39,14 @@ export function SplitLayoutContainer({
       {/* Resize Divider */}
       <View style={styles.divider}>
         {onToggleSplit ? (
-          <Pressable
-            style={styles.toggleBtn}
+          <ToolbarButton
+            testID="split-layout-toggle-button"
+            label="Toggle Single/Split View"
             onPress={onToggleSplit}
-            accessibilityLabel="Toggle Single/Split View"
+            compact
           >
             <Columns size={12} color="#94a3b8" />
-          </Pressable>
+          </ToolbarButton>
         ) : null}
       </View>
 
@@ -76,12 +81,5 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     cursor: "col-resize" as unknown as undefined,
-  },
-  toggleBtn: {
-    padding: 2,
-    backgroundColor: "#0f172a",
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: "#334155",
   },
 });

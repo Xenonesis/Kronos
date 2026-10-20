@@ -1,6 +1,6 @@
-import React, { useState } from "react";
-import { Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import React, { useCallback, useState } from "react";
+import { Modal, Platform, ScrollView, Text, View } from "react-native";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import {
   X,
   FileCode,
@@ -9,11 +9,22 @@ import {
   User,
   Clock,
   Sparkles,
-  ArrowRight,
-  ChevronRight,
   Code2,
+  type LucideIcon,
 } from "lucide-react-native";
 import { Button } from "@/components/ui/button";
+import { PressHighlight } from "@/components/ui/press-highlight";
+import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
+import { mutedIconColorMapping } from "@/components/ui/icon-color";
+import type { Theme } from "@/styles/theme";
+
+const ThemedX = withUnistyles(X);
+const ThemedSparkles = withUnistyles(Sparkles);
+const ThemedTerminal = withUnistyles(Terminal);
+const ThemedFileCode = withUnistyles(FileCode);
+const ThemedClock = withUnistyles(Clock);
+
+const foregroundIconMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 
 export interface OmpTurnToolCall {
   id: string;
@@ -67,14 +78,228 @@ export interface OmpSessionInspectorModalProps {
   onResume: (session: OmpSessionDetailData) => void;
 }
 
+type InspectorTab = "timeline" | "files";
+
+/** The glyph that names who spoke in a turn, and the colour it is drawn in. */
+const TURN_ROLE_GLYPHS: Record<OmpTurn["role"], { Icon: LucideIcon; color: string }> = {
+  user: { Icon: User, color: "#3b82f6" },
+  assistant: { Icon: Bot, color: "#10b981" },
+  toolResult: { Icon: Terminal, color: "#a855f7" },
+  custom: { Icon: Terminal, color: "#a855f7" },
+  system: { Icon: Terminal, color: "#a855f7" },
+};
+
+function TurnRoleGlyph({ role }: { role: OmpTurn["role"] }) {
+  const { Icon, color } = TURN_ROLE_GLYPHS[role];
+  return <Icon size={13} color={color} />;
+}
+
+function InspectorHeader({
+  session,
+  onClose,
+  onResume,
+}: {
+  session: OmpSessionDetailData;
+  onClose: () => void;
+  onResume: () => void;
+}) {
+  return (
+    <View style={styles.header}>
+      <View style={styles.headerTitleCol}>
+        <View style={styles.badgeRow}>
+          <View style={styles.ompBadge}>
+            <Bot size={12} color="#10b981" />
+            <Text style={styles.ompBadgeText}>OMP Session</Text>
+          </View>
+          {session.model ? (
+            <View style={styles.modelBadge}>
+              <ThemedSparkles size={11} uniProps={mutedIconColorMapping} />
+              <Text style={styles.modelBadgeText}>{session.model}</Text>
+            </View>
+          ) : null}
+        </View>
+        <Text style={styles.title} numberOfLines={1}>
+          {session.title || session.id}
+        </Text>
+        <Text style={styles.subtitle} numberOfLines={1}>
+          {session.cwd}
+        </Text>
+      </View>
+
+      <View style={styles.headerActions}>
+        <Button variant="default" size="sm" onPress={onResume} testID="resume-omp-session-btn">
+          <Text style={styles.resumeBtnText}>Resume in Paseo</Text>
+        </Button>
+        <ToolbarButton
+          label="Close"
+          onPress={onClose}
+          style={styles.closeBtn}
+          testID="omp-inspector-close-btn"
+        >
+          <ThemedX size={18} uniProps={mutedIconColorMapping} />
+        </ToolbarButton>
+      </View>
+    </View>
+  );
+}
+
+function InspectorTabBar({
+  activeTab,
+  turnCount,
+  fileCount,
+  onSelectTimeline,
+  onSelectFiles,
+}: {
+  activeTab: InspectorTab;
+  turnCount: number;
+  fileCount: number;
+  onSelectTimeline: () => void;
+  onSelectFiles: () => void;
+}) {
+  const isTimeline = activeTab === "timeline";
+  const isFiles = activeTab === "files";
+
+  return (
+    <View style={styles.tabBar}>
+      <PressHighlight
+        style={[styles.tab, isTimeline && styles.tabActive]}
+        highlightStyle={styles.pressed}
+        onPress={onSelectTimeline}
+        accessibilityRole="button"
+        accessibilityLabel="Timeline"
+      >
+        <ThemedTerminal
+          size={14}
+          uniProps={isTimeline ? foregroundIconMapping : mutedIconColorMapping}
+        />
+        <Text style={[styles.tabText, isTimeline && styles.tabTextActive]}>
+          Timeline ({turnCount})
+        </Text>
+      </PressHighlight>
+
+      <PressHighlight
+        style={[styles.tab, isFiles && styles.tabActive]}
+        highlightStyle={styles.pressed}
+        onPress={onSelectFiles}
+        accessibilityRole="button"
+        accessibilityLabel="Files Changed"
+      >
+        <ThemedFileCode
+          size={14}
+          uniProps={isFiles ? foregroundIconMapping : mutedIconColorMapping}
+        />
+        <Text style={[styles.tabText, isFiles && styles.tabTextActive]}>
+          Files Changed ({fileCount})
+        </Text>
+      </PressHighlight>
+    </View>
+  );
+}
+
+function TurnCard({ turn }: { turn: OmpTurn }) {
+  return (
+    <View style={styles.turnCard}>
+      <View style={styles.turnHeader}>
+        <View style={styles.turnRolePill}>
+          <TurnRoleGlyph role={turn.role} />
+          <Text style={styles.turnRoleText}>{turn.role.toUpperCase()}</Text>
+        </View>
+        {turn.timestamp ? (
+          <View style={styles.timestampRow}>
+            <ThemedClock size={11} uniProps={mutedIconColorMapping} />
+            <Text style={styles.timestampText}>
+              {new Date(turn.timestamp).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+
+      {turn.text ? <Text style={styles.turnBodyText}>{turn.text}</Text> : null}
+
+      {turn.toolCalls && turn.toolCalls.length > 0 ? (
+        <View style={styles.toolCallsWrap}>
+          {turn.toolCalls.map((tc) => (
+            <View key={tc.id} style={styles.toolCallItem}>
+              <Code2 size={12} color="#f59e0b" />
+              <Text style={styles.toolCallName}>{tc.name}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      {turn.toolResult ? (
+        <View style={styles.toolResultBox}>
+          <Text style={styles.toolResultLabel}>
+            Result: {turn.toolResult.toolName || turn.toolResult.toolCallId}
+          </Text>
+          <Text style={styles.toolResultSnippet} numberOfLines={3}>
+            {typeof turn.toolResult.content === "string"
+              ? turn.toolResult.content
+              : JSON.stringify(turn.toolResult.content)}
+          </Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function TurnTimeline({ turns }: { turns: OmpTurn[] }) {
+  return (
+    <View style={styles.timelineList}>
+      {turns.map((turn, index) => (
+        <TurnCard key={turn.id || `turn-${index}`} turn={turn} />
+      ))}
+    </View>
+  );
+}
+
+function FileDiffList({ fileDiffs }: { fileDiffs: OmpFileDiffItem[] }) {
+  if (fileDiffs.length === 0) {
+    return (
+      <View style={styles.filesList}>
+        <View style={styles.emptyFilesBox}>
+          <Text style={styles.emptyFilesText}>No file modifications recorded in this session.</Text>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.filesList}>
+      {fileDiffs.map((diff, index) => (
+        <View key={diff.path || `diff-${index}`} style={styles.diffItem}>
+          <View style={styles.diffHeader}>
+            <FileCode size={16} color="#3b82f6" />
+            <Text style={styles.diffPathText}>{diff.path}</Text>
+            <View style={styles.diffToolTag}>
+              <Text style={styles.diffToolText}>{diff.tool}</Text>
+            </View>
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 export function OmpSessionInspectorModal({
   visible,
   session,
   onClose,
   onResume,
 }: OmpSessionInspectorModalProps) {
-  const { theme } = useUnistyles();
-  const [activeTab, setActiveTab] = useState<"timeline" | "files">("timeline");
+  const [activeTab, setActiveTab] = useState<InspectorTab>("timeline");
+
+  const handleResume = useCallback(() => {
+    if (session) {
+      onResume(session);
+    }
+  }, [onResume, session]);
+
+  const handleSelectTimeline = useCallback(() => setActiveTab("timeline"), []);
+  const handleSelectFiles = useCallback(() => setActiveTab("files"), []);
 
   if (!visible || !session) return null;
 
@@ -82,162 +307,19 @@ export function OmpSessionInspectorModal({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
         <View style={styles.container}>
-          {/* Header */}
-          <View style={styles.header}>
-            <View style={styles.headerTitleCol}>
-              <View style={styles.badgeRow}>
-                <View style={styles.ompBadge}>
-                  <Bot size={12} color="#10b981" />
-                  <Text style={styles.ompBadgeText}>OMP Session</Text>
-                </View>
-                {session.model ? (
-                  <View style={styles.modelBadge}>
-                    <Sparkles size={11} color={theme.colors.foregroundMuted} />
-                    <Text style={styles.modelBadgeText}>{session.model}</Text>
-                  </View>
-                ) : null}
-              </View>
-              <Text style={styles.title} numberOfLines={1}>
-                {session.title || session.id}
-              </Text>
-              <Text style={styles.subtitle} numberOfLines={1}>
-                {session.cwd}
-              </Text>
-            </View>
-
-            <View style={styles.headerActions}>
-              <Button
-                variant="default"
-                size="sm"
-                onPress={() => onResume(session)}
-                testID="resume-omp-session-btn"
-              >
-                <Text style={styles.resumeBtnText}>Resume in Paseo</Text>
-              </Button>
-              <Pressable
-                onPress={onClose}
-                style={styles.closeBtn}
-                accessibilityRole="button"
-                accessibilityLabel="Close"
-              >
-                <X size={18} color={theme.colors.foregroundMuted} />
-              </Pressable>
-            </View>
-          </View>
-
-          {/* Tab Selector */}
-          <View style={styles.tabBar}>
-            <Pressable
-              style={[styles.tab, activeTab === "timeline" && styles.tabActive]}
-              onPress={() => setActiveTab("timeline")}
-            >
-              <Terminal
-                size={14}
-                color={
-                  activeTab === "timeline" ? theme.colors.foreground : theme.colors.foregroundMuted
-                }
-              />
-              <Text style={[styles.tabText, activeTab === "timeline" && styles.tabTextActive]}>
-                Timeline ({session.turns.length})
-              </Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.tab, activeTab === "files" && styles.tabActive]}
-              onPress={() => setActiveTab("files")}
-            >
-              <FileCode
-                size={14}
-                color={
-                  activeTab === "files" ? theme.colors.foreground : theme.colors.foregroundMuted
-                }
-              />
-              <Text style={[styles.tabText, activeTab === "files" && styles.tabTextActive]}>
-                Files Changed ({session.fileDiffs.length})
-              </Text>
-            </Pressable>
-          </View>
-
-          {/* Content Area */}
+          <InspectorHeader session={session} onClose={onClose} onResume={handleResume} />
+          <InspectorTabBar
+            activeTab={activeTab}
+            turnCount={session.turns.length}
+            fileCount={session.fileDiffs.length}
+            onSelectTimeline={handleSelectTimeline}
+            onSelectFiles={handleSelectFiles}
+          />
           <ScrollView style={styles.contentScroll} contentContainerStyle={styles.contentInner}>
             {activeTab === "timeline" ? (
-              <View style={styles.timelineList}>
-                {session.turns.map((turn, index) => (
-                  <View key={turn.id || `turn-${index}`} style={styles.turnCard}>
-                    <View style={styles.turnHeader}>
-                      <View style={styles.turnRolePill}>
-                        {turn.role === "user" ? (
-                          <User size={13} color="#3b82f6" />
-                        ) : turn.role === "assistant" ? (
-                          <Bot size={13} color="#10b981" />
-                        ) : (
-                          <Terminal size={13} color="#a855f7" />
-                        )}
-                        <Text style={styles.turnRoleText}>{turn.role.toUpperCase()}</Text>
-                      </View>
-                      {turn.timestamp ? (
-                        <View style={styles.timestampRow}>
-                          <Clock size={11} color={theme.colors.foregroundMuted} />
-                          <Text style={styles.timestampText}>
-                            {new Date(turn.timestamp).toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </Text>
-                        </View>
-                      ) : null}
-                    </View>
-
-                    {turn.text ? <Text style={styles.turnBodyText}>{turn.text}</Text> : null}
-
-                    {turn.toolCalls && turn.toolCalls.length > 0 ? (
-                      <View style={styles.toolCallsWrap}>
-                        {turn.toolCalls.map((tc) => (
-                          <View key={tc.id} style={styles.toolCallItem}>
-                            <Code2 size={12} color="#f59e0b" />
-                            <Text style={styles.toolCallName}>{tc.name}</Text>
-                          </View>
-                        ))}
-                      </View>
-                    ) : null}
-
-                    {turn.toolResult ? (
-                      <View style={styles.toolResultBox}>
-                        <Text style={styles.toolResultLabel}>
-                          Result: {turn.toolResult.toolName || turn.toolResult.toolCallId}
-                        </Text>
-                        <Text style={styles.toolResultSnippet} numberOfLines={3}>
-                          {typeof turn.toolResult.content === "string"
-                            ? turn.toolResult.content
-                            : JSON.stringify(turn.toolResult.content)}
-                        </Text>
-                      </View>
-                    ) : null}
-                  </View>
-                ))}
-              </View>
+              <TurnTimeline turns={session.turns} />
             ) : (
-              <View style={styles.filesList}>
-                {session.fileDiffs.length === 0 ? (
-                  <View style={styles.emptyFilesBox}>
-                    <Text style={styles.emptyFilesText}>
-                      No file modifications recorded in this session.
-                    </Text>
-                  </View>
-                ) : (
-                  session.fileDiffs.map((diff, index) => (
-                    <View key={diff.path || `diff-${index}`} style={styles.diffItem}>
-                      <View style={styles.diffHeader}>
-                        <FileCode size={16} color="#3b82f6" />
-                        <Text style={styles.diffPathText}>{diff.path}</Text>
-                        <View style={styles.diffToolTag}>
-                          <Text style={styles.diffToolText}>{diff.tool}</Text>
-                        </View>
-                      </View>
-                    </View>
-                  ))
-                )}
-              </View>
+              <FileDiffList fileDiffs={session.fileDiffs} />
             )}
           </ScrollView>
         </View>
@@ -369,6 +451,9 @@ const styles = StyleSheet.create((theme) => ({
   tabTextActive: {
     color: theme.colors.foreground,
     fontWeight: theme.fontWeight.semibold,
+  },
+  pressed: {
+    backgroundColor: theme.colors.interactionHighlight,
   },
   contentScroll: {
     flex: 1,

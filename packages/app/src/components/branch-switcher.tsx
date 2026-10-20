@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
 import { GitBranch } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -11,6 +11,7 @@ import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-
 import { useToast } from "@/contexts/toast-context";
 import { useBranchSwitcher } from "@/hooks/use-branch-switcher";
 import { ToolbarLabelSelectTrigger } from "@/components/ui/toolbar-label-trigger";
+import { PressHighlight } from "@/components/ui/press-highlight";
 import { WorktreeFleetDrawer } from "@/worktrees/worktree-fleet-drawer";
 
 interface BranchSwitcherProps {
@@ -75,14 +76,16 @@ export function BranchSwitcher({
     ),
     [branchLeadingSlot],
   );
+  const handleOpenWorktrees = useCallback(() => {
+    setIsOpen(false);
+    setIsWorktreesOpen(true);
+  }, [setIsOpen]);
+  const handleCloseWorktrees = useCallback(() => setIsWorktreesOpen(false), []);
   const renderFooter = useMemo(
     () => (
-      <Pressable
+      <PressHighlight
         testID="manage-worktrees-trigger"
-        onPress={() => {
-          setIsOpen(false);
-          setIsWorktreesOpen(true);
-        }}
+        onPress={handleOpenWorktrees}
         style={styles.manageWorktreesFooter}
         accessibilityRole="button"
         accessibilityLabel={t("worktrees.manageWorktrees", "Manage Worktrees")}
@@ -91,9 +94,9 @@ export function BranchSwitcher({
         <Text style={styles.manageWorktreesText}>
           {t("worktrees.manageWorktrees", "Manage Worktrees")}
         </Text>
-      </Pressable>
+      </PressHighlight>
     ),
-    [setIsOpen, t],
+    [handleOpenWorktrees, t],
   );
 
   if (!currentBranchName) {
@@ -140,7 +143,7 @@ export function BranchSwitcher({
       {workspaceDirectory ? (
         <WorktreeFleetDrawer
           visible={isWorktreesOpen}
-          onClose={() => setIsWorktreesOpen(false)}
+          onClose={handleCloseWorktrees}
           cwd={workspaceDirectory}
           serverId={serverId}
         />
