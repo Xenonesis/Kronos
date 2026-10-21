@@ -34,8 +34,41 @@ export const DEVELOPER_OVERLAY_GUARD = () => {
     return true;
   };
 
-  attachStyle();
-  document.addEventListener("DOMContentLoaded", attachStyle);
+  // The LogBox toast carries `role="button"`, and its accessible name can
+  // match a control the test is looking for — an error mentioning "Failed to
+  // send" collides with the composer's "Send message" button and turns a role
+  // query into a strict-mode violation.
+  //
+  // The overlay is hidden from the accessibility tree rather than removed, so
+  // the text it carries is still readable by the text queries that assert on
+  // it.
+  const hideDevOverlayFromRoles = () => {
+    for (const host of Array.from(document.querySelectorAll("#error-toast"))) {
+      if (host.getAttribute("aria-hidden") !== "true") {
+        host.setAttribute("aria-hidden", "true");
+      }
+    }
+  };
+
+  const apply = () => {
+    attachStyle();
+    hideDevOverlayFromRoles();
+  };
+
+  apply();
+  document.addEventListener("DOMContentLoaded", apply);
+  // The LogBox host is injected after the first paint, so it still needs
+  // watching for. The observer is scoped to the body's direct children so it
+  // does not run on every mutation in the app.
+  const observer = new MutationObserver(hideDevOverlayFromRoles);
+  const observeBody = () => {
+    if (document.body) observer.observe(document.body, { childList: true });
+  };
+  if (document.body) {
+    observeBody();
+  } else {
+    document.addEventListener("DOMContentLoaded", observeBody);
+  }
 };
 
 /**
