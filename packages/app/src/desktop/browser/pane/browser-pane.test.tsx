@@ -80,25 +80,105 @@ vi.mock("react-native-unistyles", () => ({
   withUnistyles: (c: unknown) => c,
 }));
 
+// The tooltip trigger renders its child as-is (`asChild`) and merges the
+// trigger's own props onto it. The mock has to do the same, or the toolbar
+// buttons lose their `testID` and the accessibility props they carry. The
+// trigger's props are react-native names, so they are translated the way
+// react-native-web would translate them.
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => children,
-  TooltipTrigger: ({ children }: { children: React.ReactNode }) => children,
+  TooltipTrigger: ({
+    children,
+    testID,
+    accessibilityLabel,
+    accessibilityRole,
+    accessibilityState,
+    onPress,
+    ...props
+  }: {
+    children: React.ReactNode;
+    testID?: string;
+    accessibilityLabel?: string;
+    accessibilityRole?: string;
+    accessibilityState?: { selected?: boolean; disabled?: boolean } | undefined;
+    onPress?: () => void;
+  }) => {
+    const child = React.Children.only(children);
+    if (!React.isValidElement(child)) return child;
+    const childProps = child.props as Record<string, unknown>;
+    return React.cloneElement(child as React.ReactElement<Record<string, unknown>>, {
+      ...childProps,
+      ...props,
+      ...(testID ? { "data-testid": testID } : {}),
+      ...(accessibilityLabel ? { "aria-label": accessibilityLabel } : {}),
+      ...(accessibilityRole ? { role: accessibilityRole } : {}),
+      ...(accessibilityState?.selected !== undefined
+        ? { "aria-selected": accessibilityState.selected }
+        : {}),
+      ...(accessibilityState?.disabled !== undefined
+        ? { "aria-disabled": accessibilityState.disabled }
+        : {}),
+      ...(onPress ? { onClick: onPress } : {}),
+    });
+  },
   TooltipContent: ({ children }: { children: React.ReactNode }) => children,
 }));
 
-vi.mock("lucide-react-native", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock("lucide-react-native", () => {
   const createIcon =
     (name: string) =>
     ({ style: _style, ...props }: Record<string, unknown>) =>
       React.createElement("span", { ...props, "data-icon": name });
-  // The icon set is large and the modules under test import different slices of
-  // it, so every icon resolves to the same stub rather than a fixed list that a
-  // new import would break.
-  return new Proxy(actual, {
-    get: (target, property: string) =>
-      typeof target[property] === "undefined" ? createIcon(property) : target[property],
-  });
+  // The browser pane and the menu chain it reaches import these icons between
+  // them. A Proxy would cover a new import without a list edit, but vitest
+  // cannot serialize one back to the main process, so the suite hangs.
+  return {
+    AlertTriangle: createIcon("AlertTriangle"),
+    ArrowLeft: createIcon("ArrowLeft"),
+    ArrowRight: createIcon("ArrowRight"),
+    ArrowUpRight: createIcon("ArrowUpRight"),
+    Bot: createIcon("Bot"),
+    Brain: createIcon("Brain"),
+    Camera: createIcon("Camera"),
+    Check: createIcon("Check"),
+    CheckCircle: createIcon("CheckCircle"),
+    CheckCircle2: createIcon("CheckCircle2"),
+    ChevronDown: createIcon("ChevronDown"),
+    ChevronLeft: createIcon("ChevronLeft"),
+    ChevronRight: createIcon("ChevronRight"),
+    Compass: createIcon("Compass"),
+    Copy: createIcon("Copy"),
+    Download: createIcon("Download"),
+    Edit3: createIcon("Edit3"),
+    ExternalLink: createIcon("ExternalLink"),
+    Eye: createIcon("Eye"),
+    File: createIcon("File"),
+    FileText: createIcon("FileText"),
+    Folder: createIcon("Folder"),
+    Globe: createIcon("Globe"),
+    Info: createIcon("Info"),
+    KeyRound: createIcon("KeyRound"),
+    LucideIcon: createIcon("LucideIcon"),
+    Maximize: createIcon("Maximize"),
+    MicVocal: createIcon("MicVocal"),
+    Monitor: createIcon("Monitor"),
+    MousePointer2: createIcon("MousePointer2"),
+    PenTool: createIcon("PenTool"),
+    Pencil: createIcon("Pencil"),
+    Plus: createIcon("Plus"),
+    RotateCw: createIcon("RotateCw"),
+    Search: createIcon("Search"),
+    Send: createIcon("Send"),
+    Smartphone: createIcon("Smartphone"),
+    Sparkles: createIcon("Sparkles"),
+    Square: createIcon("Square"),
+    SquareTerminal: createIcon("SquareTerminal"),
+    Tablet: createIcon("Tablet"),
+    Trash2: createIcon("Trash2"),
+    Wrench: createIcon("Wrench"),
+    X: createIcon("X"),
+    XCircle: createIcon("XCircle"),
+  };
 });
 
 import {
