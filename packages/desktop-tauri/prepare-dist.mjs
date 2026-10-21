@@ -39,10 +39,19 @@ const serverDistNodeModules = path.join(targetDir, "node_modules");
 if (!fs.existsSync(serverDistNodeModules)) {
   console.log("Installing production node_modules into server-dist...");
   const { runWithRetry } = await import("../../scripts/npm-retry.mjs");
-  // A stale npm cache makes the install fail inside npm's resolver with
-  // "Cannot read properties of null (reading 'edgesOut')" rather than with a
-  // useful message, so the cache is cleared before the first attempt.
   const { execFileSync } = await import("node:child_process");
+  // The install resolves from the registry rather than from a lockfile, so it
+  // has to be told which registry to use. The CI runner configures the
+  // repository to resolve through GitHub Packages, which does not carry the
+  // public packages this bundle needs; without this the install fails inside
+  // npm's resolver with "Cannot read properties of null (reading
+  // 'edgesOut')" rather than with a usable message.
+  fs.writeFileSync(
+    path.join(targetDir, ".npmrc"),
+    ["registry=https://registry.npmjs.org/", ""].join("\n"),
+  );
+  // A stale npm cache makes the install fail inside npm's resolver as well,
+  // so the cache is cleared before the first attempt.
   try {
     execFileSync(process.platform === "win32" ? "npm.cmd" : "npm", ["cache", "clean", "--force"], {
       stdio: "inherit",
