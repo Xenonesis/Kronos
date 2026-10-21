@@ -34,7 +34,7 @@ const metroTest = base.extend({
 });
 
 const daemonTest = metroTest.extend<
-  { projectOwnership: void },
+  { projectOwnership: void; e2eDevOverlayGuard: void },
   {
     e2eDaemonConfig: Record<string, unknown> | undefined;
     e2eDaemonEnvironment: Record<string, string>;
@@ -44,6 +44,17 @@ const daemonTest = metroTest.extend<
     e2eWorkerClient: SeedDaemonClient;
   }
 >({
+  // The dev server's error toast and the app's own toast both sit over the page
+  // and swallow clicks, which strands any test that reaches for a control
+  // underneath. Every test needs them out of the way, so the guard is automatic
+  // rather than something each spec has to ask for.
+  e2eDevOverlayGuard: [
+    async ({ page }, provide) => {
+      await installDeveloperToastDismissal(page);
+      await provide();
+    },
+    { auto: true },
+  ],
   e2eForkProviders: [[], { scope: "worker", option: true }],
   e2eInjectPaseoTools: [false, { scope: "worker", option: true }],
   e2eDaemonConfig: [undefined, { scope: "worker", option: true }],
@@ -130,8 +141,6 @@ const test = daemonTest.extend<{
       await page.routeWebSocket(/:(6767)\b/, async (ws) => {
         await ws.close({ code: 1008, reason: "Blocked connection to localhost:6767 during e2e." });
       });
-
-      await installDeveloperToastDismissal(page);
 
       const entries: string[] = [];
 
