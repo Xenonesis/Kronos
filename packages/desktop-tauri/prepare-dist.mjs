@@ -36,10 +36,12 @@ fs.copyFileSync(
 
 // Install production dependencies directly inside server-dist if missing
 const serverDistNodeModules = path.join(targetDir, "node_modules");
+const internalPackages = ["client", "highlight", "plugin", "protocol", "relay"];
 if (!fs.existsSync(serverDistNodeModules)) {
   console.log("Installing production node_modules into server-dist...");
   const { runWithRetry } = await import("../../scripts/npm-retry.mjs");
   const { execFileSync } = await import("node:child_process");
+
   // The install resolves from the registry rather than from a lockfile, so it
   // has to be told which registry to use. The CI runner configures the
   // repository to resolve through GitHub Packages, which does not carry the
@@ -50,6 +52,22 @@ if (!fs.existsSync(serverDistNodeModules)) {
     path.join(targetDir, ".npmrc"),
     ["registry=https://registry.npmjs.org/", ""].join("\n"),
   );
+
+  // The internal workspace packages are copied in below, so they are removed
+  // from the manifest for the install. Leaving them in makes npm try to
+  // resolve them from the registry, which is where the resolver crash comes
+  // from.
+  const serverPackage = JSON.parse(
+    fs.readFileSync(path.join(root, "packages", "server", "package.json"), "utf8"),
+  );
+  for (const name of internalPackages) {
+    delete serverPackage.dependencies?.[`@getpaseo/${name}`];
+  }
+  fs.writeFileSync(
+    path.join(targetDir, "package.json"),
+    `${JSON.stringify(serverPackage, null, 2)}\n`,
+  );
+
   // A stale npm cache makes the install fail inside npm's resolver as well,
   // so the cache is cleared before the first attempt.
   try {
@@ -68,12 +86,18 @@ if (!fs.existsSync(serverDistNodeModules)) {
       `Failed to install production dependencies into server-dist (exit ${exitCode})`,
     );
   }
+
+  // The bundled manifest declares the internal packages, because the app
+  // resolves them at runtime, so the trimmed manifest is put back.
+  fs.copyFileSync(
+    path.join(root, "packages", "server", "package.json"),
+    path.join(targetDir, "package.json"),
+  );
 }
 
 // Copy internal workspace packages into node_modules/@getpaseo
 const getpaseoDir = path.join(serverDistNodeModules, "@getpaseo");
 fs.mkdirSync(getpaseoDir, { recursive: true });
-const internalPackages = ["client", "highlight", "plugin", "protocol", "relay"];
 for (const pkg of internalPackages) {
   const src = path.join(root, "packages", pkg);
   const dest = path.join(getpaseoDir, pkg);
