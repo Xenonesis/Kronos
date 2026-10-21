@@ -3,29 +3,21 @@ export async function installDeveloperToastDismissal(page) {
   // Developer chrome must not cover app actions or move the test's pointer/focus.
   // Console errors remain in the runner's logs.
   //
-  // Two things sit over the page and swallow clicks:
+  // Two things sit over the page:
   //
-  // 1. The app's own toast has no dismiss button; it disappears on a timer.
-  // 2. Expo's LogBox renders its error toast into a shadow root hosted on
+  // 1. Expo's LogBox renders its error toast into a shadow root hosted on
   //    `<div id="error-toast">`. The host is absolutely positioned, and the
   //    shadow's own `:host { all: initial }` puts `pointer-events` back to
   //    `auto`, so a rule on the host does not stop it intercepting clicks. The
-  //    host itself has to go.
+  //    host has to be removed, and it carries no content a test asserts on.
   //
-  // A locator handler cannot fix this: it only runs after the click's
-  // actionability check has already failed, and that check is what reports the
-  // interception, so the handler never gets the chance to remove the element.
+  // 2. The app's own toast is a real UI element: tests read its text, so it
+  //    stays in the document. It only has to stop swallowing clicks.
+  //
+  // A locator handler cannot fix the interception: it only runs after the
+  // click's actionability check has already failed, and that check is what
+  // reports the interception, so the handler never gets the chance to act.
   await page.addInitScript(() => {
-    const OVERLAY_SELECTORS = ["#error-toast", '[data-testid="app-toast"]'];
-
-    const removeOverlays = () => {
-      for (const selector of OVERLAY_SELECTORS) {
-        for (const node of Array.from(document.querySelectorAll(selector))) {
-          node.remove();
-        }
-      }
-    };
-
     const attachStyle = () => {
       // The init script can run before there is a head to append to, so the
       // style is attached whenever a document element exists and the observer
@@ -42,9 +34,15 @@ export async function installDeveloperToastDismissal(page) {
       return true;
     };
 
+    const removeDevOverlay = () => {
+      for (const node of Array.from(document.querySelectorAll("#error-toast"))) {
+        node.remove();
+      }
+    };
+
     const apply = () => {
       attachStyle();
-      removeOverlays();
+      removeDevOverlay();
     };
 
     apply();
