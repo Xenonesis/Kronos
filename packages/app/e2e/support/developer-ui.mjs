@@ -3,22 +3,29 @@ export async function installDeveloperToastDismissal(page) {
   // Developer chrome must not cover app actions or move the test's pointer/focus.
   // Console errors remain in the runner's logs.
   //
-  // Two things sit over the page and intercept clicks:
+  // Two things sit over the page and swallow clicks:
   //
   // 1. The app's own toast has no dismiss button; it disappears on a timer.
   // 2. The dev server's error overlay leaves an empty `#error-toast` element
-  //    behind once its error is dismissed, and that element still swallows
-  //    pointer events.
+  //    behind once its error is dismissed, and that element still takes pointer
+  //    events.
   //
-  // Both are removed rather than clicked, so a click that was meant for the
-  // page underneath lands there.
-  //
-  // A locator handler only fires when the locator matches, so a page with
-  // neither element pays nothing for this.
-  for (const selector of ['[data-testid="app-toast"]', "#error-toast"]) {
-    const toast = page.locator(selector);
-    await page.addLocatorHandler(toast, () => toast.evaluate((node) => node.remove()), {
-      noWaitAfter: true,
+  // A locator handler cannot fix this: it only runs after the click's
+  // actionability check has already failed, and that check is what reports the
+  // interception. A stylesheet that takes the elements out of the hit-testing
+  // order fixes it before the check runs.
+  await page.addInitScript(() => {
+    const style = document.createElement("style");
+    style.textContent =
+      '#error-toast, [data-testid="app-toast"] { pointer-events: none !important; }';
+    const attach = () => {
+      if (!style.isConnected) document.head.appendChild(style);
+    };
+    attach();
+    // The overlay is injected after the page loads, so watch for it.
+    new MutationObserver(attach).observe(document.documentElement, {
+      childList: true,
+      subtree: true,
     });
-  }
+  });
 }
