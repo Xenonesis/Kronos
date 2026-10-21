@@ -38,11 +38,27 @@ fs.copyFileSync(
 const serverDistNodeModules = path.join(targetDir, "node_modules");
 if (!fs.existsSync(serverDistNodeModules)) {
   console.log("Installing production node_modules into server-dist...");
-  const { execSync } = await import("node:child_process");
-  execSync("npm install --omit=dev --no-package-lock --ignore-scripts", {
-    cwd: targetDir,
-    stdio: "inherit",
-  });
+  const { runWithRetry } = await import("../../scripts/npm-retry.mjs");
+  // A stale npm cache makes the install fail inside npm's resolver with
+  // "Cannot read properties of null (reading 'edgesOut')" rather than with a
+  // useful message, so the cache is cleared before the first attempt.
+  const { execFileSync } = await import("node:child_process");
+  try {
+    execFileSync(process.platform === "win32" ? "npm.cmd" : "npm", ["cache", "clean", "--force"], {
+      stdio: "inherit",
+    });
+  } catch {
+    // A cache that cannot be cleaned is not fatal on its own.
+  }
+  const exitCode = await runWithRetry(
+    ["install", "--omit=dev", "--no-package-lock", "--ignore-scripts"],
+    { cwd: targetDir },
+  );
+  if (exitCode !== 0) {
+    throw new Error(
+      `Failed to install production dependencies into server-dist (exit ${exitCode})`,
+    );
+  }
 }
 
 // Copy internal workspace packages into node_modules/@getpaseo

@@ -5,11 +5,12 @@ import { fileURLToPath } from "node:url";
 const DEFAULT_ATTEMPTS = 3;
 const DEFAULT_BACKOFF_MS = 20_000;
 
-function runNpm(args) {
+function runNpm(args, cwd) {
   const command = process.platform === "win32" ? "npm.cmd" : "npm";
   const result = spawnSync(command, args, {
     shell: process.platform === "win32",
     stdio: "inherit",
+    cwd,
   });
 
   if (result.error) {
@@ -26,12 +27,18 @@ function wait(delayMs) {
 
 export async function runWithRetry(
   args,
-  { attempts = DEFAULT_ATTEMPTS, backoffMs = DEFAULT_BACKOFF_MS, run = runNpm, sleep = wait } = {},
+  {
+    attempts = DEFAULT_ATTEMPTS,
+    backoffMs = DEFAULT_BACKOFF_MS,
+    run = runNpm,
+    sleep = wait,
+    cwd,
+  } = {},
 ) {
   let exitCode = 1;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    exitCode = await run(args);
+    exitCode = await run(args, cwd);
     if (exitCode === 0) {
       return 0;
     }
