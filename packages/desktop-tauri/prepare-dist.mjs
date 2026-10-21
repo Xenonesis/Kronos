@@ -41,22 +41,27 @@ if (!fs.existsSync(serverDistNodeModules)) {
   console.log("Installing production node_modules into server-dist...");
   const { runWithRetry } = await import("../../scripts/npm-retry.mjs");
   const { execFileSync } = await import("node:child_process");
+  const os = await import("node:os");
+
+  // The install runs in a directory outside the repository. server-dist sits
+  // inside a workspace member, and npm resolves a nested project against the
+  // workspace it belongs to, which is where the resolver crash comes from:
+  // "Cannot read properties of null (reading 'edgesOut')".
+  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), "kronos-server-dist-"));
 
   // The install resolves from the registry rather than from a lockfile, so it
   // has to be told which registry to use. The CI runner configures the
   // repository to resolve through GitHub Packages, which does not carry the
-  // public packages this bundle needs; without this the install fails inside
-  // npm's resolver with "Cannot read properties of null (reading
-  // 'edgesOut')" rather than with a usable message.
+  // public packages this bundle needs.
   fs.writeFileSync(
-    path.join(targetDir, ".npmrc"),
+    path.join(stagingDir, ".npmrc"),
     ["registry=https://registry.npmjs.org/", ""].join("\n"),
   );
 
   // The internal workspace packages are copied in below, so they are removed
   // from the manifest for the install. Leaving them in makes npm try to
-  // resolve them from the registry, which is where the resolver crash comes
-  // from.
+  // resolve them from the registry, which is a second source of truth for
+  // npm to disagree with.
   const serverPackage = JSON.parse(
     fs.readFileSync(path.join(root, "packages", "server", "package.json"), "utf8"),
   );
@@ -64,7 +69,7 @@ if (!fs.existsSync(serverDistNodeModules)) {
     delete serverPackage.dependencies?.[`@getpaseo/${name}`];
   }
   fs.writeFileSync(
-    path.join(targetDir, "package.json"),
+    path.join(stagingDir, "package.json"),
     `${JSON.stringify(serverPackage, null, 2)}\n`,
   );
 
@@ -79,7 +84,7 @@ if (!fs.existsSync(serverDistNodeModules)) {
   }
   const exitCode = await runWithRetry(
     ["install", "--omit=dev", "--no-package-lock", "--ignore-scripts"],
-    { cwd: targetDir },
+    { cwd: stagingDir },
   );
   if (exitCode !== 0) {
     throw new Error(
@@ -87,12 +92,8 @@ if (!fs.existsSync(serverDistNodeModules)) {
     );
   }
 
-  // The bundled manifest declares the internal packages, because the app
-  // resolves them at runtime, so the trimmed manifest is put back.
-  fs.copyFileSync(
-    path.join(root, "packages", "server", "package.json"),
-    path.join(targetDir, "package.json"),
-  );
+  fs.cpSync(path.join(stagingDir, "node_modules"), serverDistNodeModules, { recursive: true });
+  fs.rmSync(stagingDir, { recursive: true, force: true });
 }
 
 // Copy internal workspace packages into node_modules/@getpaseo
