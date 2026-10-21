@@ -37,6 +37,21 @@ fs.copyFileSync(
 // Install production dependencies directly inside server-dist if missing
 const serverDistNodeModules = path.join(targetDir, "node_modules");
 const internalPackages = ["client", "highlight", "plugin", "protocol", "relay"];
+
+// Reports the registries npm would resolve against, so a failed install
+// carries the context that explains it.
+function npmRegistryConfig(cwd, execFileSync) {
+  try {
+    return execFileSync(
+      process.platform === "win32" ? "npm.cmd" : "npm",
+      ["config", "get", "registry"],
+      { cwd, encoding: "utf8" },
+    ).trim();
+  } catch {
+    return "unknown";
+  }
+}
+
 if (!fs.existsSync(serverDistNodeModules)) {
   console.log("Installing production node_modules into server-dist...");
   const { runWithRetry } = await import("../../scripts/npm-retry.mjs");
@@ -83,10 +98,30 @@ if (!fs.existsSync(serverDistNodeModules)) {
     // A cache that cannot be cleaned is not fatal on its own.
   }
   const exitCode = await runWithRetry(
-    ["install", "--omit=dev", "--no-package-lock", "--ignore-scripts"],
+    [
+      "install",
+      "--omit=dev",
+      "--no-package-lock",
+      "--ignore-scripts",
+      // The registry has to be given on the command line, not in an .npmrc:
+      // the CI runner points npm at GitHub Packages through
+      // NPM_CONFIG_USERCONFIG, and that user config outranks a project
+      // .npmrc.
+      "--registry=https://registry.npmjs.org/",
+      // npm's peer resolution crashes with "Cannot read properties of null
+      // (reading 'edgesOut')" on this dependency tree when it resolves peers
+      // itself. The bundle does not need peer resolution — the internal
+      // packages are copied in and the rest are direct dependencies — so the
+      // legacy resolver is used instead.
+      "--legacy-peer-deps",
+    ],
     { cwd: stagingDir },
   );
   if (exitCode !== 0) {
+    // npm's own error goes to its debug log under the cache directory, which
+    // is not in the build output. The resolver configuration is printed here
+    // so a failure carries the context it needs.
+    console.error(`npm registry config: ${npmRegistryConfig(stagingDir, execFileSync)}`);
     throw new Error(
       `Failed to install production dependencies into server-dist (exit ${exitCode})`,
     );
