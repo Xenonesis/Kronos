@@ -168,6 +168,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: "packages/desktop-tauri"
+          # The action defaults to `npm run tauri`, which this package does
+          # not define. The `build` script is the one that builds the bundle,
+          # and its `prebuild` hook prepares the bundled server.
+          tauriScript: build
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: "Kronos ${{ env.RELEASE_TAG }}"
           releaseBody: "See release notes for Kronos ${{ env.RELEASE_TAG }}."
@@ -285,6 +289,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: "packages/desktop-tauri"
+          # The action defaults to `npm run tauri`, which this package does
+          # not define. The `build` script is the one that builds the bundle,
+          # and its `prebuild` hook prepares the bundled server.
+          tauriScript: build
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: "Kronos ${{ env.RELEASE_TAG }}"
           releaseBody: "See release notes for Kronos ${{ env.RELEASE_TAG }}."
@@ -398,6 +406,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: "packages/desktop-tauri"
+          # The action defaults to `npm run tauri`, which this package does
+          # not define. The `build` script is the one that builds the bundle,
+          # and its `prebuild` hook prepares the bundled server.
+          tauriScript: build
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: "Kronos ${{ env.RELEASE_TAG }}"
           releaseBody: "See release notes for Kronos ${{ env.RELEASE_TAG }}."
