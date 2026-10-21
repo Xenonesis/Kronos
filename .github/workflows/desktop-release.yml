@@ -79,7 +79,7 @@ jobs:
             fi
             gh release create "$RELEASE_TAG" \
               --repo "${{ github.repository }}" \
-              --title "Paseo $RELEASE_TAG" \
+              --title "Kronos $RELEASE_TAG" \
               --notes "" \
               --draft \
               $prerelease_flag || {
@@ -169,8 +169,8 @@ jobs:
         with:
           projectPath: "packages/desktop-tauri"
           tagName: ${{ env.RELEASE_TAG }}
-          releaseName: "Paseo ${{ env.RELEASE_TAG }}"
-          releaseBody: "See release notes for Paseo ${{ env.RELEASE_TAG }}."
+          releaseName: "Kronos ${{ env.RELEASE_TAG }}"
+          releaseBody: "See release notes for Kronos ${{ env.RELEASE_TAG }}."
           releaseDraft: true
           prerelease: ${{ env.IS_PRERELEASE == 'true' }}
           includeRelease: ${{ env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true' }}
@@ -286,8 +286,8 @@ jobs:
         with:
           projectPath: "packages/desktop-tauri"
           tagName: ${{ env.RELEASE_TAG }}
-          releaseName: "Paseo ${{ env.RELEASE_TAG }}"
-          releaseBody: "See release notes for Paseo ${{ env.RELEASE_TAG }}."
+          releaseName: "Kronos ${{ env.RELEASE_TAG }}"
+          releaseBody: "See release notes for Kronos ${{ env.RELEASE_TAG }}."
           releaseDraft: true
           prerelease: ${{ env.IS_PRERELEASE == 'true' }}
           includeRelease: ${{ env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true' }}
@@ -399,8 +399,8 @@ jobs:
         with:
           projectPath: "packages/desktop-tauri"
           tagName: ${{ env.RELEASE_TAG }}
-          releaseName: "Paseo ${{ env.RELEASE_TAG }}"
-          releaseBody: "See release notes for Paseo ${{ env.RELEASE_TAG }}."
+          releaseName: "Kronos ${{ env.RELEASE_TAG }}"
+          releaseBody: "See release notes for Kronos ${{ env.RELEASE_TAG }}."
           releaseDraft: true
           prerelease: ${{ env.IS_PRERELEASE == 'true' }}
           includeRelease: ${{ env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true' }}
