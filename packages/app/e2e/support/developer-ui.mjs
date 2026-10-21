@@ -2,19 +2,18 @@
 export async function installDeveloperToastDismissal(page) {
   // Developer chrome must not cover app actions or move the test's pointer/focus.
   // Console errors remain in the runner's logs.
-  const dismiss = page.locator("#error-toast").getByRole("button", { name: "", exact: true });
-  await page.addLocatorHandler(
-    dismiss,
-    async () => {
-      // The handler fires whenever the toast might match, including when no
-      // toast is there at all. Waiting for the element to appear would spend
-      // the test's whole timeout on a dismissal that has nothing to dismiss, so
-      // the click gives up quickly instead.
-      await dismiss.dispatchEvent("click", { timeout: 1_000 }).catch(() => undefined);
-    },
-    {
-      // A new logged error can replace the toast before the old one disappears.
-      noWaitAfter: true,
-    },
-  );
+  //
+  // The app's toast has no dismiss button: it disappears on a timer. While it
+  // is up it sits over the page and intercepts clicks, which strands a test that
+  // is trying to reach a control underneath it. Taking it out of the way lets the
+  // click land.
+  //
+  // A locator handler only fires when the locator matches, so this costs
+  // nothing on a page with no toast. The earlier handler on a `#error-toast`
+  // element the app no longer renders spent the test's whole timeout waiting
+  // for a dismissal that had nothing to dismiss.
+  const appToast = page.locator('[data-testid="app-toast"]');
+  await page.addLocatorHandler(appToast, () => appToast.evaluate((node) => node.remove()), {
+    noWaitAfter: true,
+  });
 }
