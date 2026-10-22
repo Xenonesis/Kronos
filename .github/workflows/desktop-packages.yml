@@ -10,7 +10,6 @@ on:
       - ".github/workflows/desktop-packages.yml"
   # or how it is smoked still proves the real artifacts before merge.
   pull_request:
-    branches: [main]
     paths:
       - "packages/desktop/**"
       - "plugins/**"

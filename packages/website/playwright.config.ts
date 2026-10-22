@@ -19,10 +19,12 @@ export default defineConfig({
         },
         {
           command: "npm run build && npm run preview -- --host 127.0.0.1 --port 8187 --strictPort",
-          url: baseURL,
+          // Probe the server without running the homepage loader's live GitHub requests.
+          url: new URL("/logo.svg", baseURL).href,
           // The suite builds the site before it serves it, and the build is
           // slower than Playwright's default 60s on a loaded machine.
           timeout: 300_000,
+          stdout: "pipe",
           env: {
             CLOUDFLARE_INCLUDE_PROCESS_ENV: "true",
             PLUGINS_REGISTRY_URL: "http://127.0.0.1:8188",

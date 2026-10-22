@@ -6,6 +6,7 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { languageAlternates, LOCALES, localizePath } from "./src/i18n/locale";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const DEFAULT_SITE_HOST = "https://xenonesis.github.io/Kronos";
@@ -22,6 +23,10 @@ function resolveBasePath(env: Record<string, string>): string {
   return env.VITE_BASE_PATH ?? "/";
 }
 
+const routesDir = path.join(__dirname, "src/routes/{-$locale}");
+// A translation such as `cli.zh-CN.md` is the same page as `cli.md` in another language.
+const TRANSLATION_FILE = /\.[A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*\.md$/;
+
 function discoverDocsRoutes(): string[] {
   const docsDir = path.join(repoRoot, "public-docs");
   if (!fs.existsSync(docsDir)) return ["/docs"];
@@ -33,7 +38,7 @@ function discoverDocsRoutes(): string[] {
         walk(full);
         continue;
       }
-      if (!entry.name.endsWith(".md")) continue;
+      if (!entry.name.endsWith(".md") || TRANSLATION_FILE.test(entry.name)) continue;
       const rel = path
         .relative(docsDir, full)
         .replace(/\.md$/, "")
@@ -47,14 +52,14 @@ function discoverDocsRoutes(): string[] {
 }
 
 function discoverAgentRoutes(): string[] {
-  const routesDir = path.join(__dirname, "src/routes");
   const reserved = new Set([
-    "__root",
+    "route",
     "agents",
     "blog",
     "changelog",
     "docs",
     "download",
+    "download_.thanks",
     "hub",
     "index",
     "sponsor",
@@ -71,7 +76,7 @@ function discoverAgentRoutes(): string[] {
 }
 
 function discoverAlternativeRoutes(): string[] {
-  const alternativesDir = path.join(__dirname, "src/routes/alternatives");
+  const alternativesDir = path.join(routesDir, "alternatives");
   if (!fs.existsSync(alternativesDir)) return [];
   const slugs = fs
     .readdirSync(alternativesDir, { withFileTypes: true })
@@ -87,6 +92,7 @@ function discoverBlogRoutes(): string[] {
   const slugs = fs
     .readdirSync(postsDir, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .filter((entry) => !TRANSLATION_FILE.test(entry.name))
     .map((entry) => entry.name.replace(/\.md$/, ""))
     .sort();
   return ["/blog", ...slugs.map((slug) => `/blog/${slug}`)];
@@ -110,9 +116,17 @@ const sitemapPages = [
   ...discoverPluginRoutes(),
   ...discoverDocsRoutes(),
   ...discoverBlogRoutes(),
-].map((routePath) => ({
-  path: routePath,
-}));
+].flatMap((routePath) => {
+  // Every page exists in each language; each URL lists all of them as alternates.
+  const alternateRefs = languageAlternates(routePath).map((alternate) => ({
+    hreflang: alternate.hreflang,
+    href: `${siteHost}${alternate.path}`,
+  }));
+  return LOCALES.map((locale) => ({
+    path: localizePath(routePath, locale),
+    sitemap: { alternateRefs },
+  }));
+});
 
 export default defineConfig(({ mode }): UserConfig => {
   const env = loadEnv(mode, __dirname, "");
