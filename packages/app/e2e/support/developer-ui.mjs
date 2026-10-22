@@ -85,6 +85,6 @@ export const DEVELOPER_OVERLAY_GUARD = () => {
 export async function installDeveloperToastDismissal(page) {
   await page.addInitScript(DEVELOPER_OVERLAY_GUARD);
   await page.evaluate(DEVELOPER_OVERLAY_GUARD);
+}
 
 export const hideDeveloperToasts = installDeveloperToastDismissal;
-}
