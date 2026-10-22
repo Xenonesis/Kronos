@@ -831,18 +831,21 @@ test("compact Changes keeps its actions compact and menu-only", async ({ page })
   const workspace = await createWorkspaceWithMountedTabDiff();
   await useUnwrappedDiffLines(page);
   await openWorkspaceChanges(page, workspace);
+  // Reload at the compact size. Resizing an open desktop workspace leaves the
+  // desktop tabs row mid-transition, so the Changes tab can be visible when it
+  // is looked for and unmounted by the time it is clicked. A cold mount at the
+  // compact size settles the layout first.
   await page.setViewportSize({ width: 480, height: 900 });
+  await page.reload();
 
+  await page.getByTestId("workspace-explorer-toggle").first().click();
   const compactChangesTab = page
     .getByTestId("workspace-tab-changes_tree")
     .filter({ visible: true });
-  if (!(await compactChangesTab.isVisible())) {
-    await page.getByTestId("workspace-explorer-toggle").first().click();
-  }
-  await expect(compactChangesTab).toBeVisible();
+  await expect(compactChangesTab).toBeVisible({ timeout: 30_000 });
   await compactChangesTab.click();
   const compactExplorer = page.getByTestId("workspace-explorer-sidebar").filter({ visible: true });
-  await expect(compactExplorer.getByTestId("changes-header")).toBeVisible();
+  await expect(compactExplorer.getByTestId("changes-header")).toBeVisible({ timeout: 30_000 });
 
   const actions = compactExplorer.getByTestId("changes-actions-menu-trigger");
   const options = compactExplorer.getByRole("button", { name: "Diff options" });
