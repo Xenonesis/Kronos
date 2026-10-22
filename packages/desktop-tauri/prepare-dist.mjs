@@ -153,6 +153,41 @@ if (fs.existsSync(heavyClaude)) {
   console.log("Stripped bloated claude.exe binary");
 }
 
+// npm creates the command shims in node_modules/.bin as symlinks on Linux,
+// and the Tauri resource glob does not follow them, so the bundle fails with
+// "resource path '../server-dist/node_modules/.bin/<name>' doesn't exist".
+// The shims are replaced with the files they point at.
+function materializeBinShims(dir) {
+  let replaced = 0;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return replaced;
+  }
+  for (const entry of entries) {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) {
+      const target = path.resolve(dir, fs.readlinkSync(entryPath));
+      if (fs.existsSync(target) && fs.statSync(target).isFile()) {
+        fs.copyFileSync(target, entryPath);
+        fs.chmodSync(entryPath, 0o755);
+        replaced += 1;
+      }
+    } else if (entry.isDirectory()) {
+      replaced += materializeBinShims(entryPath);
+    }
+  }
+  return replaced;
+}
+const binDir = path.join(serverDistNodeModules, ".bin");
+if (fs.existsSync(binDir)) {
+  const replaced = materializeBinShims(binDir);
+  if (replaced > 0) {
+    console.log(`Materialized ${replaced} node_modules/.bin shims as real files`);
+  }
+}
+
 // Ensure typescript compiler is available for runtime plugin compilation
 const tsDest = path.join(serverDistNodeModules, "typescript");
 if (!fs.existsSync(tsDest)) {
