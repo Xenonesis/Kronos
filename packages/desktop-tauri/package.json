@@ -6,7 +6,9 @@
   "scripts": {
     "prepare-dist": "node prepare-dist.mjs",
     "prebuild": "node prepare-dist.mjs",
+    "pretauri": "node prepare-dist.mjs",
     "dev": "tauri dev",
+    "tauri": "tauri",
     "build": "tauri build",
     "build:clean": "node prepare-dist.mjs && tauri build"
   },
