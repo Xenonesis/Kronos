@@ -1,10 +1,21 @@
+import { useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { GitHubIcon } from "~/components/brand-icons";
+import { SiteShell } from "~/components/site-shell";
+import { parseReleaseAssetUrl } from "~/downloads";
 import { routeLocale } from "~/i18n";
 import { pageMeta } from "~/meta";
-import { thanksPageHref, useDesktopReleaseUrls } from "~/downloads";
+import "~/styles.css";
+
+interface ThanksSearch {
+  file?: string;
+}
 
 export const Route = createFileRoute("/{-$locale}/download_/thanks")({
+  validateSearch: (search: Record<string, unknown>): ThanksSearch => {
+    const file = parseReleaseAssetUrl(search.file);
+    return file ? { file } : {};
+  },
   head: ({ params }) => {
     const locale = routeLocale(params);
     return pageMeta({
@@ -14,52 +25,61 @@ export const Route = createFileRoute("/{-$locale}/download_/thanks")({
       locale,
     });
   },
-  component: Thanks,
+  component: DownloadThanks,
 });
 
-const COMMUNITY_LINKS = [
+const COMMUNITY = [
   {
     name: "GitHub",
     icon: <GitHubIcon className="h-6 w-6" />,
     body: "Star, report issues, contribute.",
     href: "https://github.com/Xenonesis/Kronos",
   },
-];
+] as const;
 
-function Thanks() {
-  const urls = useDesktopReleaseUrls();
+function DownloadThanks() {
+  const { file } = Route.useSearch();
+
+  useEffect(() => {
+    if (file) window.location.assign(file);
+  }, [file]);
 
   return (
-    <div className="max-w-4xl mx-auto px-6 py-20">
+    <SiteShell width="default">
       <h1 className="text-3xl font-medium tracking-tight mb-4">Thanks for downloading Kronos</h1>
       <p className="text-lg text-white/70 leading-relaxed max-w-2xl">
         Get help, share feedback, and follow along.
       </p>
-
-      <div className="mt-8 grid sm:grid-cols-3 gap-4">
-        {COMMUNITY_LINKS.map((item) => (
-          <a
-            key={item.name}
-            href={item.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="p-5 rounded-xl border border-white/10 bg-white/[0.02] hover:border-white/25 hover:bg-white/[0.05] transition flex flex-col justify-between space-y-4"
-          >
-            <div className="text-white/80">{item.icon}</div>
-            <div>
-              <div className="font-medium text-white">{item.name}</div>
-              <div className="text-sm text-white/60 mt-1">{item.body}</div>
-            </div>
+      {file && (
+        <p className="text-white/40 text-sm mt-3">
+          Download didn&apos;t start?{" "}
+          <a href={file} className="underline hover:text-white/80">
+            Try direct download
           </a>
-        ))}
-      </div>
+        </p>
+      )}
 
-      <div className="mt-16 text-sm text-white/40">
-        Download didn&apos;t start?{" "}
-        <a href={thanksPageHref(urls.windowsExe)} className="text-white/70 underline hover:text-white">
-          Try direct download
-        </a>
+      <div className="space-y-20 mt-16">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {COMMUNITY.map((item) => (
+            <a
+              key={item.name}
+              href={item.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-5 py-4 transition-colors hover:border-white/20 hover:bg-white/[0.05]"
+            >
+              <span className="flex text-white/80">{item.icon}</span>
+              <span className="min-w-0">
+                <span className="block font-medium [text-box:trim-start_cap_alphabetic]">
+                  {item.name}
+                </span>
+                <span className="block text-xs text-muted-foreground">{item.body}</span>
+              </span>
+            </a>
+          ))}
+        </div>
       </div>
-    </div>
+    </SiteShell>
   );
 }

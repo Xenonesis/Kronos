@@ -23,6 +23,7 @@ function resolveBasePath(env: Record<string, string>): string {
   return env.VITE_BASE_PATH ?? "/";
 }
 
+const siteHost = DEFAULT_SITE_HOST;
 const routesDir = path.join(__dirname, "src/routes/{-$locale}");
 // A translation such as `cli.zh-CN.md` is the same page as `cli.md` in another language.
 const TRANSLATION_FILE = /\.[A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*\.md$/;

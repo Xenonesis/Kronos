@@ -152,12 +152,7 @@ function Download() {
         <div className="divide-y divide-border">
           <PlatformRow icon={AndroidIcon} label="Android">
             <PillGroup>
-<<<<<<< HEAD:packages/website/src/routes/download.tsx
-              <DownloadPill href={thanksPageHref(urls.androidApk)} label="APK" />
-=======
-              {!onBeta && <DownloadPill href={playStoreUrl} label="Play Store" external />}
               <DownloadPill href={thanks(urls.androidApk)} label="APK" />
->>>>>>> upstream/main:packages/website/src/routes/{-$locale}/download.tsx
             </PillGroup>
           </PlatformRow>
         </div>
