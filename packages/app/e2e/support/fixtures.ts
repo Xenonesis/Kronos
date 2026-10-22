@@ -1,5 +1,5 @@
 import { test as base, expect, type Page } from "@playwright/test";
-import { hideDeveloperToasts } from "./developer-ui.mjs";
+import { hideDeveloperToasts, installDeveloperToastDismissal } from "./developer-ui.mjs";
 import { startOutdatedDaemon, type OutdatedDaemon } from "./helpers/daemon-update";
 import { startE2EWorker } from "./helpers/e2e-worker";
 import { getE2EDaemonPort } from "./helpers/daemon-port";
