@@ -489,3 +489,29 @@ jobs:
             publish_args+=(--prerelease)
           fi
           gh "${publish_args[@]}"
+
+      - name: Publish the stable download name
+        if: env.IS_SMOKE_TAG != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The website's download button points at a fixed asset name, so the
+          # current Windows installer is also published under that name. It is
+          # replaced on every release, which keeps the link working across
+          # versions.
+          setup="$(gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" \
+            --json assets --jq '.assets[] | select(.name | endswith("_x64-setup.exe")) | .name' \
+            | grep -v '^Kronos_x64-setup.exe$' | head -n 1 || true)"
+          if [[ -z "$setup" ]]; then
+            echo "No Windows installer found on release $RELEASE_TAG, skipping the stable name."
+            exit 0
+          fi
+          echo "Publishing $setup as Kronos_x64-setup.exe"
+          mkdir -p "$RUNNER_TEMP/kronos-setup"
+          gh release download "$RELEASE_TAG" --repo "${{ github.repository }}" \
+            --pattern "$setup" --dir "$RUNNER_TEMP/kronos-setup"
+          mv "$RUNNER_TEMP/kronos-setup/$setup" "$RUNNER_TEMP/kronos-setup/Kronos_x64-setup.exe"
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/kronos-setup/Kronos_x64-setup.exe" \
+            --clobber --repo "${{ github.repository }}"
