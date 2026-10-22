@@ -127,7 +127,13 @@ if (!fs.existsSync(serverDistNodeModules)) {
     );
   }
 
-  fs.cpSync(path.join(stagingDir, "node_modules"), serverDistNodeModules, { recursive: true });
+  // On Linux/macOS, npm creates symlinks in node_modules (e.g. .bin shims).
+  // dereference: true ensures all symlinks are resolved and copied as real files
+  // instead of being rewritten to broken absolute paths pointing to stagingDir.
+  fs.cpSync(path.join(stagingDir, "node_modules"), serverDistNodeModules, {
+    recursive: true,
+    dereference: true,
+  });
   fs.rmSync(stagingDir, { recursive: true, force: true });
 }
 
@@ -217,7 +223,13 @@ fs.mkdirSync(binDir, { recursive: true });
 let createdShims = 0;
 for (const entry of packageBinEntries(serverDistNodeModules)) {
   const shimPath = path.join(binDir, entry.name);
-  if (fs.existsSync(shimPath)) continue;
+  const linkStat = fs.lstatSync(shimPath, { throwIfNoEntry: false });
+  if (linkStat) {
+    // If it's already a regular non-empty file, keep it
+    if (linkStat.isFile() && !linkStat.isSymbolicLink()) continue;
+    // Remove broken symlink or directory collision
+    fs.rmSync(shimPath, { force: true, recursive: true });
+  }
   if (!fs.existsSync(entry.target)) continue;
   fs.copyFileSync(entry.target, shimPath);
   fs.chmodSync(shimPath, 0o755);
@@ -226,7 +238,6 @@ for (const entry of packageBinEntries(serverDistNodeModules)) {
 if (createdShims > 0) {
   console.log(`Created ${createdShims} node_modules/.bin command shims`);
 }
-
 // Ensure typescript compiler is available for runtime plugin compilation
 const tsDest = path.join(serverDistNodeModules, "typescript");
 if (!fs.existsSync(tsDest)) {
