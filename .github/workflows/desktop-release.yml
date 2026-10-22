@@ -160,6 +160,14 @@ jobs:
           npm run build:server:clean
           node packages/desktop-tauri/prepare-dist.mjs
 
+      - name: Build the web app
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build:app-deps
+          cd packages/app
+          npx cross-env PASEO_WEB_PLATFORM=electron npx expo export --platform web
+
       - name: Build Tauri app and publish to GitHub Releases
         uses: tauri-apps/tauri-action@v0
         env:
@@ -277,6 +285,14 @@ jobs:
           npm run build:server:clean
           node packages/desktop-tauri/prepare-dist.mjs
 
+      - name: Build the web app
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build:app-deps
+          cd packages/app
+          npx cross-env PASEO_WEB_PLATFORM=electron npx expo export --platform web
+
       - name: Build Tauri app and publish to GitHub Releases
         uses: tauri-apps/tauri-action@v0
         env:
@@ -389,6 +405,14 @@ jobs:
           set -euo pipefail
           npm run build:server:clean
           node packages/desktop-tauri/prepare-dist.mjs
+
+      - name: Build the web app
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build:app-deps
+          cd packages/app
+          npx cross-env PASEO_WEB_PLATFORM=electron npx expo export --platform web
 
       - name: Build Tauri app and publish to GitHub Releases
         uses: tauri-apps/tauri-action@v0
