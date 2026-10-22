@@ -153,39 +153,78 @@ if (fs.existsSync(heavyClaude)) {
   console.log("Stripped bloated claude.exe binary");
 }
 
-// npm creates the command shims in node_modules/.bin as symlinks on Linux,
-// and the Tauri resource glob does not follow them, so the bundle fails with
-// "resource path '../server-dist/node_modules/.bin/<name>' doesn't exist".
-// The shims are replaced with the files they point at.
-function materializeBinShims(dir) {
-  let replaced = 0;
-  let entries = [];
+// The Tauri resource glob walks node_modules/.bin and fails the bundle with
+// "resource path '../server-dist/node_modules/.bin/<name>' doesn't exist"
+// when a command shim is missing. npm does not create a shim for every
+// package that declares a bin, and it creates the ones it does make as
+// symlinks, which the resource walk does not follow.
+//
+// The shims are therefore created here for every package in the tree that
+// declares a bin, as real files, so the bundle can copy them.
+function packageBinEntries(modulesDir) {
+  const entries = [];
+  let packageDirs = [];
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
+    packageDirs = fs.readdirSync(modulesDir, { withFileTypes: true });
   } catch {
-    return replaced;
+    return entries;
   }
-  for (const entry of entries) {
-    const entryPath = path.join(dir, entry.name);
-    if (entry.isSymbolicLink()) {
-      const target = path.resolve(dir, fs.readlinkSync(entryPath));
-      if (fs.existsSync(target) && fs.statSync(target).isFile()) {
-        fs.copyFileSync(target, entryPath);
-        fs.chmodSync(entryPath, 0o755);
-        replaced += 1;
+  for (const dirent of packageDirs) {
+    if (!dirent.isDirectory()) continue;
+    const full = path.join(modulesDir, dirent.name);
+    if (dirent.name.startsWith("@")) {
+      let scoped = [];
+      try {
+        scoped = fs.readdirSync(full, { withFileTypes: true });
+      } catch {
+        continue;
       }
-    } else if (entry.isDirectory()) {
-      replaced += materializeBinShims(entryPath);
+      for (const scopedDirent of scoped) {
+        if (scopedDirent.isDirectory()) {
+          collectPackageBin(path.join(full, scopedDirent.name), entries);
+        }
+      }
+      continue;
     }
+    collectPackageBin(full, entries);
   }
-  return replaced;
+  return entries;
 }
-const binDir = path.join(serverDistNodeModules, ".bin");
-if (fs.existsSync(binDir)) {
-  const replaced = materializeBinShims(binDir);
-  if (replaced > 0) {
-    console.log(`Materialized ${replaced} node_modules/.bin shims as real files`);
+
+function collectPackageBin(packageDir, entries) {
+  const manifestPath = path.join(packageDir, "package.json");
+  if (!fs.existsSync(manifestPath)) return;
+  let manifest = null;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  } catch {
+    return;
   }
+  const bin = manifest.bin;
+  if (!bin) return;
+  if (typeof bin === "string") {
+    const name = manifest.name?.startsWith("@") ? manifest.name.split("/")[1] : manifest.name;
+    if (name) entries.push({ name, target: path.join(packageDir, bin) });
+    return;
+  }
+  for (const [name, target] of Object.entries(bin)) {
+    if (typeof target === "string") entries.push({ name, target: path.join(packageDir, target) });
+  }
+}
+
+const binDir = path.join(serverDistNodeModules, ".bin");
+fs.mkdirSync(binDir, { recursive: true });
+let createdShims = 0;
+for (const entry of packageBinEntries(serverDistNodeModules)) {
+  const shimPath = path.join(binDir, entry.name);
+  if (fs.existsSync(shimPath)) continue;
+  if (!fs.existsSync(entry.target)) continue;
+  fs.copyFileSync(entry.target, shimPath);
+  fs.chmodSync(shimPath, 0o755);
+  createdShims += 1;
+}
+if (createdShims > 0) {
+  console.log(`Created ${createdShims} node_modules/.bin command shims`);
 }
 
 // Ensure typescript compiler is available for runtime plugin compilation
