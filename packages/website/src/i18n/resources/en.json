@@ -519,9 +519,9 @@
     }
   },
   "download": {
-    "metaTitle": "Download Paseo for macOS, Windows, Linux, iOS, and Android",
-    "metaDescription": "Install Paseo on every platform. Native desktop apps for macOS, Windows, and Linux. Mobile apps for iOS and Android. Self-hosted, open source, free to download.",
-    "title": "Download",
+    "metaTitle": "Download Kronos for Windows, Linux, macOS, iOS, and Android",
+    "metaDescription": "Install Kronos on every platform. Native Rust desktop workstation for Windows, Linux, and macOS. Mobile apps for iOS and Android. Self-hosted, open source, free to download.",
+    "title": "Download Kronos",
     "whatsNew": "What's new",
     "desktop": "Desktop",
     "desktopDescription": "Recommended, bundles everything you need",
@@ -542,9 +542,9 @@
     "betaSettings": "Already running the desktop app? Set <setting>Settings → Release channel → Beta</setting> and it updates itself from here on."
   },
   "thanks": {
-    "metaTitle": "Thanks for downloading Paseo",
-    "metaDescription": "Your Paseo download is starting. Join the community on Discord, GitHub, and Reddit, or sponsor Paseo.",
-    "title": "Thanks for downloading Paseo",
+    "metaTitle": "Thanks for downloading Kronos",
+    "metaDescription": "Your Kronos download is starting. Join the community on GitHub, or contribute.",
+    "title": "Thanks for downloading Kronos",
     "intro": "Get help, share feedback, and follow along.",
     "didNotStart": "Download didn't start?",
     "tryAgain": "Try again",

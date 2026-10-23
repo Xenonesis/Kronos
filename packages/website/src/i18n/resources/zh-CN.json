@@ -519,9 +519,9 @@
     }
   },
   "download": {
-    "metaTitle": "下载适用于 macOS、Windows、Linux、iOS 和 Android 的 Paseo",
-    "metaDescription": "在所有平台上安装 Paseo。提供 macOS、Windows 和 Linux 原生桌面应用，以及 iOS 和 Android 移动应用。自托管、开源、免费下载。",
-    "title": "下载",
+    "metaTitle": "下载适用于 Windows、Linux、macOS、iOS 和 Android 的 Kronos",
+    "metaDescription": "在所有平台上安装 Kronos。提供 Windows、Linux 和 macOS 原生 Rust 桌面工作站，以及 iOS 和 Android 移动应用。自托管、开源、免费下载。",
+    "title": "下载 Kronos",
     "whatsNew": "更新内容",
     "desktop": "桌面端",
     "desktopDescription": "推荐，包含所需的一切",
@@ -542,9 +542,9 @@
     "betaSettings": "已经在使用桌面应用？前往 <setting>设置 → 发布通道 → Beta</setting>，之后它会自动从这里更新。"
   },
   "thanks": {
-    "metaTitle": "感谢下载 Paseo",
-    "metaDescription": "你的 Paseo 下载即将开始。欢迎加入 Discord、GitHub 和 Reddit 社区，或赞助 Paseo。",
-    "title": "感谢下载 Paseo",
+    "metaTitle": "感谢下载 Kronos",
+    "metaDescription": "你的 Kronos 下载即将开始。欢迎参与 GitHub 社区与贡献。",
+    "title": "感谢下载 Kronos",
     "intro": "获取帮助、分享反馈、关注最新动态。",
     "didNotStart": "下载没有开始？",
     "tryAgain": "重试",

@@ -60,10 +60,10 @@ ${agents}
 
 ## Optional
 
-- [Changelog](${SITE_URL}/changelog): Release notes for the Paseo daemon, CLI, desktop, and mobile apps.
-- [Download](${SITE_URL}/download): Install Paseo on Mac, Windows, Linux, iOS, Android, or run the web app.
-- [Paseo Hub](${SITE_URL}/hub): Connect daemons and run GitHub, Slack, Discord, and Linear workflows through the hosted service or your own deployment.
-- [Blog](${SITE_URL}/blog): Updates and technical posts from the Paseo team.
+- [Changelog](${SITE_URL}/changelog): Release notes for the workstation daemon, CLI, and desktop releases.
+- [Download](${SITE_URL}/download): Install Kronos on Windows, Linux, Mac, or run the web app.
+- [Hub](${SITE_URL}/hub): Connect daemons and run GitHub, Slack, Discord, and Linear workflows through the hosted service or your own deployment.
+- [Blog](${SITE_URL}/blog): Updates and technical posts from the Kronos team.
 - [Privacy](${SITE_URL}/privacy): Privacy policy.
 - [Terms](${SITE_URL}/terms): Terms for the official relay and hosted Hub.
 - [GitHub](https://github.com/Xenonesis/Kronos): Source code, issues, and releases.
