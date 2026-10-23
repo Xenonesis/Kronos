@@ -1,25 +1,26 @@
 # CLAUDE.md
 
-Paseo is a mobile app for monitoring and controlling your local AI coding agents from anywhere. Your dev environment, in your pocket. Connects directly to your actual development environment — your code stays on your machine.
+Kronos is a high-performance native AI developer workstation and autonomous agent swarm execution engine built with Tauri v2 and native Rust. Connects directly to your local development environment — your code stays on your machine.
 
-**Supported agents:** Claude Code, Codex, GitHub Copilot, OpenCode, Pi, Antigravity, and Muse Code.
+**Supported agents:** Claude Code, Codex, GitHub Copilot, OpenCode, Pi, Antigravity, Muse Code, and OMP.
 
 ## Repository map
 
 This is an npm workspace monorepo:
 
-- `packages/server` — Daemon: agent lifecycle, WebSocket API, MCP server
-- `packages/app` — Mobile + web client (Expo)
+- `packages/server` — Daemon: agent lifecycle, WebSocket API, MCP server, Playwright automation
+- `packages/app` — Client UI (Expo / Web / Desktop)
 - `packages/cli` — Docker-style CLI (`paseo run/ls/logs/wait`)
 - `packages/relay` — E2E encrypted relay for remote access
-- `packages/desktop` — Electron desktop wrapper
-- `packages/website` — Marketing site (paseo.sh)
+- `packages/desktop-tauri` — Native Rust Tauri v2 desktop workstation (<100MB RAM, custom titlebar, system tray, NSIS packaging)
+- `packages/desktop` — Legacy Electron desktop wrapper (deprecated)
+- `packages/website` — Tactical telemetry marketing site and docs (https://xenonesis.github.io/Kronos/)
 
 ### Desktop Distribution Policy
 
-- Only **installable packages** (e.g. Windows NSIS `.exe` installer) are officially distributed and supported.
+- Only **installable packages** (e.g. Windows NSIS `Kronos_x64-setup.exe` installer) are officially distributed and supported.
 - Never distribute, link, or treat raw standalone/portable executables (`paseo-desktop.exe`) as release artifacts.
-- All desktop builds intended for distribution must be built via the bundle pipeline (`npm run bundle:desktop`) producing installers under `packages/desktop-tauri/src-tauri/target/release/bundle/nsis/`.
+- All desktop builds intended for distribution must be built via the bundle pipeline (`node scripts/update-and-build-exe.mjs` or `npm run bundle:desktop`) producing installers under `packages/desktop-tauri/src-tauri/target/release/bundle/nsis/Kronos_x64-setup.exe`.
 
 ## Docs
 

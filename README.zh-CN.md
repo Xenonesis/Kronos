@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="packages/website/public/logo.svg" width="64" height="64" alt="Paseo logo">
+  <img src="packages/website/public/kronos-logo.svg" width="64" height="64" alt="Kronos logo">
 </p>
 
-<h1 align="center">Paseo</h1>
+<h1 align="center">Kronos</h1>
 
 <p align="center">
   <a href="README.md">English</a> ·
@@ -12,25 +12,18 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/getpaseo/paseo/stargazers">
-    <img src="https://img.shields.io/github/stars/getpaseo/paseo?style=flat&logo=github" alt="GitHub stars">
+  <a href="https://github.com/Xenonesis/Kronos/stargazers">
+    <img src="https://img.shields.io/github/stars/Xenonesis/Kronos?style=flat&logo=github" alt="GitHub stars">
   </a>
-  <a href="https://github.com/getpaseo/paseo/releases">
-    <img src="https://img.shields.io/github/v/release/getpaseo/paseo?style=flat&logo=github" alt="GitHub release">
+  <a href="https://github.com/Xenonesis/Kronos/releases">
+    <img src="https://img.shields.io/github/v/release/Xenonesis/Kronos?style=flat&logo=github" alt="GitHub release">
   </a>
-  <a href="https://x.com/moboudra">
-    <img src="https://img.shields.io/badge/%40moboudra-555?logo=x" alt="X">
-  </a>
-  <a href="https://discord.gg/jz8T2uahpH">
-    <img src="https://img.shields.io/badge/Discord-555?logo=discord" alt="Discord">
-  </a>
-  <a href="https://www.reddit.com/r/PaseoAI/">
-    <img src="https://img.shields.io/badge/Reddit-555?logo=reddit" alt="Reddit">
+  <a href="https://xenonesis.github.io/Kronos/">
+    <img src="https://img.shields.io/badge/Site-GitHub%20Pages-FF2A2A" alt="Website">
   </a>
 </p>
 
-<p align="center">Claude Code、Codex、Copilot、OpenCode 和 Pi agents 的统一界面。</p>
-
+<p align="center">Apex AI 开发者工作站与自主 Agent 执行引擎。<br>基于原生 Rust Tauri v2 构建，内存占用低于 100MB，彻底告别 Electron 臃肿。</p>
 <p align="center">
   <img src="https://paseo.sh/hero-mockup.png" alt="Paseo app screenshot" width="100%">
 </p>
@@ -78,11 +71,15 @@ Paseo 会运行一个名为 daemon 的本地服务，用来管理你的 coding a
 - [OpenCode](https://github.com/anomalyco/opencode)
 - [Pi](https://pi.dev)
 
-### 桌面 app（推荐）
+### 桌面工作站（推荐）
 
-从 [paseo.sh/download](https://paseo.sh/zh-CN/download) 或 [GitHub releases 页面](https://github.com/getpaseo/paseo/releases)下载。打开 app 后 daemon 会自动启动，不需要再安装其他东西。
+从 [GitHub Releases 页面](https://github.com/Xenonesis/Kronos/releases/latest/download/Kronos_x64-setup.exe) 或 [Kronos 官网](https://xenonesis.github.io/Kronos/) 下载持久化 Windows 安装程序（`Kronos_x64-setup.exe`）。打开应用后本地 daemon 会自动启动。
 
-如果要从手机连接，在 Settings 中扫描显示的二维码。
+随时一键本地构建/同步：
+
+```cmd
+.\update-desktop-exe.bat
+```
 
 ### CLI / 无头模式
 

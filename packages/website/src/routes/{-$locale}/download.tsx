@@ -46,7 +46,7 @@ export const Route = createFileRoute("/{-$locale}/download")({
 const ALL_RELEASES_COMPONENTS = {
   github: (
     <a
-      href="https://github.com/getpaseo/paseo/releases"
+      href="https://github.com/Xenonesis/Kronos/releases"
       target="_blank"
       rel="noopener noreferrer"
       className="underline hover:text-foreground transition-colors"

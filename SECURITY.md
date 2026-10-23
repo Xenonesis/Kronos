@@ -1,8 +1,8 @@
 # Security
 
-Paseo follows a client-server architecture, similar to Docker. The daemon runs on your machine and manages your coding agents. Clients (the mobile app, CLI, or web interface) connect to the daemon to monitor and control those agents.
+Kronos follows a client-server architecture, similar to Docker. The daemon runs on your machine and manages your coding agents. Clients (the native Tauri v2 desktop workstation, mobile app, CLI, or web interface) connect to the daemon to monitor and control those agents.
 
-Your code never leaves your machine. Paseo is a local-first tool that connects directly to your development environment.
+Your code never leaves your machine. Kronos is a 100% local-first tool that connects directly to your development environment with zero telemetry or surveillance.
 
 ## Architecture
 
@@ -94,4 +94,4 @@ Paseo only talks to a forge host that is either a known cloud host or one the fo
 
 ## Reporting vulnerabilities
 
-If you discover a security vulnerability, please report it privately by emailing hello@moboudra.com. Do not open a public issue.
+If you discover a security vulnerability in Kronos, please report it privately via GitHub security advisories at https://github.com/Xenonesis/Kronos/security/advisories or contact the repository maintainers. Do not open a public issue.

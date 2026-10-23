@@ -10,10 +10,10 @@ Daemon-owned outbound connections and routed API scope ownership are described i
 ## System overview
 
 ```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│  Mobile App  │    │     CLI     │    │ Desktop App │
-│   (Expo)     │    │ (Commander) │    │ (Electron)  │
-└──────┬───────┘    └──────┬──────┘    └──────┬──────┘
+┌─────────────┐    ┌─────────────┐    ┌────────────────┐
+│  Mobile App  │    │     CLI     │    │ Kronos Desktop │
+│   (Expo)     │    │ (Commander) │    │   (Tauri v2)   │
+└──────┬───────┘    └──────┬──────┘    └───────┬────────┘
        │                   │                  │
        │    WebSocket      │    WebSocket     │    Managed subprocess
        │    (direct or     │    (direct)      │    + WebSocket
@@ -39,7 +39,7 @@ Daemon-owned outbound connections and routed API scope ownership are described i
 - **Daemon:** Local server that spawns and manages agent processes and exposes the WebSocket API.
 - **App:** Cross-platform Expo client for iOS, Android, web, and the shared UI used by desktop.
 - **CLI:** Terminal interface for agent workflows that can also start and manage the daemon.
-- **Desktop app:** Electron wrapper around the web app that bundles and auto-manages its own daemon.
+- **Desktop app (Kronos):** High-performance native Rust Tauri v2 workstation linked to OS WebView2 (<100MB RAM, sub-second boot), auto-managing the background daemon. Legacy Electron shell is retained under `packages/desktop` for fallback reference.
 - **Relay:** Optional encrypted bridge for remote access without opening ports directly.
 
 ## Packages
@@ -199,13 +199,21 @@ See [SECURITY.md](../SECURITY.md) for the full threat model.
 The optional Hub relationship is daemon-outbound and does not use the relay. Its connection,
 authorization, ownership, persistence, and lifecycle contract is documented in [hub.md](hub.md).
 
-### `packages/desktop` — Desktop app (Electron)
+### `packages/desktop-tauri` — Kronos Desktop App (Tauri v2 + Rust)
 
-Electron wrapper for macOS, Linux, and Windows.
+The primary desktop application runtime for Kronos:
+
+- Native Rust binary composited directly via OS WebView2 (Windows / Linux / macOS)
+- Bounds idle RAM to under 100MB (eliminating Electron's ~800MB–1.2GB overhead)
+- Manages background daemon lifecycle, native system tray, custom tactical titlebar, and notifications
+- Packaged via NSIS installer (`Kronos_x64-setup.exe`) and auto-updating delivery pipeline
+
+### `packages/desktop` — Legacy Desktop app (Electron)
+
+Legacy Electron wrapper retained for retrograde compatibility:
 
 - Can spawn the daemon as a managed subprocess
 - Native file access for workspace integration
-- Same WebSocket client as mobile app
 
 The desktop does not manage agent skills. It retains one compatibility reader for the old
 `skill-selection.json`, imports that preference into its managed local daemon, then deletes the old

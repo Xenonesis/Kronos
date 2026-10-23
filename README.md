@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="packages/website/public/logo.svg" width="64" height="64" alt="Paseo logo">
+  <img src="packages/website/public/kronos-logo.svg" width="64" height="64" alt="Kronos logo">
 </p>
 
-<h1 align="center">Paseo</h1>
+<h1 align="center">Kronos</h1>
 
 <p align="center">
   <a href="README.md">English</a> ·
@@ -12,25 +12,18 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/getpaseo/paseo/stargazers">
-    <img src="https://img.shields.io/github/stars/getpaseo/paseo?style=flat&logo=github" alt="GitHub stars">
+  <a href="https://github.com/Xenonesis/Kronos/stargazers">
+    <img src="https://img.shields.io/github/stars/Xenonesis/Kronos?style=flat&logo=github" alt="GitHub stars">
   </a>
-  <a href="https://github.com/getpaseo/paseo/releases">
-    <img src="https://img.shields.io/github/v/release/getpaseo/paseo?style=flat&logo=github" alt="GitHub release">
+  <a href="https://github.com/Xenonesis/Kronos/releases">
+    <img src="https://img.shields.io/github/v/release/Xenonesis/Kronos?style=flat&logo=github" alt="GitHub release">
   </a>
-  <a href="https://x.com/moboudra">
-    <img src="https://img.shields.io/badge/%40moboudra-555?logo=x" alt="X">
-  </a>
-  <a href="https://discord.gg/jz8T2uahpH">
-    <img src="https://img.shields.io/badge/Discord-555?logo=discord" alt="Discord">
-  </a>
-  <a href="https://www.reddit.com/r/PaseoAI/">
-    <img src="https://img.shields.io/badge/Reddit-555?logo=reddit" alt="Reddit">
+  <a href="https://xenonesis.github.io/Kronos/">
+    <img src="https://img.shields.io/badge/Site-GitHub%20Pages-FF2A2A" alt="Website">
   </a>
 </p>
 
-<p align="center">One interface for Claude Code, Codex, Copilot, OpenCode, Pi, Antigravity, and Muse Code agents.</p>
-
+<p align="center">The Apex AI Developer Workstation & Autonomous Agent Swarm Engine.<br>Native Rust Tauri v2 compositor under 100MB RAM. Zero Electron bloat.</p>
 <p align="center">
   <img src="https://paseo.sh/hero-mockup.png" alt="Paseo app screenshot" width="100%">
 </p>
@@ -39,18 +32,18 @@
   <img src="https://paseo.sh/mobile-mockup.png" alt="Paseo mobile app" width="100%">
 </p>
 
-Paseo is an open source agentic development environment for desktop, mobile, web, and CLI. Open the desktop app and work: agents, editor, terminals, diffs, pull requests, and a browser in one window. Run many agents at once, each in its own worktree, on one machine or several. The mobile app is the full app, native on iOS and Android.
+Kronos is a high-performance native AI developer workstation and autonomous agent swarm execution engine built with Tauri v2 and native Rust. For agent-driven engineering, it provides a high-density tactical cockpit: run autonomous coding swarms, edit files, review AST diffs, run tests in sandboxed terminals, and inspect live web applications through headless browser automation.
 
-- **Parallel agents:** Run many agents at once, each in its own worktree.
-- **Built-in orchestration:** Agents in Paseo can create worktrees, launch other agents, and talk to them, across providers.
-- **Complete development workflow:** Edit files, review diffs, open pull requests, and run terminals, in split panes you arrange how you want.
-- **Self-hosted:** Agents run on your machine with your full dev environment. Use your tools, your configs, and your skills.
-- **Multi-provider:** Claude Code, Codex, Copilot, OpenCode, Pi, Antigravity, and Muse Code through the same interface. Pick the right model for each job.
-- **Voice control:** Dictate tasks or talk through problems in voice mode. Hands-free when you need it.
-- **Cross-device:** iOS, Android, desktop, web, and CLI. Start work at your desk, check in from your phone, script it from the terminal.
-- **Privacy-first:** Paseo doesn't have any telemetry, tracking, or forced log-ins.
+- **Apex Rust Architecture:** Built on Tauri v2 linking directly to native OS WebView2 (<100MB RAM, sub-second cold boot, 0% Chromium bloat).
+- **Parallel swarms:** Run multiple agents concurrently, each isolated in its own git worktree.
+- **OMP Sessions Timeline:** Frame-accurate telemetry into subagent state trees, tool dispatch payloads, AST diff artifacts, and deterministic rollback points.
+- **Headless Browser Automation:** Live DOM inspection, click coordinate targeting, screenshot capture, and cookie vault synchronization.
+- **Complete engineering cockpit:** Integrated editors, visual diff inspectors, pull request management, and embedded terminal grids.
+- **1-Click Self-Updating Setup:** Instant local atomic compilation and persistent release packaging via `update-desktop-exe.bat`.
+- **Multi-provider:** Claude Code, Codex, GitHub Copilot, OpenCode, Pi, Antigravity, Muse Code, and OMP through a unified interface.
+- **Air-gapped & Privacy-First:** 100% localhost execution with zero telemetry, zero surveillance, and no forced logins.
 
-[Run parallel tasks in Paseo](https://paseo.sh/docs/parallel-development): start agents in separate worktrees, review their diffs, run each app, and check it in the built-in browser.
+[Visit the Kronos Telemetry Site](https://xenonesis.github.io/Kronos/) · [Download Windows Installer](https://github.com/Xenonesis/Kronos/releases/latest/download/Kronos_x64-setup.exe)
 
 ## Sponsors
 
@@ -80,7 +73,7 @@ Plugins run with access to your daemon machine and inside connected clients; ins
 
 ## Getting Started
 
-Paseo runs a local server called the daemon that manages your coding agents. Clients like the desktop app, mobile app, web app, and CLI connect to it.
+Kronos runs a lightweight local background daemon managing your coding agents. The native Tauri v2 desktop workstation connects to it automatically over localhost WebSocket.
 
 ### Prerequisites
 
@@ -94,11 +87,15 @@ You need at least one agent CLI installed and configured with your credentials:
 - [Antigravity](https://paseo.sh/docs/supported-providers#antigravity)
 - [Muse Code](https://paseo.sh/docs/muse-code)
 
-### Desktop app (recommended)
+### Desktop Workstation (Recommended)
 
-Download it from [paseo.sh/download](https://paseo.sh/download) or the [GitHub releases page](https://github.com/getpaseo/paseo/releases). Open the app and the daemon starts automatically. Nothing else to install.
+Download the persistent production installer (`Kronos_x64-setup.exe`) from the [GitHub Releases page](https://github.com/Xenonesis/Kronos/releases/latest/download/Kronos_x64-setup.exe) or visit the [Kronos site](https://xenonesis.github.io/Kronos/). Opening the workstation automatically boots the local daemon.
 
-To connect from your phone, open **Settings → your host → Pair Device**.
+To rebuild or update locally at any time:
+
+```cmd
+.\update-desktop-exe.bat
+```
 
 ### Server
 
@@ -192,12 +189,12 @@ Then use them in any agent conversation:
 
 Quick monorepo package map:
 
-- `packages/server`: Paseo daemon (agent process orchestration, WebSocket API, MCP server)
-- `packages/app`: Expo client (iOS, Android, web)
+- `packages/desktop-tauri`: Native Rust Tauri v2 desktop workstation (<100MB RAM, custom tactical titlebar, system tray, auto-updater)
+- `packages/server`: Kronos daemon (agent process orchestration, WebSocket API, MCP server, Playwright automation)
+- `packages/app`: React UI client (Expo / Web / Desktop)
 - `packages/cli`: `paseo` CLI for daemon and agent workflows
-- `packages/desktop`: Electron desktop app
 - `packages/relay`: Relay transport and encryption used by the daemon and clients
-- `packages/website`: Marketing site and documentation (`paseo.sh`)
+- `packages/website`: Tactical telemetry marketing site and documentation
 
 Common commands:
 
