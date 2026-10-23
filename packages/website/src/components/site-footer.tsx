@@ -1,7 +1,9 @@
-import { Link } from "@tanstack/react-router";
+import { useTranslation } from "react-i18next";
 import { PLUGINS_LINKED } from "~/plugins/launch";
 import { getAlternativePages } from "~/data/alternative-pages";
 import { SponsorsSection } from "~/components/sponsorship";
+import { useLocale, useLocalizePath } from "~/i18n";
+
 interface SiteFooterProps {
   width?: "default" | "prose" | "wide";
   /** Pages that show the sponsors in their content turn the footer band off. */
@@ -14,163 +16,81 @@ const WIDTH_CLASSES: Record<NonNullable<SiteFooterProps["width"]>, string> = {
   wide: "max-w-7xl p-6 md:p-20 md:pt-0",
 };
 
-const CLI_PARAMS = { _splat: "cli" };
+const LINK_CLASS = "block text-muted-foreground hover:text-foreground transition-colors";
+
+function ExternalLink({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" className={LINK_CLASS}>
+      {children}
+    </a>
+  );
+}
+
 export function SiteFooter({ width = "default", sponsors = true }: SiteFooterProps) {
+  const { t } = useTranslation();
+  const locale = useLocale();
+  const localize = useLocalizePath();
   const widthClasses = WIDTH_CLASSES[width];
-  const alternatives = getAlternativePages();
+  const alternatives = getAlternativePages(locale);
+  const page = (path: string, label: string) => (
+    <a href={localize(path)} className={LINK_CLASS}>
+      {label}
+    </a>
+  );
   return (
     <footer className={`${widthClasses} mx-auto mt-12 md:mt-16`}>
       {sponsors ? <SponsorsSection placement="footer" /> : null}
       <div className="border-t border-white/10 pt-8 pb-4 grid grid-cols-2 sm:grid-cols-5 gap-8 text-sm">
         <div className="space-y-3">
-          <p className="text-extra-muted-foreground">Product</p>
+          <p className="text-extra-muted-foreground">{t("footer.product")}</p>
           <div className="space-y-2">
-            <Link
-              to="/blog"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Blog
-            </Link>
-            <Link
-              to="/docs"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Docs
-            </Link>
-            {PLUGINS_LINKED && (
-              <Link
-                to="/plugins"
-                className="block text-muted-foreground hover:text-foreground transition-colors"
-              >
-                Plugins
-              </Link>
-            )}
-            <Link
-              to="/changelog"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Changelog
-            </Link>
-            <Link
-              to="/hub"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Hub
-            </Link>
-            <Link
-              to="/docs/$"
-              params={CLI_PARAMS}
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              CLI
-            </Link>
-            <Link
-              to="/privacy"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Privacy
-            </Link>
-            <Link
-              to="/terms"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Terms
-            </Link>
-            <Link
-              to="/sponsor"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Sponsor
-            </Link>
+            {page("/blog", t("footer.blog"))}
+            {page("/docs", t("footer.docs"))}
+            {PLUGINS_LINKED && page("/plugins", t("footer.plugins"))}
+            {page("/changelog", t("footer.changelog"))}
+            {page("/hub", t("footer.hub"))}
+            {page("/docs/cli", t("footer.cli"))}
+            {page("/privacy", t("footer.privacy"))}
+            {page("/terms", t("footer.terms"))}
+            {page("/sponsor", t("footer.sponsor"))}
           </div>
         </div>
         <div className="space-y-3">
-          <p className="text-extra-muted-foreground">Agents</p>
+          <p className="text-extra-muted-foreground">{t("footer.agents")}</p>
           <div className="space-y-2">
-            <Link
-              to="/claude-code"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Claude Code
-            </Link>
-            <Link
-              to="/codex"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Codex
-            </Link>
-            <Link
-              to="/opencode"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              OpenCode
-            </Link>
-            <Link
-              to="/antigravity"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Antigravity
-            </Link>
-            <Link
-              to="/muse-code"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Muse Code
-            </Link>
-            <Link
-              to="/agents"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              All providers
-            </Link>
+            {page("/claude-code", "Claude Code")}
+            {page("/codex", "Codex")}
+            {page("/opencode", "OpenCode")}
+            {page("/antigravity", "Antigravity")}
+            {page("/muse-code", "Muse Code")}
+            {page("/agents", t("footer.allProviders"))}
           </div>
         </div>
         <div className="space-y-3">
-          <p className="text-extra-muted-foreground">Alternatives</p>
+          <p className="text-extra-muted-foreground">{t("footer.alternatives")}</p>
           <div className="space-y-2">
-            {alternatives.map((page) => (
-              <a
-                key={page.slug}
-                href={`${import.meta.env.BASE_URL.replace(/\/$/, "")}${page.href}`}
-                className="block text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {page.name}
+            {alternatives.map((alternative) => (
+              <a key={alternative.slug} href={localize(alternative.href)} className={LINK_CLASS}>
+                {alternative.name}
               </a>
             ))}
           </div>
         </div>
         <div className="space-y-3">
-          <p className="text-extra-muted-foreground">Community</p>
+          <p className="text-extra-muted-foreground">{t("footer.community")}</p>
           <div className="space-y-2">
-            <a
-              href="https://github.com/Xenonesis/Kronos"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
-              GitHub
-            </a>
+            <ExternalLink href="https://github.com/Xenonesis/Kronos">GitHub</ExternalLink>
           </div>
         </div>
         <div className="space-y-3">
-          <p className="text-extra-muted-foreground">Download</p>
+          <p className="text-extra-muted-foreground">{t("footer.download")}</p>
           <div className="space-y-2">
-            <a
-              href="https://github.com/Xenonesis/Kronos/releases/latest/download/Kronos_x64-setup.exe"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
+            <ExternalLink href="https://github.com/Xenonesis/Kronos/releases/latest/download/Kronos_x64-setup.exe">
               Desktop (Windows .EXE)
-            </a>
-            <a
-              href="https://github.com/Xenonesis/Kronos/releases"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block text-muted-foreground hover:text-foreground transition-colors"
-            >
+            </ExternalLink>
+            <ExternalLink href="https://github.com/Xenonesis/Kronos/releases">
               GitHub Releases
-            </a>
+            </ExternalLink>
           </div>
         </div>
       </div>

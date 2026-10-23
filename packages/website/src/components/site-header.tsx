@@ -1,14 +1,16 @@
-import { Link } from "@tanstack/react-router";
 import { PLUGINS_LINKED } from "~/plugins/launch";
 import "~/styles.css";
 import { GitHubIcon } from "~/components/brand-icons";
+import { useLocalizePath } from "~/i18n";
 import { useStars } from "~/routes/__root";
+
 export function SiteHeader() {
+  const localize = useLocalizePath();
   const { stars } = useStars();
   return (
     <header className="flex flex-col gap-4 border border-[#262626] bg-[#121212] p-3 text-[#EAEAEA] font-mono text-xs uppercase tracking-wider md:flex-row md:items-center md:justify-between rounded-none">
       <div className="flex items-center gap-3">
-        <Link to="/" className="flex items-center gap-2.5 group">
+        <a href={localize("/")} className="flex items-center gap-2.5 group">
           <img
             src={`${import.meta.env.BASE_URL}favicon.svg`}
             alt="Kronos Emblem"
@@ -20,7 +22,7 @@ export function SiteHeader() {
           <span className="font-bold tracking-widest text-sm text-[#EAEAEA] group-hover:text-[#FF2A2A] transition-colors">
             KRONOS // APEX-01
           </span>
-        </Link>
+        </a>
         <span className="text-[#333333]">|</span>
         <div className="hidden sm:flex items-center gap-1.5 text-[10px] text-[#888888]">
           <span>SYS:</span>
@@ -30,12 +32,12 @@ export function SiteHeader() {
 
       <div className="flex flex-wrap items-center gap-3">
         {PLUGINS_LINKED && (
-          <Link
-            to="/plugins"
+          <a
+            href={localize("/plugins")}
             className="text-[#888888] hover:text-[#EAEAEA] hover:underline underline-offset-4 transition-colors"
           >
             [ PLUGINS ]
-          </Link>
+          </a>
         )}
         <a
           href="#compare"
@@ -49,12 +51,12 @@ export function SiteHeader() {
         >
           [ SPEC_SHEET ]
         </a>
-        <Link
-          to="/docs"
+        <a
+          href={localize("/docs")}
           className="text-[#888888] hover:text-[#EAEAEA] hover:underline underline-offset-4 transition-colors"
         >
           [ DOCS ]
-        </Link>
+        </a>
         <a
           href="https://github.com/Xenonesis/Kronos/releases/latest/download/Kronos_x64-setup.exe"
           className="bg-[#FF2A2A] text-black px-3 py-1 font-bold tracking-widest hover:bg-white transition-colors"

@@ -50,17 +50,10 @@ function MarkdownPreview({ text, params, workspaceId, host }: TextFilePreviewPro
 }
 
 /** The page owns its scrolling, so there is no ScrollView around it. */
-function HtmlPreview({ text, target }: TextFilePreviewProps) {
-  const client = useSessionStore((state) => state.sessions[target.serverId]?.client ?? null);
+function HtmlPreview({ text }: TextFilePreviewProps) {
   return (
     <View style={styles.container}>
-      <FileHtmlPreview
-        html={text}
-        filePath={target.path}
-        client={client}
-        cwd={target.workspaceRoot}
-        testID="file-html-preview"
-      />
+      <FileHtmlPreview html={text} testID="file-html-preview" />
     </View>
   );
 }
