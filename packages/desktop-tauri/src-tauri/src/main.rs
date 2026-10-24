@@ -95,7 +95,7 @@ fn get_daemon_status_json() -> String {
         "pid": pid,
         "localCredential": local_credential,
         "home": home.to_string_lossy().to_string(),
-        "version": "0.12.0",
+        "version": env!("CARGO_PKG_VERSION"),
         "desktopManaged": true,
         "ownedByDesktop": true,
         "startedAt": "2026-09-26T12:00:00.000Z",

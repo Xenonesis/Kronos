@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { statSync, existsSync, readdirSync, copyFileSync } from "node:fs";
+import { statSync, existsSync, readdirSync, copyFileSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,6 +23,23 @@ function getLatestExe(nsisDir) {
   );
   return path.join(nsisDir, files[0]);
 }
+function getAppVersion() {
+  try {
+    const tauriConfPath = path.join(rootDir, "packages", "desktop-tauri", "src-tauri", "tauri.conf.json");
+    if (existsSync(tauriConfPath)) {
+      const conf = JSON.parse(readFileSync(tauriConfPath, "utf8"));
+      if (conf.version) return conf.version;
+    }
+  } catch {}
+  try {
+    const pkgPath = path.join(rootDir, "package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+    return pkg.version || "0.13.0";
+  } catch {
+    return "0.13.0";
+  }
+}
+
 
 function getChangedFiles(oldHead, newHead) {
   if (!oldHead || !newHead || oldHead === newHead) return [];
@@ -188,9 +205,11 @@ async function main() {
   } catch (err) {
     console.log("\x1b[33mTarget directory locked by running process; compiling with CARGO_TARGET_DIR fallback...\x1b[0m");
     run(`npx cross-env CARGO_TARGET_DIR="${tempTargetDir}" npx tauri build --bundles nsis`, path.join(rootDir, "packages", "desktop-tauri"));
-    const tempBundle = path.join(tempTargetDir, "release", "bundle", "nsis", "Kronos_0.12.0_x64-setup.exe");
+    const appVersion = getAppVersion();
+    const versionedName = `Kronos_${appVersion}_x64-setup.exe`;
+    const tempBundle = path.join(tempTargetDir, "release", "bundle", "nsis", versionedName);
     if (existsSync(tempBundle)) {
-      copyFileSync(tempBundle, path.join(nsisDir, "Kronos_0.12.0_x64-setup.exe"));
+      copyFileSync(tempBundle, path.join(nsisDir, versionedName));
       copyFileSync(tempBundle, path.join(nsisDir, "Kronos_x64-setup.exe"));
     }
   }
@@ -210,20 +229,42 @@ async function main() {
       console.log(`  \x1b[37mPersistent Latest Asset:\x1b[0m ${persistentPath}`);
     }
 
+    const appVersion = getAppVersion();
+    const releaseTag = `v${appVersion}`;
     if (publish) {
-      console.log("\n\x1b[33m[*] Uploading latest .exe to GitHub Releases...\x1b[0m");
+      console.log(`\n\x1b[33m[*] Uploading latest .exe to GitHub Releases (${releaseTag})...\x1b[0m`);
       try {
+        try {
+          execSync(`gh release view ${releaseTag} --repo Xenonesis/Kronos`, { stdio: "ignore" });
+        } catch {
+          console.log(`\x1b[36mℹ Release ${releaseTag} does not exist yet. Creating release...\x1b[0m`);
+          execSync(
+            `gh release create ${releaseTag} --title "Kronos ${releaseTag}" --notes "Automated build of Kronos ${releaseTag}" --repo Xenonesis/Kronos`,
+            { stdio: "inherit" },
+          );
+        }
         execSync(
-          `gh release upload v0.12.0 "${exePath}" "${persistentPath}" --clobber --repo Xenonesis/Kronos`,
+          `gh release upload ${releaseTag} "${exePath}" "${persistentPath}" --clobber --repo Xenonesis/Kronos`,
           { stdio: "inherit" },
         );
-        console.log("\x1b[32m✔ Uploaded latest installer to GitHub Releases!\x1b[0m");
+        console.log(`\x1b[32m✔ Uploaded latest installer to GitHub Releases (${releaseTag})!\x1b[0m`);
+
+        console.log("\x1b[33m[*] Triggering GitHub Pages website deployment...\x1b[0m");
+        try {
+          execSync(`gh workflow run "Deploy to GitHub Pages" --repo Xenonesis/Kronos`, { stdio: "inherit" });
+          console.log("\x1b[32m✔ GitHub Pages website deployment triggered!\x1b[0m");
+        } catch (wfErr) {
+          console.warn("\x1b[33m⚠ Note: Could not trigger GitHub Pages workflow automatically:\x1b[0m", wfErr.message);
+        }
       } catch (e) {
         console.warn(
           "\x1b[33m⚠ Warning: Could not upload to GitHub Releases automatically.\x1b[0m",
           e.message,
         );
       }
+    } else {
+      console.log("\n\x1b[36mℹ Note: Built locally. To auto-upload to GitHub Releases and update the live website, run with --publish:\x1b[0m");
+      console.log("  \x1b[37mnode scripts/update-and-build-exe.mjs --publish\x1b[0m");
     }
   } else {
     console.error("\n\x1b[31m✖ Error: Installer .exe was not found at expected path.\x1b[0m");

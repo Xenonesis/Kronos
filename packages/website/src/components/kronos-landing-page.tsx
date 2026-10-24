@@ -33,9 +33,9 @@ interface ReleaseData {
 function useKronosRelease(): ReleaseData {
   const [release, setRelease] = useState<ReleaseData>({
     downloadUrl: PERSISTENT_DOWNLOAD_URL,
-    version: "v0.12.0",
+    version: "v0.13.0",
     size: "97 MB",
-    filename: "Kronos_0.12.0_x64-setup.exe",
+    filename: "Kronos_x64-setup.exe",
   });
 
   useEffect(() => {
@@ -49,13 +49,14 @@ function useKronosRelease(): ReleaseData {
         };
         if (!data || !Array.isArray(data.assets)) return;
         const exeAsset =
+          data.assets.find((a) => a.name === "Kronos_x64-setup.exe") ||
           data.assets.find((a) => a.name.endsWith("-setup.exe")) ||
           data.assets.find((a) => a.name.endsWith(".exe"));
         if (exeAsset) {
           const mb = (exeAsset.size / (1024 * 1024)).toFixed(0) + " MB";
           setRelease({
-            downloadUrl: exeAsset.browser_download_url || PERSISTENT_DOWNLOAD_URL,
-            version: data.tag_name || "v0.12.0",
+            downloadUrl: PERSISTENT_DOWNLOAD_URL,
+            version: data.tag_name || "v0.13.0",
             size: mb,
             filename: exeAsset.name,
           });

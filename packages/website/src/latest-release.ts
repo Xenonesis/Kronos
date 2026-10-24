@@ -43,6 +43,7 @@ function pickWindowsAssets(assets: GitHubAsset[]) {
   // wrong architecture and the installer would not run.
   const x64Candidates = windows.filter((asset) => !/arm64/i.test(asset.name));
   const x64 =
+    x64Candidates.find((asset) => asset.name === "Kronos_x64-setup.exe")?.name ??
     x64Candidates.find((asset) => /[-_]x64[-_]setup\.exe$/i.test(asset.name))?.name ??
     x64Candidates.find((asset) => /[-_]x64\.exe$/i.test(asset.name))?.name ??
     x64Candidates.find((asset) => /[-_]setup\.exe$/i.test(asset.name))?.name ??
@@ -129,9 +130,9 @@ export function selectReleaseChannels(releases: GitHubRelease[]): ReleaseChannel
 
 const FALLBACK_RELEASE_CHANNELS: ReleaseChannels = {
   stable: {
-    version: "0.12.0",
-    linuxAppImageAsset: "Kronos-0.12.0-x86_64.AppImage",
-    windowsX64Asset: "Kronos_0.12.0_x64-setup.exe",
+    version: "0.13.0",
+    linuxAppImageAsset: "Kronos-0.13.0-x86_64.AppImage",
+    windowsX64Asset: "Kronos_x64-setup.exe",
     windowsArm64Asset: null,
   },
   beta: null,

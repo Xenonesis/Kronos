@@ -113,6 +113,16 @@ describe("selectReleaseChannels", () => {
     expect(channels.stable.windowsX64Asset).toBe("Kronos_0.12.0_x64-setup.exe");
     expect(channels.stable.windowsArm64Asset).toBe("Kronos_0.12.0_arm64-setup.exe");
   });
+  it("prefers persistent Kronos_x64-setup.exe over version-specific names when present", () => {
+    const channels = selectReleaseChannels([
+      desktopRelease({
+        version: "0.13.0",
+        assets: ["Kronos_0.13.0_x64-setup.exe", "Kronos_x64-setup.exe"],
+      }),
+    ]);
+
+    expect(channels.stable.windowsX64Asset).toBe("Kronos_x64-setup.exe");
+  });
 
   it("never offers an arm64 build in the x64 slot", () => {
     const channels = selectReleaseChannels([

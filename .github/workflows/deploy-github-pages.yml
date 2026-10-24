@@ -6,6 +6,11 @@ on:
     paths:
       - "packages/website/**"
       - ".github/workflows/deploy-github-pages.yml"
+  release:
+    types: [published]
+  workflow_run:
+    workflows: ["Desktop Release"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -35,6 +40,8 @@ jobs:
         run: npm run build:protocol
 
       - name: Build static website
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run build:pages --workspace=@getpaseo/website
 
       - name: Upload Pages artifact
