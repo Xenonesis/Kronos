@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { statSync, existsSync, readdirSync, copyFileSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
