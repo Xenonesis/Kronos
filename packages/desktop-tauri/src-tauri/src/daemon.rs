@@ -113,7 +113,7 @@ pub fn start_daemon() -> Option<Child> {
         cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
     }
     let child = cmd.spawn().ok()?;
-    std::thread::sleep(Duration::from_millis(2000));
+    // Daemon process spawned immediately without blocking thread sleep
     Some(child)
 }
 

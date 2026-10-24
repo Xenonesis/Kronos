@@ -145,7 +145,7 @@ async function main() {
   // Step 3: Export Web Bundle
   console.log("\n\x1b[33m[3/5] Frontend web bundle export...\x1b[0m");
   if (appNeedsBuild) {
-    run("npx expo export --platform web", path.join(rootDir, "packages", "app"));
+    run("npx cross-env NODE_ENV=production PASEO_WEB_PLATFORM=electron npx expo export --platform web --clear", path.join(rootDir, "packages", "app"));
   } else {
     console.log("\x1b[32m⏩ [SKIP] Frontend files unchanged. Reusing cached web export.\x1b[0m");
   }
@@ -182,8 +182,18 @@ async function main() {
   }
 
   console.log("\n\x1b[33m[5/5] Compiling Tauri NSIS installer .exe...\x1b[0m");
-  run("npx tauri build --bundles nsis", path.join(rootDir, "packages", "desktop-tauri"));
-
+  const tempTargetDir = path.join(os.tmpdir(), "kronos_target");
+  try {
+    run("npx tauri build --bundles nsis", path.join(rootDir, "packages", "desktop-tauri"));
+  } catch (err) {
+    console.log("\x1b[33mTarget directory locked by running process; compiling with CARGO_TARGET_DIR fallback...\x1b[0m");
+    run(`npx cross-env CARGO_TARGET_DIR="${tempTargetDir}" npx tauri build --bundles nsis`, path.join(rootDir, "packages", "desktop-tauri"));
+    const tempBundle = path.join(tempTargetDir, "release", "bundle", "nsis", "Kronos_0.12.0_x64-setup.exe");
+    if (existsSync(tempBundle)) {
+      copyFileSync(tempBundle, path.join(nsisDir, "Kronos_0.12.0_x64-setup.exe"));
+      copyFileSync(tempBundle, path.join(nsisDir, "Kronos_x64-setup.exe"));
+    }
+  }
   // Verification
   const exePath = getLatestExe(nsisDir);
   if (exePath && existsSync(exePath)) {

@@ -117,13 +117,15 @@ fn main() {
     let state = DaemonState {
         process: Mutex::new(daemon_child),
     };
-    // Wait for daemon to be healthy and responding before initializing window
-    let is_healthy = wait_for_daemon_health(50);
-    if is_healthy {
-        println!("[daemon] Host daemon confirmed healthy on 127.0.0.1:6767");
-    } else {
-        eprintln!("[daemon] Host daemon not responding yet, proceeding with startup");
-    }
+    // Background thread probes daemon health non-blockingly so window renders immediately
+    std::thread::spawn(|| {
+        let is_healthy = wait_for_daemon_health(50);
+        if is_healthy {
+            println!("[daemon] Host daemon confirmed healthy on 127.0.0.1:6767");
+        } else {
+            eprintln!("[daemon] Host daemon not responding after startup timeout");
+        }
+    });
 
 
     let status_json = get_daemon_status_json();
@@ -289,7 +291,7 @@ try {{
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(800.0, 600.0)
                 .shadow(true)
-                .visible(false)
+                .visible(true)
                 .initialization_script(&bridge_script);
 
             let win = win_builder.build().ok();
