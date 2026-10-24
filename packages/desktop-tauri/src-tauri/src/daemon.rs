@@ -3,7 +3,6 @@ use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use std::time::Duration;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -36,17 +35,13 @@ fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
         }
     }
 
-    // 2. Known local repo path on development workstation
-    let repo_candidates = [
-        PathBuf::from(r"C:\Users\Acer\Desktop\paseo"),
-    ];
-    for repo in &repo_candidates {
-        let script = repo.join("packages").join("server").join("dist").join("server").join("server").join("daemon-worker.js");
+    // 2. Optional override via environment variable
+    if let Ok(repo) = env::var("KRONOS_REPO_DIR").or_else(|_| env::var("PASEO_REPO_DIR")) {
+        let script = PathBuf::from(repo).join("packages").join("server").join("dist").join("server").join("server").join("daemon-worker.js");
         if script.exists() {
-            return Some((repo.clone(), PathBuf::from("node"), script));
+            return Some((script.parent()?.parent()?.parent()?.parent()?.to_path_buf(), PathBuf::from("node"), script));
         }
     }
-
     // 3. Local workspace walking up from exe
     if let Ok(mut current) = env::current_exe() {
         for _ in 0..10 {
@@ -80,19 +75,27 @@ pub fn start_daemon() -> Option<Child> {
 
     // Ensure bundled server-dist/node_modules is always included in NODE_PATH
     let local_nm = work_dir.join("node_modules");
+    let mut node_paths = Vec::new();
+    if local_nm.exists() {
+        node_paths.push(local_nm.to_string_lossy().to_string());
+    }
+    if let Ok(existing) = env::var("NODE_PATH") {
+        if !existing.is_empty() {
+            node_paths.push(existing);
+        }
+    }
     if let Ok(appdata) = env::var("APPDATA") {
         let global_npm = PathBuf::from(appdata).join("npm").join("node_modules");
-        if global_npm.exists() && local_nm.exists() {
-            cmd.env("NODE_PATH", format!("{};{}", local_nm.to_string_lossy(), global_npm.to_string_lossy()));
-        } else if local_nm.exists() {
-            cmd.env("NODE_PATH", local_nm.to_string_lossy().to_string());
-        } else if global_npm.exists() {
-            cmd.env("NODE_PATH", global_npm.to_string_lossy().to_string());
+        if global_npm.exists() {
+            node_paths.push(global_npm.to_string_lossy().to_string());
         }
-    } else if local_nm.exists() {
-        cmd.env("NODE_PATH", local_nm.to_string_lossy().to_string());
     }
-
+    if !node_paths.is_empty() {
+        #[cfg(windows)]
+        cmd.env("NODE_PATH", node_paths.join(";"));
+        #[cfg(not(windows))]
+        cmd.env("NODE_PATH", node_paths.join(":"));
+    }
     cmd.current_dir(&work_dir)
         .stdin(Stdio::null());
 

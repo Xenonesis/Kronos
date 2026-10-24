@@ -103,6 +103,25 @@ fn get_daemon_status_json() -> String {
     }).to_string()
 }
 
+#[tauri::command]
+fn get_live_daemon_status() -> serde_json::Value {
+    serde_json::from_str(&get_daemon_status_json()).unwrap_or(serde_json::Value::Null)
+}
+
+#[tauri::command]
+fn get_live_local_credential() -> Option<String> {
+    let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    home.push(".paseo");
+    let credential_file = home.join("local-credential");
+    if let Ok(content) = fs::read_to_string(&credential_file) {
+        let trimmed = content.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
 fn main() {
     #[cfg(target_os = "windows")]
     {
@@ -133,14 +152,20 @@ fn main() {
         r#"
 try {{
   const daemonData = {status_json};
-  const listenEndpoint = (daemonData.listen || 'localhost:6767').replace(/^http:\/\//, '').replace(/\/.*$/, '');
-  const endpoint = listenEndpoint.startsWith('127.0.0.1') ? listenEndpoint.replace('127.0.0.1', 'localhost') : listenEndpoint;
+  const listenEndpoint = (daemonData.listen || '127.0.0.1:6767').replace(/^http:\/\//, '').replace(/\/.*$/, '');
+  const endpoint = listenEndpoint;
 
   window.paseoDesktop = {{
     platform: 'win32',
     windowChromeMode: 'custom-windows',
     invoke: async function(command, args) {{
       if (command === 'desktop_daemon_status' || command === 'start_desktop_daemon') {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            const live = await window.__TAURI_INTERNALS__.invoke('get_live_daemon_status');
+            if (live) return live;
+          }}
+        }} catch (e) {{}}
         return daemonData;
       }}
       if (command === 'desktop_daemon_logs') {{
@@ -183,6 +208,12 @@ try {{
         return await window.__TAURI_INTERNALS__.invoke('update_active_agents', args || {{}});
       }}
       if (command === 'desktop_local_credential') {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            const token = await window.__TAURI_INTERNALS__.invoke('get_live_local_credential');
+            if (token) return token;
+          }}
+        }} catch (e) {{}}
         return daemonData.localCredential || null;
       }}
       if (command === 'get_desktop_settings' || command === 'patch_desktop_settings') {{
@@ -281,7 +312,9 @@ try {{
             pick_file,
             update_active_agents,
             show_notification,
-            notify_task_complete
+            notify_task_complete,
+            get_live_daemon_status,
+            get_live_local_credential
         ])
         .setup(move |app| {
             let _ = setup_tray(app.handle());

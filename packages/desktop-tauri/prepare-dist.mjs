@@ -51,9 +51,13 @@ function npmRegistryConfig(cwd, execFileSync) {
     return "unknown";
   }
 }
-
-if (!fs.existsSync(serverDistNodeModules)) {
-  console.log("Installing production node_modules into server-dist...");
+ const nobleCurves = path.join(serverDistNodeModules, "@noble", "curves");
+ if (!fs.existsSync(serverDistNodeModules) || !fs.existsSync(nobleCurves)) {
+   if (fs.existsSync(serverDistNodeModules)) {
+     console.log("Existing server-dist node_modules missing transitive dependencies (@noble/curves); refreshing...");
+     fs.rmSync(serverDistNodeModules, { recursive: true, force: true });
+   }
+   console.log("Installing production node_modules into server-dist...");
   const { runWithRetry } = await import("../../scripts/npm-retry.mjs");
   const { execFileSync } = await import("node:child_process");
   const os = await import("node:os");
@@ -77,12 +81,26 @@ if (!fs.existsSync(serverDistNodeModules)) {
   // from the manifest for the install. Leaving them in makes npm try to
   // resolve them from the registry, which is a second source of truth for
   // npm to disagree with.
-  const serverPackage = JSON.parse(
-    fs.readFileSync(path.join(root, "packages", "server", "package.json"), "utf8"),
-  );
-  for (const name of internalPackages) {
-    delete serverPackage.dependencies?.[`@getpaseo/${name}`];
-  }
+   const serverPackage = JSON.parse(
+     fs.readFileSync(path.join(root, "packages", "server", "package.json"), "utf8"),
+   );
+   serverPackage.dependencies = serverPackage.dependencies || {};
+   for (const name of internalPackages) {
+     delete serverPackage.dependencies[`@getpaseo/${name}`];
+     try {
+       const childPkgPath = path.join(root, "packages", name, "package.json");
+       if (fs.existsSync(childPkgPath)) {
+         const childPkg = JSON.parse(fs.readFileSync(childPkgPath, "utf8"));
+         for (const [dep, ver] of Object.entries(childPkg.dependencies || {})) {
+           if (!dep.startsWith("@getpaseo/") && !serverPackage.dependencies[dep]) {
+             serverPackage.dependencies[dep] = ver;
+           }
+         }
+       }
+     } catch (e) {
+       console.warn(`Warning: failed to merge dependencies from ${name}:`, e.message);
+     }
+   }
   fs.writeFileSync(
     path.join(stagingDir, "package.json"),
     `${JSON.stringify(serverPackage, null, 2)}\n`,
