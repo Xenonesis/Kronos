@@ -2,6 +2,7 @@
 name = "paseo-desktop"
 version = "0.13.0"
 description = "Kronos Desktop App"
+authors = ["Kronos"]
 edition = "2021"
 
 [build-dependencies]
