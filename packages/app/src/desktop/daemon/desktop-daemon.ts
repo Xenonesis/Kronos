@@ -32,6 +32,10 @@ export interface DesktopDaemonLogs {
   logPath: string;
   contents: string;
 }
+export interface DesktopCrashLogs {
+  logPath: string;
+  contents: string;
+}
 
 export interface DesktopAppLogs {
   logPath: string;
@@ -235,6 +239,16 @@ export async function getDesktopAppLogs(): Promise<DesktopAppLogs> {
   const raw = await invokeDesktopCommand("desktop_app_logs");
   if (!isRecord(raw)) {
     throw new Error("Unexpected desktop app logs response.");
+  }
+  return {
+    logPath: toStringOrNull(raw.logPath) ?? "",
+    contents: typeof raw.contents === "string" ? raw.contents : "",
+  };
+}
+export async function getDesktopCrashLogs(): Promise<DesktopCrashLogs> {
+  const raw = await invokeDesktopCommand("desktop_crash_logs");
+  if (!isRecord(raw)) {
+    throw new Error("Unexpected desktop crash logs response.");
   }
   return {
     logPath: toStringOrNull(raw.logPath) ?? "",

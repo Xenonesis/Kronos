@@ -131,8 +131,147 @@ fn get_live_local_credential() -> Option<String> {
     }
     None
 }
+fn read_tail_file(path: &std::path::Path, max_lines: usize) -> String {
+    if !path.exists() {
+        return String::new();
+    }
+    match fs::read_to_string(path) {
+        Ok(text) => {
+            let lines: Vec<&str> = text.lines().collect();
+            if lines.len() <= max_lines {
+                text
+            } else {
+                lines[lines.len() - max_lines..].join("\n")
+            }
+        }
+        Err(_) => String::new(),
+    }
+}
+
+#[tauri::command]
+fn get_log_contents(log_type: String) -> serde_json::Value {
+    let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    home.push(".paseo");
+    let file_name = match log_type.as_str() {
+        "daemon" => "daemon.log",
+        "app" => "app.log",
+        "crash" => "crash.log",
+        _ => "app.log",
+    };
+    let file_path = home.join(file_name);
+    let log_path = file_path.to_string_lossy().to_string();
+    let contents = read_tail_file(&file_path, 100);
+    serde_json::json!({
+        "logPath": log_path,
+        "contents": contents
+    })
+}
+
+#[tauri::command]
+fn log_desktop_event(level: String, message: String) {
+    let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    home.push(".paseo");
+    let _ = fs::create_dir_all(&home);
+
+    use std::io::Write;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+
+    let entry = format!("[ts:{}] [{}] {}\n", now, level, message);
+
+    let app_log = home.join("app.log");
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&app_log) {
+        let _ = f.write_all(entry.as_bytes());
+    }
+
+    if level == "error" || level == "crash" || level == "panic" {
+        let crash_log = home.join("crash.log");
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&crash_log) {
+            let _ = f.write_all(entry.as_bytes());
+        }
+    }
+}
+
+fn setup_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        home.push(".paseo");
+        let _ = fs::create_dir_all(&home);
+        let crash_log = home.join("crash.log");
+
+        use std::io::Write;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+
+        let location = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_else(|| "unknown".to_string());
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Box<dyn Any>".to_string()
+        };
+
+        let entry = format!(
+            "[ts:{}] [panic] Thread '{}' panicked at '{}' ({})\n",
+            now,
+            std::thread::current().name().unwrap_or("unnamed"),
+            payload,
+            location
+        );
+
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&crash_log) {
+            let _ = f.write_all(entry.as_bytes());
+        }
+        eprintln!("{}", entry);
+    }));
+}
+
+fn check_and_log_crashpad_dumps() {
+    if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+        let reports_dir = PathBuf::from(local_appdata)
+            .join("sh.paseo.desktop.tauri")
+            .join("EBWebView")
+            .join("Crashpad")
+            .join("reports");
+        if reports_dir.exists() {
+            if let Ok(entries) = fs::read_dir(&reports_dir) {
+                let mut dumps = Vec::new();
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("dmp") {
+                        if let Ok(metadata) = entry.metadata() {
+                            dumps.push((path.display().to_string(), metadata.len()));
+                        }
+                    }
+                }
+                if !dumps.is_empty() {
+                    let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+                    home.push(".paseo");
+                    let _ = fs::create_dir_all(&home);
+                    let crash_log = home.join("crash.log");
+                    use std::io::Write;
+                    use std::time::{SystemTime, UNIX_EPOCH};
+                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                    let msg = format!(
+                        "[ts:{}] [crashpad] Found {} WebView2 crashpad dump(s) in reports folder: {:?}\n",
+                        now,
+                        dumps.len(),
+                        dumps
+                    );
+                    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&crash_log) {
+                        let _ = f.write_all(msg.as_bytes());
+                    }
+                }
+            }
+        }
+    }
+}
 
 fn main() {
+    setup_panic_hook();
+    check_and_log_crashpad_dumps();
+
     #[cfg(target_os = "windows")]
     {
         // Prevent DWM occlusion freezes while allowing Chromium GPU watchdog and driver compatibility protections
@@ -180,10 +319,31 @@ try {{
         return daemonData;
       }}
       if (command === 'desktop_daemon_logs') {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            const res = await window.__TAURI_INTERNALS__.invoke('get_log_contents', {{ logType: 'daemon', log_type: 'daemon' }});
+            if (res) return res;
+          }}
+        }} catch (e) {{}}
         return {{ logPath: daemonData.home + '/daemon.log', contents: '' }};
       }}
       if (command === 'desktop_app_logs') {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            const res = await window.__TAURI_INTERNALS__.invoke('get_log_contents', {{ logType: 'app', log_type: 'app' }});
+            if (res) return res;
+          }}
+        }} catch (e) {{}}
         return {{ logPath: daemonData.home + '/app.log', contents: '' }};
+      }}
+      if (command === 'desktop_crash_logs') {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            const res = await window.__TAURI_INTERNALS__.invoke('get_log_contents', {{ logType: 'crash', log_type: 'crash' }});
+            if (res) return res;
+          }}
+        }} catch (e) {{}}
+        return {{ logPath: daemonData.home + '/crash.log', contents: '' }};
       }}
       if (command === 'stop_desktop_daemon' || command === 'restart_desktop_daemon') {{
         return daemonData;
@@ -318,6 +478,29 @@ try {{
       }});
     }}
   }} catch (e) {{}}
+  // Active Error & Crash Reporting Listeners
+  try {{
+    window.addEventListener('error', (event) => {{
+      try {{
+        const loc = (event.filename || 'unknown') + ':' + event.lineno + ':' + event.colno;
+        const errStack = event.error && event.error.stack ? '\n' + event.error.stack : '';
+        const msg = 'Uncaught Error: ' + (event.message || '') + ' at ' + loc + errStack;
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          window.__TAURI_INTERNALS__.invoke('log_desktop_event', {{ level: 'error', message: msg }}).catch(() => {{}});
+        }}
+      }} catch (_) {{}}
+    }});
+    window.addEventListener('unhandledrejection', (event) => {{
+      try {{
+        const reason = event.reason;
+        const stack = reason && reason.stack ? reason.stack : (typeof reason === 'object' ? JSON.stringify(reason) : String(reason));
+        const msg = 'Unhandled Promise Rejection: ' + (reason && reason.message ? reason.message : reason) + '\nStack: ' + stack;
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          window.__TAURI_INTERNALS__.invoke('log_desktop_event', {{ level: 'error', message: msg }}).catch(() => {{}});
+        }}
+      }} catch (_) {{}}
+    }});
+  }} catch (e) {{}}
 }} catch (e) {{}}
 "#
     );
@@ -346,7 +529,9 @@ try {{
             show_notification,
             notify_task_complete,
             get_live_daemon_status,
-            get_live_local_credential
+            get_live_local_credential,
+            get_log_contents,
+            log_desktop_event
         ])
         .setup(move |app| {
             let _ = setup_tray(app.handle());

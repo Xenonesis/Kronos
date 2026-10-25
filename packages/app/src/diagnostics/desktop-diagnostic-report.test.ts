@@ -147,6 +147,23 @@ describe("desktop diagnostic report", () => {
     expect(report).toContain("Desktop daemon log tail\n  daemon line one\n  daemon line two");
     expect(report).toContain("Desktop app log tail\n  Error: app log unavailable");
   });
+
+  test("includes desktop crash reports and errors when present", async () => {
+    const sources: DesktopDiagnosticSources = {
+      ...makeSources(),
+      getCrashLogs: async () => ({
+        logPath: "/paseo/home/crash.log",
+        contents: "[panic] Rust panic at main.rs:123\nUncaught Error: Fatal rendering failure",
+      }),
+    };
+
+    const result = await collectDesktopDiagnosticSections(sources);
+    const report = result.sections.join("\n\n");
+
+    expect(result.status).toBe("done");
+    expect(report).toContain("Desktop crash reports & errors");
+    expect(report).toContain("Uncaught Error: Fatal rendering failure");
+  });
 });
 
 test("reports sandbox degradation and its reason even if daemon diagnostics fail", async () => {

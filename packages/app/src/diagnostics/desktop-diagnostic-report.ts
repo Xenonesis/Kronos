@@ -2,10 +2,12 @@ import {
   getDesktopSandboxDiagnostics,
   type DesktopSandboxDiagnostics,
   getDesktopAppLogs,
+  getDesktopCrashLogs,
   getDesktopDaemonLogs,
   getDesktopDaemonStatus,
   getDesktopUpdaterDiagnostics,
   type DesktopAppLogs,
+  type DesktopCrashLogs,
   type DesktopDaemonLogs,
   type DesktopDaemonStatus,
   type DesktopUpdaterDiagnosticFile,
@@ -26,6 +28,7 @@ export interface DesktopDiagnosticSources {
   getDaemonLogs: () => Promise<DesktopDaemonLogs>;
   getAppLogs: () => Promise<DesktopAppLogs>;
   getUpdaterDiagnostics: () => Promise<DesktopUpdaterDiagnostics>;
+  getCrashLogs?: () => Promise<DesktopCrashLogs>;
 }
 
 const DEFAULT_DESKTOP_DIAGNOSTIC_SOURCES: DesktopDiagnosticSources = {
@@ -34,6 +37,7 @@ const DEFAULT_DESKTOP_DIAGNOSTIC_SOURCES: DesktopDiagnosticSources = {
   getDaemonLogs: getDesktopDaemonLogs,
   getAppLogs: getDesktopAppLogs,
   getUpdaterDiagnostics: getDesktopUpdaterDiagnostics,
+  getCrashLogs: getDesktopCrashLogs,
 };
 
 export async function collectDesktopDiagnosticSections(
@@ -42,12 +46,16 @@ export async function collectDesktopDiagnosticSections(
   const sections: string[] = [];
   let failed = false;
 
-  const [daemonResult, appLogsResult, updaterResult, sandboxResult] = await Promise.allSettled([
-    Promise.all([sources.getStatus(), sources.getDaemonLogs()]),
-    sources.getAppLogs(),
-    sources.getUpdaterDiagnostics(),
-    sources.getSandboxDiagnostics(),
-  ]);
+  const [daemonResult, appLogsResult, updaterResult, sandboxResult, crashLogsResult] =
+    await Promise.allSettled([
+      Promise.all([sources.getStatus(), sources.getDaemonLogs()]),
+      sources.getAppLogs(),
+      sources.getUpdaterDiagnostics(),
+      sources.getSandboxDiagnostics(),
+      sources.getCrashLogs
+        ? sources.getCrashLogs()
+        : Promise.resolve({ logPath: "", contents: "" }),
+    ]);
 
   if (sandboxResult.status === "fulfilled") {
     const sandbox = sandboxResult.value;
@@ -90,6 +98,16 @@ export async function collectDesktopDiagnosticSections(
       formatDiagnosticSection("Desktop app log tail", [
         { label: "Error", value: toMessage(appLogsResult.reason) },
       ]),
+    );
+  }
+
+  if (
+    crashLogsResult &&
+    crashLogsResult.status === "fulfilled" &&
+    crashLogsResult.value.contents.trim()
+  ) {
+    sections.push(
+      formatLogTailSection("Desktop crash reports & errors", crashLogsResult.value.contents),
     );
   }
 
