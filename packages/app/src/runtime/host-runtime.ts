@@ -1130,7 +1130,15 @@ export class HostRuntimeController {
                 connection,
               });
               if (serverId !== this.host.serverId) {
-                if (isPlaceholderServerId(this.host.serverId) && this.onReconcileServerId) {
+                const isLoopbackCandidate = this.host.connections.some(
+                  (c) =>
+                    c.type === "directTcp" &&
+                    (c.endpoint.includes("127.0.0.1") || c.endpoint.includes("localhost")),
+                );
+                if (
+                  (isPlaceholderServerId(this.host.serverId) || isLoopbackCandidate) &&
+                  this.onReconcileServerId
+                ) {
                   this.onReconcileServerId(this.host.serverId, serverId);
                 } else {
                   await client.close().catch(() => undefined);
@@ -1895,6 +1903,11 @@ export class HostRuntimeStore {
       return;
     }
     if (this.controllers.has(newServerId)) {
+      this.controllers.delete(oldServerId);
+      this.hosts = this.hosts.filter((h) => h.serverId !== oldServerId);
+      this.emitHostList();
+      this.emit(newServerId);
+      void this.persistHosts().catch(() => {});
       return;
     }
 

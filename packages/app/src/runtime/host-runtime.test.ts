@@ -3883,6 +3883,40 @@ describe("HostRuntimeStore", () => {
     store.syncHosts([]);
   });
 
+  it("reconciles loopback candidate host when daemon announces different server id", async () => {
+    const connection: HostConnection = {
+      id: "direct:127.0.0.1:6767",
+      type: "directTcp",
+      endpoint: "127.0.0.1:6767",
+    };
+    const staleHost = makeHost({
+      serverId: "srv_stale_old",
+      label: "Localhost",
+      connections: [connection],
+      preferredConnectionId: connection.id,
+    });
+    const storage = createMemoryHostRuntimeStorage({
+      "@paseo:daemon-registry": JSON.stringify([staleHost]),
+    });
+    const store = new HostRuntimeStore({
+      storage,
+      deps: {
+        createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
+        connectToDaemon: async () => ({
+          client: makeConnectedProbeClient(5) as unknown as DaemonClient,
+          serverId: "srv_fresh_active",
+          hostname: "localhost",
+        }),
+        getClientId: async () => "cid_test_runtime",
+      },
+    });
+
+    await store.boot();
+    await waitForHostOnline(store, "srv_fresh_active");
+    expect(store.getHosts().map((h) => h.serverId)).toEqual(["srv_fresh_active"]);
+    store.syncHosts([]);
+  });
+
   it("uses the advertised hostname when adding a relay host from a pairing offer", async () => {
     const store = createPairingStore({ hostname: "mbp" });
     answerHostConfirmations(store, true);

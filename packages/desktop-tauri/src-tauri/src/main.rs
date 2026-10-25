@@ -58,22 +58,32 @@ fn wait_for_daemon_health(max_attempts: usize) -> bool {
     false
 }
 
-fn get_daemon_status_json() -> String {
+fn get_or_create_server_id() -> String {
     let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.push(".paseo");
+    let _ = fs::create_dir_all(&home);
 
-    let mut server_id = String::new();
     let server_id_file = home.join("server-id");
     if let Ok(content) = fs::read_to_string(&server_id_file) {
         let trimmed = content.trim();
         if !trimmed.is_empty() {
-            server_id = trimmed.to_string();
+            return trimmed.to_string();
         }
     }
-    if server_id.is_empty() {
-        server_id = "srv_uaeat24gZeId".to_string();
-    }
 
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let pid = std::process::id();
+    let id = format!("srv_{:x}{:x}", now, pid);
+    let _ = fs::write(&server_id_file, format!("{}\n", id));
+    id
+}
+
+fn get_daemon_status_json() -> String {
+    let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    home.push(".paseo");
+
+    let server_id = get_or_create_server_id();
     let mut local_credential = String::new();
     let credential_file = home.join("local-credential");
     if let Ok(content) = fs::read_to_string(&credential_file) {
@@ -132,7 +142,8 @@ fn main() {
         );
     }
 
-    let daemon_child = start_daemon();
+    let server_id = get_or_create_server_id();
+    let daemon_child = start_daemon(Some(&server_id));
     let state = DaemonState {
         process: Mutex::new(daemon_child),
     };
@@ -230,25 +241,46 @@ try {{
     }}
   }};
 
-  // Seed valid StoredHostProfile matching StoredHostProfileSchema
+  // Seed/reconcile valid StoredHostProfile matching StoredHostProfileSchema
   try {{
     const REGISTRY_KEY = '@paseo:daemon-registry';
-    const localHostProfile = [{{
-      serverId: daemonData.serverId,
-      label: daemonData.hostname || 'Localhost',
-      appearance: {{ color: 'none', badgeDisplay: null }},
-      lifecycle: {{}},
-      connections: [{{
-        id: 'direct:' + endpoint,
-        type: 'directTcp',
-        endpoint: endpoint,
-        useTls: false
-      }}],
-      preferredConnectionId: 'direct:' + endpoint,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    }}];
-    localStorage.setItem(REGISTRY_KEY, JSON.stringify(localHostProfile));
+    let registry = [];
+    try {{
+      const raw = localStorage.getItem(REGISTRY_KEY);
+      if (raw) registry = JSON.parse(raw) || [];
+    }} catch (e) {{}}
+
+    // Remove any stale loopback entries that do not match the current daemon's serverId
+    registry = registry.filter(h => {{
+      if (!h || !h.connections) return true;
+      const isLoopback = h.connections.some(c =>
+        c.type === 'directTcp' && (c.endpoint.includes('127.0.0.1') || c.endpoint.includes('localhost'))
+      );
+      return !isLoopback || h.serverId === daemonData.serverId;
+    }});
+
+    const existing = registry.find(h => h && h.serverId === daemonData.serverId);
+    if (!existing) {{
+      registry.unshift({{
+        serverId: daemonData.serverId,
+        label: daemonData.hostname || 'Localhost',
+        appearance: {{ color: 'none', badgeDisplay: null }},
+        lifecycle: {{}},
+        connections: [{{
+          id: 'direct:' + endpoint,
+          type: 'directTcp',
+          endpoint: endpoint,
+          useTls: false
+        }}],
+        preferredConnectionId: 'direct:' + endpoint,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }});
+    }} else {{
+      const conn = existing.connections && existing.connections.find(c => c.type === 'directTcp');
+      if (conn) conn.endpoint = endpoint;
+    }}
+    localStorage.setItem(REGISTRY_KEY, JSON.stringify(registry));
   }} catch (e) {{}}
   // Migrate or sync last-workspace-route-selection so it points to the active serverId
   try {{

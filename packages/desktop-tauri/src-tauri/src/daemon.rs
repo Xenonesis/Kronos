@@ -1,5 +1,5 @@
 use std::env;
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -66,13 +66,25 @@ fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
     None
 }
 
-pub fn start_daemon() -> Option<Child> {
+pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
     let (work_dir, node_bin, script_path) = resolve_runtime()?;
 
     let mut cmd = Command::new(&node_bin);
     cmd.arg(&script_path)
         .env("PASEO_LISTEN", "127.0.0.1:6767");
 
+    if let Some(id) = server_id {
+        cmd.env("PASEO_SERVER_ID", id);
+    } else if let Some(mut home) = dirs::home_dir() {
+        home.push(".paseo");
+        home.push("server-id");
+        if let Ok(content) = fs::read_to_string(&home) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                cmd.env("PASEO_SERVER_ID", trimmed);
+            }
+        }
+    }
     // Ensure bundled server-dist/node_modules is always included in NODE_PATH
     let local_nm = work_dir.join("node_modules");
     let mut node_paths = Vec::new();
@@ -130,7 +142,7 @@ pub fn stop_daemon(state: &DaemonState) {
 
 pub fn restart_daemon(state: &DaemonState) -> bool {
     stop_daemon(state);
-    let new_child = start_daemon();
+    let new_child = start_daemon(None);
     if let Ok(mut lock) = state.process.lock() {
         let success = new_child.is_some();
         *lock = new_child;
