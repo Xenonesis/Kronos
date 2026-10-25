@@ -1,7 +1,7 @@
 [package]
 name = "paseo-desktop"
 version = "0.13.0"
-description = "Paseo Desktop App"
+description = "Kronos Desktop App"
 edition = "2021"
 
 [build-dependencies]

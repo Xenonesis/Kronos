@@ -1,8 +1,9 @@
 {
   "name": "@getpaseo/cli",
   "version": "0.13.0",
-  "description": "Paseo CLI - control your AI coding agents from the command line",
+  "description": "Kronos CLI - control your AI coding agents from the command line",
   "bin": {
+    "kronos": "bin/paseo",
     "paseo": "bin/paseo"
   },
   "files": [

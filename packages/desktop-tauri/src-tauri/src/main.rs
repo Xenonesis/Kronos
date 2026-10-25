@@ -311,7 +311,7 @@ try {{
     if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.listen) {{
       window.__TAURI_INTERNALS__.listen('single-instance-deep-link', (event) => {{
         const args = event.payload || [];
-        const deepLink = args.find(a => typeof a === 'string' && a.startsWith('paseo://'));
+        const deepLink = args.find(a => typeof a === 'string' && (a.startsWith('kronos://') || a.startsWith('paseo://')));
         if (deepLink) {{
           window.dispatchEvent(new CustomEvent('paseo:deep-link', {{ detail: deepLink }}));
         }}

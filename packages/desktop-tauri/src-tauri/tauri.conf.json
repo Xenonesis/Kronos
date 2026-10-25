@@ -35,7 +35,7 @@
   },
   "plugins": {
     "deep-link": {
-      "schemes": ["paseo"]
+      "schemes": ["kronos", "paseo"]
     },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDExMjM1OApSV1RUUUVKVE40...=",
