@@ -118,13 +118,14 @@ For full setup and configuration, see:
 
 Run the Paseo daemon and self-hosted web UI in Docker:
 
-````bash
+```bash
 docker run -d --name kronos \
   -p 6767:6767 \
   -e PASEO_PASSWORD=change-me \
   -v "$PWD/paseo-home:/home/paseo" \
   -v "$PWD:/workspace" \
   ghcr.io/getpaseo/paseo:latest
+```
 
 Open `http://localhost:6767` after it starts. Extend the base image with the agent CLIs you use, then provide credentials through environment variables or the persistent `/home/paseo` volume. See the [Docker documentation](docs/docker.md) for full setup details.
 
@@ -142,6 +143,7 @@ kronos send abc123 "also add tests" # follow-up task
 
 # run on a remote daemon; --cwd is a path on that host
 kronos run --host workstation.local:6767 --cwd /workspace "run the full test suite"
+```
 
 See the [full CLI reference](https://paseo.sh/docs/cli) for more.
 
@@ -165,7 +167,7 @@ const result = await agent.waitForFinish();
 console.log(result.lastMessage);
 
 await client.close();
-````
+```
 
 See the [SDK quickstart](https://paseo.sh/docs/sdk/quickstart), [recipes](https://paseo.sh/docs/sdk/recipes), and [API reference](https://paseo.sh/docs/sdk/reference).
 

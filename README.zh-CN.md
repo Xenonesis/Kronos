@@ -148,7 +148,8 @@ Monorepo 包结构速览：
 - `packages/desktop`：Electron 桌面 app（旧版兼容）
 - `packages/relay`：用于远程连接的 relay 包
 - `packages/website`：营销站点和文档（`paseo.sh`）
-  常用命令：
+
+常用命令：
 
 ```bash
 # 运行所有本地开发服务
