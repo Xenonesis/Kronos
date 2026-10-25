@@ -57,9 +57,17 @@
   </tr>
 </table>
 
+## 插件 (Plugins)
+
+插件运行在 daemon 上，并显示在连接的每个客户端中。
+
+从注册表安装插件：`kronos plugin add owner/slug`（或 `paseo plugin add owner/slug`），也可以从 Git 或本地目录安装。
+
+**[浏览插件](https://paseo.sh/plugins)** · **[插件文档](https://paseo.sh/docs/plugins)**
+
 ## 快速开始
 
-Paseo 会运行一个名为 daemon 的本地服务，用来管理你的 coding agents。桌面 app、移动 app、Web app 和 CLI 等客户端都会连接到它。
+Kronos 会运行一个名为 daemon 的轻量本地服务，用来管理你的 coding agents。原生 Tauri v2 桌面工作站会自动通过 localhost WebSocket 连接到它。
 
 ### 前置条件
 
@@ -81,13 +89,13 @@ Paseo 会运行一个名为 daemon 的本地服务，用来管理你的 coding a
 .\update-desktop-exe.bat
 ```
 
-### CLI / 无头模式
+### CLI / 服务器无头模式
 
-安装 CLI 并启动 Paseo：
+安装 CLI 并启动 Kronos：
 
 ```bash
 npm install -g @getpaseo/cli
-paseo
+kronos # 或 paseo
 ```
 
 终端中会显示一个二维码。你可以从任意客户端连接。这个方式适合服务器和远程机器。
@@ -102,15 +110,15 @@ paseo
 你能在 app 中完成的事情，也都可以在终端中完成。
 
 ```bash
-paseo run --provider claude/opus-4.6 "implement user authentication"
-paseo run --provider codex/gpt-5.4 --worktree feature-x "implement feature X"
+kronos run --provider claude/opus-4.6 "implement user authentication"
+kronos run --provider codex/gpt-5.4 --worktree feature-x "implement feature X"
 
-paseo ls                           # 列出正在运行的 agents
-paseo attach abc123                # 实时流式查看输出
-paseo send abc123 "also add tests" # 发送后续任务
+kronos ls                           # 列出正在运行的 agents
+kronos attach abc123                # 实时流式查看输出
+kronos send abc123 "also add tests" # 发送后续任务
 
 # 在远程 daemon 上运行
-paseo --host workstation.local:6767 run "run the full test suite"
+kronos --host workstation.local:6767 run "run the full test suite"
 ```
 
 更多内容见[完整 CLI 参考](https://paseo.sh/zh-CN/docs/cli)。
@@ -133,14 +141,14 @@ npx skills add getpaseo/paseo
 
 Monorepo 包结构速览：
 
-- `packages/server`：Paseo daemon（agent 进程编排、WebSocket API、MCP server）
+- `packages/desktop-tauri`：基于 Rust Tauri v2 的原生桌面工作站（内存占用 <100MB，极简战术标题栏，系统托盘）
+- `packages/server`：Kronos daemon（agent 进程编排、WebSocket API、MCP server）
 - `packages/app`：Expo 客户端（iOS、Android、Web）
-- `packages/cli`：用于 daemon 和 agent 工作流的 `paseo` CLI
-- `packages/desktop`：Electron 桌面 app
+- `packages/cli`：用于 daemon 和 agent 工作流的 `kronos` / `paseo` CLI
+- `packages/desktop`：Electron 桌面 app（旧版兼容）
 - `packages/relay`：用于远程连接的 relay 包
 - `packages/website`：营销站点和文档（`paseo.sh`）
-
-常用命令：
+  常用命令：
 
 ```bash
 # 运行所有本地开发服务

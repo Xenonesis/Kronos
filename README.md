@@ -65,7 +65,7 @@ iOS, and Android. Write a plugin once and it is on your phone.
 - **Agent lifecycle:** change configuration, environment, and MCP servers, answer permissions, follow up when a turn ends.
 - **Providers:** add a coding agent as a provider.
 
-Install from the registry with `paseo plugin add owner/slug`, or from Git or a local directory.
+Install from the registry with `kronos plugin add owner/slug` (or `paseo plugin add owner/slug`), or from Git or a local directory.
 
 **[Browse plugins](https://paseo.sh/plugins)** · **[Plugin docs](https://paseo.sh/docs/plugins)**
 
@@ -103,10 +103,10 @@ For a server, a VM, or any machine without the desktop app. Install the CLI and 
 
 ```bash
 npm install -g @getpaseo/cli
-paseo
+kronos # or paseo
 ```
 
-Paseo starts, then asks whether to enable the end-to-end encrypted relay for device pairing. If you decline, connect directly over TCP, Tailscale, or another VPN. The desktop, mobile, and web apps connect to this daemon like any other host.
+Kronos starts, then asks whether to enable the end-to-end encrypted relay for device pairing. If you decline, connect directly over TCP, Tailscale, or another VPN. The desktop, mobile, and web apps connect to this daemon like any other host.
 
 For full setup and configuration, see:
 
@@ -118,14 +118,13 @@ For full setup and configuration, see:
 
 Run the Paseo daemon and self-hosted web UI in Docker:
 
-```bash
-docker run -d --name paseo \
+````bash
+docker run -d --name kronos \
   -p 6767:6767 \
   -e PASEO_PASSWORD=change-me \
   -v "$PWD/paseo-home:/home/paseo" \
   -v "$PWD:/workspace" \
   ghcr.io/getpaseo/paseo:latest
-```
 
 Open `http://localhost:6767` after it starts. Extend the base image with the agent CLIs you use, then provide credentials through environment variables or the persistent `/home/paseo` volume. See the [Docker documentation](docs/docker.md) for full setup details.
 
@@ -134,16 +133,15 @@ Open `http://localhost:6767` after it starts. Extend the base image with the age
 Everything you can do in the app, you can do from the terminal.
 
 ```bash
-paseo run --provider claude/opus-4.6 "implement user authentication"
-paseo run --provider codex/gpt-5.5 --worktree feature-x "implement feature X"
+kronos run --provider claude/opus-4.6 "implement user authentication"
+kronos run --provider codex/gpt-5.5 --worktree feature-x "implement feature X"
 
-paseo ls                           # list running agents
-paseo attach abc123                # stream live output
-paseo send abc123 "also add tests" # follow-up task
+kronos ls                           # list running agents
+kronos attach abc123                # stream live output
+kronos send abc123 "also add tests" # follow-up task
 
 # run on a remote daemon; --cwd is a path on that host
-paseo run --host workstation.local:6767 --cwd /workspace "run the full test suite"
-```
+kronos run --host workstation.local:6767 --cwd /workspace "run the full test suite"
 
 See the [full CLI reference](https://paseo.sh/docs/cli) for more.
 
@@ -167,7 +165,7 @@ const result = await agent.waitForFinish();
 console.log(result.lastMessage);
 
 await client.close();
-```
+````
 
 See the [SDK quickstart](https://paseo.sh/docs/sdk/quickstart), [recipes](https://paseo.sh/docs/sdk/recipes), and [API reference](https://paseo.sh/docs/sdk/reference).
 
@@ -192,7 +190,7 @@ Quick monorepo package map:
 - `packages/desktop-tauri`: Native Rust Tauri v2 desktop workstation (<100MB RAM, custom tactical titlebar, system tray, auto-updater)
 - `packages/server`: Kronos daemon (agent process orchestration, WebSocket API, MCP server, Playwright automation)
 - `packages/app`: React UI client (Expo / Web / Desktop)
-- `packages/cli`: `paseo` CLI for daemon and agent workflows
+- `packages/cli`: `kronos` / `paseo` CLI for daemon and agent workflows
 - `packages/relay`: Relay transport and encryption used by the daemon and clients
 - `packages/website`: Tactical telemetry marketing site and documentation
 

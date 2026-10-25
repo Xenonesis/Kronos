@@ -38,7 +38,7 @@ Daemon-owned outbound connections and routed API scope ownership are described i
 
 - **Daemon:** Local server that spawns and manages agent processes and exposes the WebSocket API.
 - **App:** Cross-platform Expo client for iOS, Android, web, and the shared UI used by desktop.
-- **CLI:** Terminal interface for agent workflows that can also start and manage the daemon.
+- **CLI:** Terminal interface for agent workflows that can also start and manage the daemon (dual-invocable via `kronos` or `paseo`).
 - **Desktop app (Kronos):** High-performance native Rust Tauri v2 workstation linked to OS WebView2 (<100MB RAM, sub-second boot), auto-managing the background daemon. Legacy Electron shell is retained under `packages/desktop` for fallback reference.
 - **Relay:** Optional encrypted bridge for remote access without opening ports directly.
 
@@ -161,20 +161,20 @@ traffic. Workspace assignments stay on the workspace directory sequence.
 
 ### `packages/cli` — Command-line client
 
-Commander.js CLI with Docker-style commands. Common agent operations are also exposed at the top level (e.g. `paseo ls`, `paseo run`).
+Commander.js CLI with Docker-style commands. Dual-supported via both `kronos` and `paseo` binary commands. Common agent operations are also exposed at the top level (e.g. `kronos ls`, `kronos run`).
 
-- `paseo agent ls/run/import/attach/logs/stop/delete/send/inspect/wait/archive/reload/update/mode`
-- `paseo daemon start/run/stop/restart/status/reload/config/pair/set-password`
-- `paseo terminal ls/create/capture/send-keys/kill`
-- `paseo script ls/start/stop`
-- `paseo schedule create/ls/inspect/update/pause/resume/run-once/logs/delete`
-- `paseo heartbeat create/update/delete`
-- `paseo project create/ls/rename/delete`
-- `paseo workspace create/ls/rename/archive`
-- `paseo permit allow/deny/ls`
-- `paseo provider ls/models`
-- hidden legacy `paseo worktree create/ls/archive` compatibility alias
-- `paseo speech …`
+- `kronos agent ls/run/import/attach/logs/stop/delete/send/inspect/wait/archive/reload/update/mode` (or `paseo agent ...`)
+- `kronos daemon start/run/stop/restart/status/reload/config/pair/set-password`
+- `kronos terminal ls/create/capture/send-keys/kill`
+- `kronos script ls/start/stop`
+- `kronos schedule create/ls/inspect/update/pause/resume/run-once/logs/delete`
+- `kronos heartbeat create/update/delete`
+- `kronos project create/ls/rename/delete`
+- `kronos workspace create/ls/rename/archive`
+- `kronos permit allow/deny/ls`
+- `kronos provider ls/models`
+- hidden legacy `kronos worktree create/ls/archive` compatibility alias
+- `kronos speech …`
 
 Communicates with the daemon via the same WebSocket protocol as the app.
 
@@ -201,12 +201,12 @@ authorization, ownership, persistence, and lifecycle contract is documented in [
 
 ### `packages/desktop-tauri` — Kronos Desktop App (Tauri v2 + Rust)
 
-The primary desktop application runtime for Kronos:
+The production desktop application runtime for Kronos:
 
 - Native Rust binary composited directly via OS WebView2 (Windows / Linux / macOS)
 - Bounds idle RAM to under 100MB (eliminating Electron's ~800MB–1.2GB overhead)
 - Manages background daemon lifecycle, native system tray, custom tactical titlebar, and notifications
-- Packaged via NSIS installer (`Kronos_x64-setup.exe`) and auto-updating delivery pipeline
+- Packaged and distributed via NSIS installer (`Kronos_x64-setup.exe`) and auto-updating delivery pipeline
 
 ### `packages/desktop` — Legacy Desktop app (Electron)
 
