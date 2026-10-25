@@ -70,9 +70,10 @@ pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
     let (work_dir, node_bin, script_path) = resolve_runtime()?;
 
     let mut cmd = Command::new(&node_bin);
+    cmd.arg("--max-old-space-size=2048");
     cmd.arg(&script_path)
-        .env("PASEO_LISTEN", "127.0.0.1:6767");
-
+        .env("PASEO_LISTEN", "127.0.0.1:6767")
+        .env("PASEO_PROVIDER_REFRESH_TIMEOUT_MS", "15000");
     if let Some(id) = server_id {
         cmd.env("PASEO_SERVER_ID", id);
     } else if let Some(mut home) = dirs::home_dir() {

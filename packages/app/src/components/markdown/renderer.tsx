@@ -37,7 +37,7 @@ export interface MarkdownRendererProps extends MarkdownImageContext {
 
 /** All Markdown surfaces share the same engine and source adaptation. */
 export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRendererProps) {
-  const streaming = !isWeb && !!props.streaming;
+  const streaming = !!props.streaming;
   // Only completed lines affect block closure. Do not run mdast on every reveal frame.
   const completeLines = streaming ? props.text.slice(0, props.text.lastIndexOf("\n") + 1) : "";
   const boundary = useMemo(

@@ -135,10 +135,10 @@ fn get_live_local_credential() -> Option<String> {
 fn main() {
     #[cfg(target_os = "windows")]
     {
-        // Prevent GPU watchdog crashes and DWM occlusion freezes on hybrid Intel/NVIDIA GPUs
+        // Prevent DWM occlusion freezes while allowing Chromium GPU watchdog and driver compatibility protections
         std::env::set_var(
             "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-            "--disable-features=CalculateNativeWinOcclusion --disable-gpu-watchdog --enable-gpu-rasterization --ignore-gpu-blocklist",
+            "--disable-features=CalculateNativeWinOcclusion",
         );
     }
 

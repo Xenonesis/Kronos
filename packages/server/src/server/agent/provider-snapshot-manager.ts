@@ -71,6 +71,7 @@ function providerRefreshDeadline(configured: number | undefined): number {
   const explicit = validRefreshDeadline(configured);
   if (explicit !== undefined) return explicit;
   return (
+    validRefreshDeadline(Number(process.env.KRONOS_PROVIDER_REFRESH_TIMEOUT_MS)) ??
     validRefreshDeadline(Number(process.env[PROVIDER_REFRESH_DEADLINE_ENV])) ??
     DEFAULT_REFRESH_TIMEOUT_MS
   );
