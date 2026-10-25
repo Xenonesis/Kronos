@@ -1720,6 +1720,25 @@ export class HostRuntimeStore {
     }
 
     if (shouldUseDesktopDaemon()) {
+      try {
+        const bridge = getDesktopHost();
+        if (bridge?.invoke) {
+          const status = (await bridge.invoke("desktop_daemon_status")) as {
+            serverId?: string;
+            listen?: string;
+            hostname?: string;
+          } | null;
+          if (status?.serverId && status?.listen) {
+            await this.upsertConnectionFromListen({
+              listenAddress: status.listen,
+              serverId: status.serverId,
+              hostname: status.hostname ?? "localhost",
+            });
+          }
+        }
+      } catch (e) {
+        console.warn("[HostRuntime] Failed to pre-seed desktop daemon", e);
+      }
       return;
     }
 

@@ -370,19 +370,39 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
   const availableHosts = useMemo<AddProjectHost[]>(
     () =>
       hosts.flatMap((host) => {
-        if (connectionStatuses.get(host.serverId) !== "online") return [];
+        const isOnline = connectionStatuses.get(host.serverId) === "online";
+        const isConnecting =
+          connectionStatuses.get(host.serverId) === "connecting" ||
+          connectionStatuses.get(host.serverId) === undefined;
+        const isBuiltInLocal =
+          isDesktop &&
+          (localServerId === host.serverId ||
+            host.connections.some(
+              (c) =>
+                c.type === "directTcp" &&
+                (c.endpoint.includes("127.0.0.1") || c.endpoint.includes("localhost")),
+            ));
+
+        if (!isOnline && !(isBuiltInLocal && isConnecting)) return [];
+
         const canAddProject =
-          projectAddByHost.get(host.serverId) === true &&
-          stableProjectIdentityByHost.get(host.serverId) === true;
+          isBuiltInLocal ||
+          (projectAddByHost.get(host.serverId) === true &&
+            stableProjectIdentityByHost.get(host.serverId) === true);
         return [
           {
             serverId: host.serverId,
             label: host.label,
             canAddProject,
-            canBrowse: canAddProject && getIsElectronRuntime() && localServerId === host.serverId,
-            canCloneGithubRepositories: githubCloneByHost.get(host.serverId) === true,
-            canSearchGithubRepositories: githubSearchByHost.get(host.serverId) === true,
-            canCreateDirectory: createDirectoryByHost.get(host.serverId) === true,
+            canBrowse:
+              canAddProject &&
+              getIsElectronRuntime() &&
+              (localServerId === host.serverId || isBuiltInLocal),
+            canCloneGithubRepositories:
+              isBuiltInLocal || githubCloneByHost.get(host.serverId) === true,
+            canSearchGithubRepositories:
+              isBuiltInLocal || githubSearchByHost.get(host.serverId) === true,
+            canCreateDirectory: isBuiltInLocal || createDirectoryByHost.get(host.serverId) === true,
           },
         ];
       }),
@@ -392,6 +412,7 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
       githubCloneByHost,
       githubSearchByHost,
       hosts,
+      isDesktop,
       localServerId,
       projectAddByHost,
       stableProjectIdentityByHost,
