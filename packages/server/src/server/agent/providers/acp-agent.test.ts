@@ -4530,3 +4530,18 @@ describe("custom ACP provider with configured models", () => {
     expect((await created.getRuntimeInfo()).model).toBe("advertised-default");
   });
 });
+test("rejects immediately when ACP process exits prematurely before initialize", async () => {
+  const client = new GenericACPAgentClient({
+    logger: createTestLogger(),
+    command: [
+      process.execPath,
+      "-e",
+      "process.stderr.write('CLI was not found'); process.exit(127);",
+    ],
+  });
+  const start = Date.now();
+  await expect(client.fetchCatalog("/tmp")).rejects.toThrow(
+    /Process exited prematurely.*CLI was not found/,
+  );
+  expect(Date.now() - start).toBeLessThan(1500);
+});

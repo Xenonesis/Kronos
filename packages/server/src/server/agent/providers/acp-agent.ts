@@ -150,6 +150,13 @@ function rejectOnSpawnError(child: ChildProcess, stderrChunks: string[]): Promis
       const stderr = stderrChunks.join("").trim();
       reject(new Error(stderr ? `${String(error)}\n${stderr}` : String(error)));
     });
+    child.once("exit", (code, signal) => {
+      setImmediate(() => {
+        const stderr = stderrChunks.join("").trim();
+        const exitReason = `Process exited prematurely with exit code ${code ?? "unknown"}${signal ? ` (signal ${signal})` : ""}`;
+        reject(new Error(stderr ? `${exitReason}: ${stderr}` : exitReason));
+      });
+    });
   });
 }
 
