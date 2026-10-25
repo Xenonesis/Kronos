@@ -286,16 +286,7 @@ fn main() {
     let state = DaemonState {
         process: Mutex::new(daemon_child),
     };
-    // Background thread probes daemon health non-blockingly so window renders immediately
-    std::thread::spawn(|| {
-        let is_healthy = wait_for_daemon_health(50);
-        if is_healthy {
-            println!("[daemon] Host daemon confirmed healthy on 127.0.0.1:6767");
-        } else {
-            eprintln!("[daemon] Host daemon not responding after startup timeout");
-        }
-    });
-
+    let daemon_server_id = server_id.clone();
 
     let status_json = get_daemon_status_json();
     let bridge_script = format!(
@@ -549,6 +540,24 @@ try {{
                 let _ = w.show();
                 let _ = w.set_focus();
             }
+
+            let handle_for_daemon = app.handle().clone();
+            let daemon_id = daemon_server_id.clone();
+            std::thread::spawn(move || {
+                let is_healthy = wait_for_daemon_health(50);
+                if is_healthy {
+                    println!("[daemon] Host daemon confirmed healthy on 127.0.0.1:6767");
+                    if let Some(w) = handle_for_daemon.get_webview_window("main") {
+                        let eval_script = format!(
+                            "window.dispatchEvent(new CustomEvent('kronos:daemon-ready', {{ detail: {{ serverId: '{}' }} }}));",
+                            daemon_id
+                        );
+                        let _ = w.eval(&eval_script);
+                    }
+                } else {
+                    eprintln!("[daemon] Host daemon not responding after startup timeout");
+                }
+            });
 
             // Register global shortcut to toggle main window visibility
             for shortcut in ["CommandOrControl+Shift+P", "Alt+Space"] {

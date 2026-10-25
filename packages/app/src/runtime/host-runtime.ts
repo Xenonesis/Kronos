@@ -545,6 +545,7 @@ function probeIntervalForConnection(
   isActiveOnline: boolean,
   hasActiveOnlineConnection: boolean,
   now: number,
+  isLoopback = false,
 ): number {
   if (isActiveOnline) {
     return PROBE_STEADY_MS;
@@ -553,6 +554,7 @@ function probeIntervalForConnection(
     return PROBE_INACTIVE_WHILE_ONLINE_MS;
   }
   const age = now - firstSeenAt;
+  if (isLoopback && age < 10_000) return 250;
   if (age < 10_000) return 2_000;
   if (age < 30_000) return 5_000;
   if (age < 60_000) return PROBE_STEADY_MS;
@@ -951,11 +953,15 @@ export class HostRuntimeController {
       }
       const firstSeen = this.connectionFirstSeenAt.get(connection.id) ?? now;
       const isActiveOnline = isOnline && connection.id === activeConnectionId;
+      const isLoopback =
+        connection.type === "directTcp" &&
+        (connection.endpoint.includes("127.0.0.1") || connection.endpoint.includes("localhost"));
       const interval = probeIntervalForConnection(
         firstSeen,
         isActiveOnline,
         hasActiveOnlineConnection,
         now,
+        isLoopback,
       );
       return now - lastProbed >= interval;
     });
@@ -1657,6 +1663,14 @@ export class HostRuntimeStore {
     this.storage = input?.storage ?? AsyncStorage;
     this.replicaCache = new ReplicaCache(input?.replicaRowStore ?? createReplicaRowStore());
     this.revokePushNotifications = input?.revokePushNotifications ?? revokePushNotifications;
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      const onDaemonReady = (event?: Event) => {
+        const detail = (event as CustomEvent<{ serverId?: string }>)?.detail;
+        void this.runProbeCycleNow(detail?.serverId);
+      };
+      window.addEventListener("kronos:daemon-ready", onDaemonReady);
+      window.addEventListener("paseo:daemon-ready", onDaemonReady);
+    }
   }
 
   // --- Host registry ---

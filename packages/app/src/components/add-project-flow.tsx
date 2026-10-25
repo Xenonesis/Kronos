@@ -23,6 +23,7 @@ import {
   type RefObject,
 } from "react";
 import {
+  ActivityIndicator,
   Modal,
   Pressable,
   ScrollView,
@@ -88,10 +89,12 @@ import {
   useWebOverlayRegistration,
 } from "@/lib/overlay-root";
 import {
+  useHostRegistryLoaded,
   useHosts,
   useHostRuntimeClient,
   useHostRuntimeConnectionStatuses,
 } from "@/runtime/host-runtime";
+import { shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
 import { useHostFeatureMap } from "@/runtime/host-features";
 import { useSessionStore } from "@/stores/session-store";
 import { useRecommendedProjectPaths } from "@/stores/session-store-hooks";
@@ -125,6 +128,12 @@ interface FlowIconProps {
 
 function FlowIcon({ icon: Icon, size, color }: FlowIconProps) {
   return <Icon size={size} color={color} />;
+}
+
+const spinnerIconStyle = { width: 16, height: 16 } as const;
+
+function SpinnerFlowIcon({ color }: { size?: number; color?: string }) {
+  return <ActivityIndicator size="small" color={color} style={spinnerIconStyle} />;
 }
 
 const MutedFlowIcon = withUnistyles(FlowIcon, (theme) => ({
@@ -183,8 +192,12 @@ function progressText(page: AddProjectPage): string {
   return "Adding project...";
 }
 
-function emptyText(page: AddProjectPage, host: AddProjectHost | null): string {
-  if (page.kind === "host") return "No connected hosts";
+function emptyText(
+  page: AddProjectPage,
+  host: AddProjectHost | null,
+  isConnecting = false,
+): string {
+  if (page.kind === "host") return isConnecting ? "Connecting to host..." : "No connected hosts";
   if (page.kind === "github-search") return "Enter a GitHub URL or owner/repo";
   if (page.kind === "method") return addProjectMethodEmptyText(host);
   return "No matching options";
@@ -231,10 +244,10 @@ function pageTitle(page: AddProjectPage): string {
 
 type AddProjectInputPage = Exclude<AddProjectPage, { kind: "method" }>;
 
-function pagePlaceholder(page: AddProjectInputPage): string {
+function pagePlaceholder(page: AddProjectInputPage, isConnecting = false): string {
   switch (page.kind) {
     case "host":
-      return "Search hosts...";
+      return isConnecting ? "Connecting to host..." : "Search hosts...";
     case "directory-search":
       return "Search directories or enter a path...";
     case "github-search":
@@ -344,6 +357,16 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
   // COMPAT(projectCreateDirectory): added in v0.1.108, remove gate after 2027-01-15.
   const createDirectoryByHost = useHostFeatureMap(hostIds, "projectCreateDirectory");
   const localServerId = useLocalDaemonServerId();
+  const hostRegistryLoaded = useHostRegistryLoaded();
+  const isDesktop = shouldUseDesktopDaemon();
+  const isHostConnecting = useMemo(() => {
+    if (!hostRegistryLoaded) return true;
+    if (hosts.length === 0) return isDesktop;
+    return hosts.some((h) => {
+      const status = connectionStatuses.get(h.serverId);
+      return status === "connecting" || status === undefined;
+    });
+  }, [connectionStatuses, hostRegistryLoaded, hosts, isDesktop]);
   const availableHosts = useMemo<AddProjectHost[]>(
     () =>
       hosts.flatMap((host) => {
@@ -615,10 +638,21 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
         }),
       );
       if (state.hosts.length === 0) {
+        if (isHostConnecting) {
+          choices.push({
+            id: "connecting-host",
+            title: "Connecting to host...",
+            subtitle: "Discovering Kronos daemon (127.0.0.1:6767)...",
+            icon: SpinnerFlowIcon,
+            disabled: true,
+            testID: "add-project-flow-host-connecting",
+            select: () => {},
+          });
+        }
         choices.push({
           id: "add-host",
           title: "Add host",
-          subtitle: "No connected hosts",
+          subtitle: isHostConnecting ? "Connect to a remote host manually" : "No connected hosts",
           icon: Plus,
           testID: "add-project-flow-add-host",
           select: () => {
@@ -730,6 +764,7 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
     recommendedPaths,
     selectMethod,
     state.hosts,
+    isHostConnecting,
   ]);
 
   const activeIndex = rows.length === 0 ? 0 : Math.min(page.activeIndex, rows.length - 1);
@@ -919,7 +954,7 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
                 onChangeText={handleInputChange}
                 onKeyPress={isWeb ? undefined : handleNativeKeyPress}
                 onSubmitEditing={isWeb ? undefined : submitActive}
-                placeholder={pagePlaceholder(page)}
+                placeholder={pagePlaceholder(page, isHostConnecting)}
                 style={styles.input}
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -984,7 +1019,7 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
               rows.length === 0 &&
               page.kind !== "new-directory-name" ? (
                 <Text style={styles.stateText} testID="add-project-flow-empty">
-                  {emptyText(page, host ?? null)}
+                  {emptyText(page, host ?? null, isHostConnecting)}
                 </Text>
               ) : null}
             </View>
