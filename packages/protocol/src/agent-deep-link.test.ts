@@ -14,6 +14,7 @@ describe("agent deep links", () => {
     expect(link).toBe("paseo://h/server%2Fmain/agent/agent%20123");
     expect(buildAgentDeepLinkRoute(target)).toBe("/h/server%2Fmain/agent/agent%20123");
     expect(parseAgentDeepLink(link)).toEqual(target);
+    expect(parseAgentDeepLink("kronos://h/server%2Fmain/agent/agent%20123")).toEqual(target);
   });
 
   it("rejects links outside the exact agent route", () => {
