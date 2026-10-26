@@ -1,9 +1,11 @@
 /**
  * @vitest-environment jsdom
  */
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { TelemetryHud, calculateTps } from "./telemetry-hud";
+
+afterEach(cleanup);
 
 describe("TelemetryHud", () => {
   it("calculates TPS correctly given token count and elapsed milliseconds", () => {
@@ -20,6 +22,11 @@ describe("TelemetryHud", () => {
 
   it("renders cost badge when costUsd is positive", () => {
     render(<TelemetryHud tps={10} ttftMs={100} costUsd={0.0123} isStreaming={true} />);
+    expect(screen.getByText(/\$0\.0123/)).toBeTruthy();
+  });
+
+  it("renders cost badge when cost is positive even if idle", () => {
+    render(<TelemetryHud costUsd={0.0123} isStreaming={false} />);
     expect(screen.getByText(/\$0\.0123/)).toBeTruthy();
   });
 

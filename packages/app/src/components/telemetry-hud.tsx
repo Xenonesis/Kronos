@@ -14,7 +14,7 @@ export interface TelemetryHudProps {
 }
 
 export function TelemetryHud({ tps = 0, ttftMs, costUsd, isStreaming }: TelemetryHudProps) {
-  if (!isStreaming && tps === 0 && !ttftMs) return null;
+  if (!isStreaming && tps === 0 && !ttftMs && (!costUsd || costUsd <= 0)) return null;
 
   return (
     <View style={styles.container} testID="telemetry-hud">

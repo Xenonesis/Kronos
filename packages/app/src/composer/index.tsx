@@ -2086,23 +2086,24 @@ function ComposerContentImpl({
   const turnStartedAt = useSessionStore(
     (state) => selectAgentTurnPresentation(state.sessions[serverId], agentId).startedAt,
   );
+  const turnStartedAtMs = turnStartedAt ? turnStartedAt.getTime() : null;
   const streamHead = useSessionStore((state) =>
     state.sessions[serverId]?.agentStreamHead?.get(agentId),
   );
 
   const turnTelemetryRef = useRef<{
-    turnStartedAt: Date | null;
+    turnStartedAtMs: number | null;
     firstTokenAt: Date | null;
     ttftMs: number | null;
   }>({
-    turnStartedAt: null,
+    turnStartedAtMs: null,
     firstTokenAt: null,
     ttftMs: null,
   });
 
-  if (turnTelemetryRef.current.turnStartedAt !== turnStartedAt) {
+  if (turnTelemetryRef.current.turnStartedAtMs !== turnStartedAtMs) {
     turnTelemetryRef.current = {
-      turnStartedAt,
+      turnStartedAtMs,
       firstTokenAt: null,
       ttftMs: null,
     };
@@ -2126,10 +2127,10 @@ function ComposerContentImpl({
 
   if (isAgentRunning && outputTokens > 0 && !turnTelemetryRef.current.firstTokenAt) {
     turnTelemetryRef.current.firstTokenAt = new Date();
-    if (turnStartedAt) {
+    if (turnStartedAtMs !== null) {
       turnTelemetryRef.current.ttftMs = Math.max(
         0,
-        turnTelemetryRef.current.firstTokenAt.getTime() - turnStartedAt.getTime(),
+        turnTelemetryRef.current.firstTokenAt.getTime() - turnStartedAtMs,
       );
     }
   }
@@ -2137,8 +2138,8 @@ function ComposerContentImpl({
   let elapsedMs = 0;
   if (turnTelemetryRef.current.firstTokenAt) {
     elapsedMs = Math.max(1, Date.now() - turnTelemetryRef.current.firstTokenAt.getTime());
-  } else if (turnStartedAt) {
-    elapsedMs = Math.max(1, Date.now() - turnStartedAt.getTime());
+  } else if (turnStartedAtMs !== null) {
+    elapsedMs = Math.max(1, Date.now() - turnStartedAtMs);
   }
 
   const telemetryTps =
