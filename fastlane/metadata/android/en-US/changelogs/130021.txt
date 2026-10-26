@@ -1,7 +1,6 @@
-Provider discovery resilience, graceful uninstalled CLI status, and timeout relief for Windows models.
+Provider discovery resilience, graceful uninstalled CLI status, timeout relief for Windows models, and upstream mobile runtime refinements.
 
 Fixed
 - Fixed provider timeout on desktop by increasing default refresh timeout to 30000ms, allowing local models (Codex, OpenCode, Pi) to discover and load properly without aborting
-- Fixed uninstalled providers showing "Error" by distinguishing missing CLIs and exit code 127 as "Unavailable" instead of an error state
 
 Full notes: https://paseo.sh/changelog

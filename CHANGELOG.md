@@ -2,7 +2,7 @@
 
 ## 0.13.2 - 2026-10-26
 
-Provider discovery resilience, graceful uninstalled CLI status, and timeout relief for Windows models.
+Provider discovery resilience, graceful uninstalled CLI status, timeout relief for Windows models, and upstream mobile runtime refinements.
 
 ### Fixed
 
@@ -10,6 +10,10 @@ Provider discovery resilience, graceful uninstalled CLI status, and timeout reli
 - Fixed uninstalled providers showing "Error" by distinguishing missing CLIs and exit code 127 as "Unavailable" instead of an error state
 - Fixed VS Code Insiders Copilot CLI shim triggering startup failure by validating launcher execution before declaring availability
 - Updated model selector dropdown to display clean "Unavailable" status instead of alert warnings for uninstalled providers
+- Fixed repeated Android animation exceptions for views that have already unmounted ([#7907](https://github.com/getpaseo/paseo/pull/7907))
+- Fixed the Android animation run loop continuing while the app is in the background ([#7914](https://github.com/getpaseo/paseo/pull/7914))
+- Fixed finished Android chat messages being remeasured during streaming updates ([#7914](https://github.com/getpaseo/paseo/pull/7914))
+- Fixed bottom sheets retaining window-size listeners after closing ([#7914](https://github.com/getpaseo/paseo/pull/7914))
 
 ## 0.13.1 - 2026-10-26
 
@@ -22,6 +26,7 @@ Native directory browsing on Windows, instant local daemon pre-seeding, fast sta
 - Fixed 15-second daemon startup freeze caused by premature ACP agent CLI exit ([#465c0bb](https://github.com/Xenonesis/Kronos/commit/465c0bb7a))
 - Fixed NSIS installer file-lock errors during upgrades by terminating existing running Kronos processes ([#6b010fc](https://github.com/Xenonesis/Kronos/commit/6b010fc36))
 - Updated Add Project browse labels to dynamically reflect the host OS file manager (File Explorer on Windows, Finder on macOS)
+- Fixed a startup crash with Show background enabled and eight or more workspaces in a project ([#7896](https://github.com/getpaseo/paseo/pull/7896) by [@budivoogt](https://github.com/budivoogt))
 
 ### Improved
 
