@@ -357,7 +357,7 @@ try {{
           return await window.__TAURI_INTERNALS__.invoke('fast_validate_directory', {{ path: path }});
         }}
       }} catch (e) {{
-        return {{ exists: false, is_dir: false, readable: false, error: String(e) }};
+        console.error('[TauriBridge] validateDirectory failed:', e);
       }}
       return null;
     }},

@@ -540,7 +540,11 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
         setPageStatus(current, sourceKind, { isSubmitting: true, error: null }),
       );
       try {
-        if (typeof window !== "undefined" && window.paseoDesktop?.validateDirectory) {
+        if (
+          isLocalDaemon &&
+          typeof window !== "undefined" &&
+          window.paseoDesktop?.validateDirectory
+        ) {
           try {
             const validation = await window.paseoDesktop.validateDirectory(path);
             if (
@@ -583,7 +587,7 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
         submissionInFlightRef.current = false;
       }
     },
-    [hostId, openNewWorkspaceForProject, openProject],
+    [hostId, isLocalDaemon, openNewWorkspaceForProject, openProject],
   );
 
   const browse = useCallback(async () => {
