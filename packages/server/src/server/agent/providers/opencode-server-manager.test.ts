@@ -18,6 +18,7 @@ import type {
 } from "../../managed-processes/managed-processes.js";
 import type { ProcessTerminator, TreeKillTarget } from "../../../utils/tree-kill.js";
 import {
+  DEFAULT_OPENCODE_IDLE_TIMEOUT_MS,
   OpenCodeServerManager,
   type OpenCodeCommandPrefixResolver,
   type OpenCodePortAllocator,
@@ -304,6 +305,122 @@ describe("OpenCodeServerManager generations", () => {
   });
 });
 
+describe("OpenCodeServerManager idle hibernation", () => {
+  test("automatically hibernates server after configured idle duration with zero active refs", async () => {
+    vi.useFakeTimers();
+    const runtime = new FakeOpenCodeServerRuntime([9090], { autoAnnounce: true });
+    const manager = new OpenCodeServerManager({
+      logger: createTestLogger(),
+      idleTimeoutMs: 5_000,
+      portAllocator: runtime.allocatePort,
+      resolveCommandPrefix: runtime.resolveCommandPrefix,
+      spawnServerProcess: runtime.spawnServerProcess,
+      terminateProcess: runtime.terminateProcess,
+    });
+
+    const acquisition = await manager.acquireCurrent();
+    expect(manager.isServerAlive(manager.getCurrentServer())).toBe(true);
+
+    // Turn completes and releases acquisition
+    await acquisition.release();
+
+    // Still alive immediately after release
+    expect(manager.isServerAlive(manager.getCurrentServer())).toBe(true);
+
+    // Fast-forward past idle timeout
+    await vi.advanceTimersByTimeAsync(5_001);
+
+    // Server should now be shut down to save RAM
+    expect(manager.getCurrentServer()).toBe(null);
+    expect(runtime.terminatedPorts).toEqual([9090]);
+    vi.useRealTimers();
+  });
+
+  test("acquiring current server resets idle timer and cancels pending hibernation", async () => {
+    vi.useFakeTimers();
+    const runtime = new FakeOpenCodeServerRuntime([9091], { autoAnnounce: true });
+    const manager = new OpenCodeServerManager({
+      logger: createTestLogger(),
+      idleTimeoutMs: 5_000,
+      portAllocator: runtime.allocatePort,
+      resolveCommandPrefix: runtime.resolveCommandPrefix,
+      spawnServerProcess: runtime.spawnServerProcess,
+      terminateProcess: runtime.terminateProcess,
+    });
+
+    const first = await manager.acquireCurrent();
+    await first.release();
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(manager.getCurrentServer()).not.toBe(null);
+
+    const second = await manager.acquireCurrent();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(manager.getCurrentServer()).not.toBe(null);
+    expect(runtime.terminatedPorts).toEqual([]);
+
+    await second.release();
+    await vi.advanceTimersByTimeAsync(5_001);
+    expect(manager.getCurrentServer()).toBe(null);
+    expect(runtime.terminatedPorts).toEqual([9091]);
+    vi.useRealTimers();
+  });
+
+  test("transparently respawns server on subsequent acquireCurrent after hibernation", async () => {
+    vi.useFakeTimers();
+    const runtime = new FakeOpenCodeServerRuntime([9092, 9093], { autoAnnounce: true });
+    const manager = new OpenCodeServerManager({
+      logger: createTestLogger(),
+      idleTimeoutMs: 5_000,
+      portAllocator: runtime.allocatePort,
+      resolveCommandPrefix: runtime.resolveCommandPrefix,
+      spawnServerProcess: runtime.spawnServerProcess,
+      terminateProcess: runtime.terminateProcess,
+    });
+
+    const first = await manager.acquireCurrent();
+    expect(first.server.port).toBe(9092);
+    await first.release();
+
+    await vi.advanceTimersByTimeAsync(5_001);
+    expect(manager.getCurrentServer()).toBe(null);
+    expect(runtime.terminatedPorts).toEqual([9092]);
+
+    const second = await manager.acquireCurrent();
+    expect(second.server.port).toBe(9093);
+    expect(manager.isServerAlive(manager.getCurrentServer())).toBe(true);
+    await second.release();
+    vi.useRealTimers();
+  });
+
+  test("defaults to 15-minute idle timeout when idleTimeoutMs is omitted", async () => {
+    expect(DEFAULT_OPENCODE_IDLE_TIMEOUT_MS).toBe(15 * 60 * 1000);
+    vi.useFakeTimers();
+    const runtime = new FakeOpenCodeServerRuntime([9094], { autoAnnounce: true });
+    const manager = new OpenCodeServerManager({
+      logger: createTestLogger(),
+      portAllocator: runtime.allocatePort,
+      resolveCommandPrefix: runtime.resolveCommandPrefix,
+      spawnServerProcess: runtime.spawnServerProcess,
+      terminateProcess: runtime.terminateProcess,
+    });
+
+    const acquisition = await manager.acquireCurrent();
+    await acquisition.release();
+
+    // Advance 14 minutes: still alive
+    await vi.advanceTimersByTimeAsync(14 * 60 * 1000);
+    expect(manager.getCurrentServer()).not.toBe(null);
+    expect(runtime.terminatedPorts).toEqual([]);
+
+    // Advance 1 more minute: hibernated
+    await vi.advanceTimersByTimeAsync(60 * 1000 + 1);
+    expect(manager.getCurrentServer()).toBe(null);
+    expect(runtime.terminatedPorts).toEqual([9094]);
+    vi.useRealTimers();
+  });
+});
+
 describe("OpenCodeServerManager managed process ledger", () => {
   test("records helper server starts and removes the record on process exit", async () => {
     const { manager, runtime } = createTestManager([4601]);
@@ -368,7 +485,16 @@ describe.runIf(process.platform === "win32")(
   "OpenCodeServerManager Windows OpenCode npm install",
   () => {
     test("resolves the Windows npm shim to its native helper executable", async () => {
-      const detectedOpenCode = await findExecutable("opencode");
+      const originalPath = process.env.PATH;
+      let detectedOpenCode = await findExecutable("opencode");
+      if (detectedOpenCode && path.extname(detectedOpenCode).toLowerCase() !== ".cmd") {
+        const npmPath = (process.env.PATH ?? "")
+          .split(path.delimiter)
+          .filter((dir) => !dir.toLowerCase().includes(".bun"))
+          .join(path.delimiter);
+        process.env.PATH = npmPath;
+        detectedOpenCode = await findExecutable("opencode");
+      }
       expect(detectedOpenCode, "Windows CI must install opencode-ai before server tests").not.toBe(
         null,
       );
@@ -401,6 +527,7 @@ describe.runIf(process.platform === "win32")(
         expect(record.args).toEqual(["serve", "--port", String(acquisition.server.port)]);
         await acquisition.release();
       } finally {
+        process.env.PATH = originalPath;
         await manager.shutdown();
         rmSync(tempDir, { recursive: true, force: true });
       }
@@ -415,6 +542,7 @@ function createTestManager(
     baseEnv?: Record<string, string>;
     opencodeHomeDir?: string;
     logger?: Logger;
+    idleTimeoutMs?: number;
   } = {},
 ): {
   manager: OpenCodeServerManager;
@@ -434,6 +562,7 @@ function createTestManager(
       ...(opencodeHomeDir ? { resolveHomeDir: () => opencodeHomeDir } : {}),
       spawnServerProcess: runtime.spawnServerProcess,
       terminateProcess: runtime.terminateProcess,
+      idleTimeoutMs: options.idleTimeoutMs ?? 0,
     }),
     runtime,
   };

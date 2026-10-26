@@ -22,6 +22,8 @@ import {
   type OpenCodeEventSource,
 } from "./event-consumer.js";
 
+export const DEFAULT_OPENCODE_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+
 /** Budget for the OpenCode HTTP server to become usable after spawn. */
 export const OPENCODE_SERVER_STARTUP_TIMEOUT_MS = 30_000;
 /** One stalled SSE attempt plus enough time for the consumer's retry. */
@@ -77,6 +79,7 @@ export interface OpenCodeServerManagerOptions {
   spawnServerProcess?: OpenCodeServerProcessSpawner;
   createEventSource?: OpenCodeEventConsumerFactory;
   decorateServerEnv?: (env: Record<string, string>) => Record<string, string>;
+  idleTimeoutMs?: number;
 }
 
 export class OpenCodeServerManager implements OpenCodeServerManagerLike {
@@ -86,6 +89,8 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   private retiredServers = new Set<OpenCodeServerGeneration>();
   private startPromise: Promise<OpenCodeServerGeneration> | null = null;
   private newServerPromise: Promise<OpenCodeServerGeneration> | null = null;
+  private idleTimer: NodeJS.Timeout | null = null;
+  private readonly idleTimeoutMs: number;
   private readonly logger: Logger;
   private readonly baseEnv?: SpawnProcessOptions["baseEnv"];
   private readonly runtimeSettings?: ProviderRuntimeSettings;
@@ -115,6 +120,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     this.createEventSource =
       options.createEventSource ?? ((input) => new OpenCodeEventConsumer(input));
     this.decorateServerEnv = options.decorateServerEnv;
+    this.idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_OPENCODE_IDLE_TIMEOUT_MS;
   }
 
   static getInstance(
@@ -158,9 +164,17 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     process.on("SIGINT", cleanup);
   }
 
+  getCurrentServer(): OpenCodeServerGeneration | null {
+    return this.currentServer;
+  }
+
+  isServerAlive(server: OpenCodeServerGeneration | null): boolean {
+    return Boolean(server && this.isServerLive(server));
+  }
+
   async acquireCurrent(signal?: AbortSignal): Promise<OpenCodeServerAcquisition> {
     signal?.throwIfAborted();
-    const server = await waitForServerAcquisition(this.getCurrentServer(), signal);
+    const server = await waitForServerAcquisition(this.getOrStartCurrentServer(), signal);
     signal?.throwIfAborted();
     return this.acquireServer(server);
   }
@@ -208,6 +222,10 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   }
 
   private acquireServer(server: OpenCodeServerGeneration): OpenCodeServerAcquisition {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
     server.refCount += 1;
     let releasePromise: Promise<void> | null = null;
     return {
@@ -231,15 +249,44 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     }
 
     if (this.currentServer === server) {
-      this.currentServer = null;
-      server.retired = true;
+      if (this.idleTimer) {
+        clearTimeout(this.idleTimer);
+        this.idleTimer = null;
+      }
+      if (this.idleTimeoutMs === 0) {
+        await this.hibernateIdleServer(server);
+        return;
+      }
+      this.idleTimer = setTimeout(() => {
+        void this.hibernateIdleServer(server);
+      }, this.idleTimeoutMs);
+      return;
     }
+
     if (!server.retired) {
       return;
     }
 
     this.retiredServers.delete(server);
     this.logger.info(generationLogContext(server), "OpenCode server generation released");
+    await this.killServer(server);
+  }
+
+  private async hibernateIdleServer(server: OpenCodeServerGeneration): Promise<void> {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+    if (server.refCount !== 0 || this.currentServer !== server) {
+      return;
+    }
+    this.logger.info(
+      generationLogContext(server),
+      "OpenCode server hibernated after idle timeout to reclaim memory",
+    );
+    this.logger.info(generationLogContext(server), "OpenCode server generation released");
+    this.currentServer = null;
+    server.retired = true;
     await this.killServer(server);
   }
 
@@ -264,7 +311,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     return this.newServerPromise;
   }
 
-  private async getCurrentServer(): Promise<OpenCodeServerGeneration> {
+  private async getOrStartCurrentServer(): Promise<OpenCodeServerGeneration> {
     if (this.newServerPromise) {
       return this.newServerPromise;
     }
@@ -297,6 +344,10 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   }
 
   private async rotateCurrentServer(): Promise<void> {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
     const existing = this.currentServer;
     if (existing) {
       existing.retired = true;
@@ -488,6 +539,10 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   }
 
   async shutdown(): Promise<void> {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
     const servers = [
       ...(this.currentServer ? [this.currentServer] : []),
       ...Array.from(this.retiredServers),
