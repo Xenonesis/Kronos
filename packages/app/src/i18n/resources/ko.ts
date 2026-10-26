@@ -1918,6 +1918,13 @@ export const ko: TranslationResources = {
     backdrop: "메뉴 배경",
   },
   subagents: {
+    parent: {
+      backToParent: "상위 에이전트로 돌아가기",
+      backTo: "{{label}}(으)로 돌아가기",
+      parent: "상위",
+      parentAgent: "상위 에이전트",
+      openParent: "상위 에이전트 열기",
+    },
     title: "하위 에이전트",
     pillLabelOne: "하위 에이전트 1개",
     pillLabelMany: "하위 에이전트 {{count}}개",
@@ -2017,6 +2024,12 @@ export const ko: TranslationResources = {
     subAgentActivity: "서브에이전트 활동",
     input: "입력",
     output: "출력",
+  },
+  turnSummary: {
+    messages: {
+      one: "{{count}} 메시지를 작성했습니다.",
+      other: "{{count}} 메시지를 작성했습니다.",
+    },
   },
   toolCallGroup: {
     editedFiles: {
@@ -2287,12 +2300,13 @@ export const ko: TranslationResources = {
         label: "추론 항상 펼치기",
         description: "에이전트의 사고 및 추론 블록을 기본적으로 모두 펼쳐 표시합니다.",
       },
-      toolCallDetail: {
-        label: "도구 호출 표시",
-        description: "타임라인에 도구 호출이 표시되는 방식",
+      chatDisplay: {
+        label: "채팅 표시",
+        description: "채팅에 표시할 에이전트 작업의 양",
         options: {
-          overview: "요약",
-          detailed: "전체 세부정보",
+          full: "전체",
+          collapseToolCalls: "도구 호출 접기",
+          collapseTurns: "턴 접기",
         },
       },
       language: {
@@ -2659,6 +2673,11 @@ export const ko: TranslationResources = {
       },
       agents: {
         unavailable: "에이전트를 관리하려면 이 호스트에 연결하세요",
+        idleRuntimeCleanup: {
+          title: "유휴 에이전트 해제",
+          hint: "1시간 동안 활동이 없으면 메모리를 확보합니다.",
+          info: "대화를 유지하면서 에이전트 프로세스를 중지합니다. 메시지를 보내면 다시 이어집니다.\n\n진행 중인 작업, 대기 중인 알림, 프로바이더 안전 검사가 있으면 정리하지 않습니다.",
+        },
       },
       workspaces: {
         unavailable: "워크스페이스를 관리하려면 이 호스트에 연결하세요",
