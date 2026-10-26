@@ -3783,6 +3783,8 @@ class OpenCodeAgentSession implements AgentSession {
     this.pendingSteerSubmissions.push(pending);
 
     const parts = buildOpenCodePromptParts(prompt);
+    // Preserve canonical system prompt prefix ordering (base system prompt followed by
+    // daemon append prompt) and static tool definitions to maximize DeepSeek & Claude KV-cache hit rates.
     const systemPrompt = composeSystemPromptParts(
       this.config.systemPrompt,
       this.config.daemonAppendSystemPrompt,
@@ -4120,6 +4122,8 @@ class OpenCodeAgentSession implements AgentSession {
           partTypes: parts.map((p) => p.type),
         });
         try {
+          // Preserve canonical system prompt prefix ordering (base system prompt followed by
+          // daemon append prompt) and static tool definitions to maximize DeepSeek & Claude KV-cache hit rates.
           const systemPrompt = composeSystemPromptParts(
             this.config.systemPrompt,
             this.config.daemonAppendSystemPrompt,

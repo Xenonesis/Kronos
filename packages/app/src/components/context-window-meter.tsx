@@ -11,7 +11,7 @@ import { useHostReportsUsage } from "@/usage";
 import type { Theme } from "@/styles/theme";
 import { ContextWindowDetails } from "./context-window-details";
 import { ContextWindowSheet } from "./context-window-sheet";
-import { formatContextPercentage } from "./context-window-meter.utils";
+import { formatContextPercentage, shouldShowCompactWarning } from "./context-window-meter.utils";
 
 interface ContextWindowMeterProps {
   serverId: string;
@@ -202,19 +202,37 @@ export function ContextWindowMeter({
     ? t("contextWindow.accessibility", { percentage: context.percentage })
     : t("contextWindow.accessibilityNoData");
 
+  const showWarning = percentage !== null && shouldShowCompactWarning(percentage);
+  const compactWarningBadge = showWarning ? (
+    <View style={styles.compactWarningChip} testID="compact-warning-chip">
+      <Text style={styles.compactWarningText}>[COMPACT: /compact]</Text>
+    </View>
+  ) : null;
+
   if (isCompact) {
+    const compactMeter = (
+      <Pressable
+        style={containerStyle}
+        testID="context-window-meter"
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
+        onPress={openSheet}
+      >
+        {ring}
+        {percentageLabel}
+      </Pressable>
+    );
+
     return (
       <>
-        <Pressable
-          style={containerStyle}
-          testID="context-window-meter"
-          accessibilityRole="button"
-          accessibilityLabel={accessibilityLabel}
-          onPress={openSheet}
-        >
-          {ring}
-          {percentageLabel}
-        </Pressable>
+        {compactWarningBadge ? (
+          <View style={styles.wrapper}>
+            {compactWarningBadge}
+            {compactMeter}
+          </View>
+        ) : (
+          compactMeter
+        )}
         <ContextWindowSheet open={isSheetOpen} onClose={closeSheet}>
           <ContextWindowDetails
             serverId={serverId}
@@ -236,7 +254,7 @@ export function ContextWindowMeter({
   // Native wide screens have no hover, so the details open in a tooltip on press. The tooltip
   // takes no presses, so its usage cards have no Refresh.
   if (isNative) {
-    return (
+    const tooltip = (
       <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile>
         <TooltipTrigger asChild triggerRefProp="ref">
           <Pressable
@@ -268,9 +286,20 @@ export function ContextWindowMeter({
         </TooltipContent>
       </Tooltip>
     );
+
+    if (compactWarningBadge) {
+      return (
+        <View style={styles.wrapper}>
+          {compactWarningBadge}
+          {tooltip}
+        </View>
+      );
+    }
+
+    return tooltip;
   }
 
-  return (
+  const hoverCard = (
     <HoverCard>
       <HoverCardTrigger focusable accessibilityLabel={accessibilityLabel}>
         <View
@@ -302,9 +331,41 @@ export function ContextWindowMeter({
       </HoverCardContent>
     </HoverCard>
   );
+
+  if (compactWarningBadge) {
+    return (
+      <View style={styles.wrapper}>
+        {compactWarningBadge}
+        {hoverCard}
+      </View>
+    );
+  }
+
+  return hoverCard;
 }
 
 const styles = StyleSheet.create((theme) => ({
+  wrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1.5],
+  },
+  compactWarningChip: {
+    backgroundColor: "#0A0A0A",
+    borderWidth: 1,
+    borderColor: "#FF2A2A",
+    borderRadius: 0,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  compactWarningText: {
+    color: "#FF2A2A",
+    fontFamily: "monospace",
+    fontSize: 10,
+    fontWeight: "700",
+  },
   container: {
     width: 28,
     height: 28,

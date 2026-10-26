@@ -14,3 +14,10 @@ export function formatTokenCount(value: number): string {
   }
   return Math.round(value).toString();
 }
+
+export function shouldShowCompactWarning(percentage: number | null | undefined): boolean {
+  if (percentage === null || percentage === undefined || !Number.isFinite(percentage)) {
+    return false;
+  }
+  return percentage >= 75;
+}
