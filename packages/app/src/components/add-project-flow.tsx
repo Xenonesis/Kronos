@@ -540,6 +540,25 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
         setPageStatus(current, sourceKind, { isSubmitting: true, error: null }),
       );
       try {
+        if (typeof window !== "undefined" && window.paseoDesktop?.validateDirectory) {
+          try {
+            const validation = await window.paseoDesktop.validateDirectory(path);
+            if (
+              validation &&
+              (validation.exists === false ||
+                validation.readable === false ||
+                validation.is_dir === false)
+            ) {
+              const message = validation.error ?? "Directory not found";
+              setState((current) =>
+                setPageStatus(current, sourceKind, { isSubmitting: false, error: message }),
+              );
+              return;
+            }
+          } catch {
+            // If native validation threw an error, fall through to openProject
+          }
+        }
         const result = await openProject(path);
         if (result.ok) {
           openNewWorkspaceForProject(hostId, result.project);

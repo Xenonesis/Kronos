@@ -192,6 +192,58 @@ fn log_desktop_event(level: String, message: String) {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct DirectoryValidationResult {
+    pub exists: bool,
+    pub is_dir: bool,
+    pub readable: bool,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+fn fast_validate_directory(path: String) -> DirectoryValidationResult {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return DirectoryValidationResult {
+            exists: false,
+            is_dir: false,
+            readable: false,
+            error: Some("Directory does not exist.".to_string()),
+        };
+    }
+    let metadata = match std::fs::metadata(p) {
+        Ok(m) => m,
+        Err(e) => return DirectoryValidationResult {
+            exists: true,
+            is_dir: false,
+            readable: false,
+            error: Some(format!("Cannot access path: {}", e)),
+        },
+    };
+    if !metadata.is_dir() {
+        return DirectoryValidationResult {
+            exists: true,
+            is_dir: false,
+            readable: false,
+            error: Some("Selected path is a file, not a directory.".to_string()),
+        };
+    }
+    match std::fs::read_dir(p) {
+        Ok(_) => DirectoryValidationResult {
+            exists: true,
+            is_dir: true,
+            readable: true,
+            error: None,
+        },
+        Err(e) => DirectoryValidationResult {
+            exists: true,
+            is_dir: true,
+            readable: false,
+            error: Some(format!("Permission denied reading directory: {}", e)),
+        },
+    }
+}
+
 fn setup_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -299,6 +351,16 @@ try {{
   window.paseoDesktop = {{
     platform: 'win32',
     windowChromeMode: 'custom-windows',
+    validateDirectory: async function(path) {{
+      try {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          return await window.__TAURI_INTERNALS__.invoke('fast_validate_directory', {{ path: path }});
+        }}
+      }} catch (e) {{
+        return {{ exists: false, is_dir: false, readable: false, error: String(e) }};
+      }}
+      return null;
+    }},
     dialog: {{
       open: async function(options) {{
         try {{
@@ -419,6 +481,16 @@ try {{
       }}
       if (command === 'desktop_get_system_idle_time') {{
         return 0;
+      }}
+      if (command === 'fast_validate_directory') {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            return await window.__TAURI_INTERNALS__.invoke('fast_validate_directory', args || {{}});
+          }}
+        }} catch (e) {{
+          return {{ exists: false, is_dir: false, readable: false, error: String(e) }};
+        }}
+        return null;
       }}
       return null;
     }}
@@ -554,7 +626,8 @@ try {{
             get_live_daemon_status,
             get_live_local_credential,
             get_log_contents,
-            log_desktop_event
+            log_desktop_event,
+            fast_validate_directory
         ])
         .setup(move |app| {
             let _ = setup_tray(app.handle());
@@ -647,4 +720,38 @@ try {{
             }
             _ => {}
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fast_validate_directory_nonexistent() {
+        let res = fast_validate_directory("this_path_definitely_does_not_exist_123456789".to_string());
+        assert!(!res.exists);
+        assert!(!res.is_dir);
+        assert!(!res.readable);
+        assert_eq!(res.error, Some("Directory does not exist.".to_string()));
+    }
+
+    #[test]
+    fn test_fast_validate_directory_on_file() {
+        let file_path = std::env::current_dir().unwrap().join("Cargo.toml");
+        let res = fast_validate_directory(file_path.to_string_lossy().to_string());
+        assert!(res.exists);
+        assert!(!res.is_dir);
+        assert!(!res.readable);
+        assert_eq!(res.error, Some("Selected path is a file, not a directory.".to_string()));
+    }
+
+    #[test]
+    fn test_fast_validate_directory_valid() {
+        let temp_dir = std::env::temp_dir();
+        let res = fast_validate_directory(temp_dir.to_string_lossy().to_string());
+        assert!(res.exists);
+        assert!(res.is_dir);
+        assert!(res.readable);
+        assert!(res.error.is_none());
+    }
 }

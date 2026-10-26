@@ -172,10 +172,18 @@ export interface DesktopInvokeBridge {
   invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 }
 
+export interface DirectoryValidationResult {
+  exists: boolean;
+  is_dir: boolean;
+  readable: boolean;
+  error?: string | null;
+}
+
 export interface DesktopHostBridge {
   platform?: string;
   windowChromeMode?: string;
   invoke?: DesktopInvokeBridge["invoke"];
+  validateDirectory?: (path: string) => Promise<DirectoryValidationResult | null>;
   getPendingOpenProject?: () => Promise<string | null>;
   agentNavigation?: DesktopAgentNavigationBridge;
   events?: DesktopEventsBridge;
