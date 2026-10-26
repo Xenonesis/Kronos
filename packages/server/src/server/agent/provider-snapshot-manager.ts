@@ -1057,11 +1057,18 @@ export class ProviderSnapshotManager {
         fetchedAt: new Date().toISOString(),
       });
     } catch (error) {
+      const errorMessage = toErrorMessage(error);
+      const isMissingCli =
+        errorMessage.includes("was not found") ||
+        errorMessage.includes("exit code 127") ||
+        errorMessage.includes("ENOENT") ||
+        errorMessage.includes("not found on PATH") ||
+        errorMessage.includes("command not found");
       const emitted = setEntry({
         ...base,
-        status: "error",
+        status: isMissingCli ? "unavailable" : "error",
         enabled: true,
-        error: toErrorMessage(error),
+        error: errorMessage,
       });
       if (emitted) {
         this.logger.warn(

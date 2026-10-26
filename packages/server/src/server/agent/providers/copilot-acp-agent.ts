@@ -20,6 +20,7 @@ import {
   formatProviderDiagnosticError,
   buildBinaryDiagnosticRows,
   buildCommandResolutionDiagnosticRows,
+  resolveBinaryVersion,
 } from "./diagnostic-utils.js";
 
 const COPILOT_CAPABILITIES: AgentCapabilityFlags = {
@@ -97,7 +98,27 @@ export class CopilotACPAgentClient extends ACPAgentClient {
   }
 
   override async isAvailable(): Promise<boolean> {
-    return super.isAvailable();
+    try {
+      const available = await super.isAvailable();
+      if (!available) return false;
+      const launch = await resolveProviderLaunch({
+        commandConfig: this.runtimeSettings?.command,
+        defaultBinary: "copilot",
+      });
+      const availability = await checkProviderLaunchAvailable(launch);
+      if (!availability.available) return false;
+      const versionOutput = await resolveBinaryVersion(availability.resolvedPath ?? launch.command);
+      if (
+        versionOutput.includes("not found") ||
+        versionOutput.includes("exit code 127") ||
+        versionOutput.startsWith("error:")
+      ) {
+        return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async getDiagnostic(): Promise<{ diagnostic: string }> {

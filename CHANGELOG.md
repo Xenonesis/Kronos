@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.2 - 2026-10-26
+
+Provider discovery resilience, graceful uninstalled CLI status, and timeout relief for Windows models.
+
+### Fixed
+
+- Fixed provider timeout on desktop by increasing default refresh timeout to 30000ms, allowing local models (Codex, OpenCode, Pi) to discover and load properly without aborting
+- Fixed uninstalled providers showing "Error" by distinguishing missing CLIs and exit code 127 as "Unavailable" instead of an error state
+- Fixed VS Code Insiders Copilot CLI shim triggering startup failure by validating launcher execution before declaring availability
+- Updated model selector dropdown to display clean "Unavailable" status instead of alert warnings for uninstalled providers
+
 ## 0.13.1 - 2026-10-26
 
 Native directory browsing on Windows, instant local daemon pre-seeding, fast startup stall recovery, and Kronos branding refinements.

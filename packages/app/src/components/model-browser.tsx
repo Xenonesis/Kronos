@@ -999,6 +999,13 @@ function GroupProviderButton({
         </View>
       );
     }
+    const isUnavailable =
+      selection.message.toLowerCase().includes("unavailable") ||
+      selection.message === t("providerSelection.unavailable") ||
+      selection.message.toLowerCase().includes("not found");
+    if (isUnavailable) {
+      return <Text style={styles.drillDownCount}>{t("providerSelection.unavailable")}</Text>;
+    }
     return (
       <View style={styles.rowStateInline}>
         <ThemedAlertTriangle size={ICON_SIZE.sm} uniProps={foregroundMutedMapping} />
@@ -1230,11 +1237,17 @@ function ProviderErrorEmptyState({
   const handleRetry = useCallback(() => {
     onRetryProvider?.(providerId);
   }, [onRetryProvider, providerId]);
+  const isUnavailable =
+    message.toLowerCase().includes("unavailable") ||
+    message === t("providerSelection.unavailable") ||
+    message.toLowerCase().includes("not found");
   return (
     <View style={styles.emptyState}>
-      <ThemedAlertTriangle size={ICON_SIZE.md} uniProps={foregroundMutedMapping} />
+      {isUnavailable ? null : (
+        <ThemedAlertTriangle size={ICON_SIZE.md} uniProps={foregroundMutedMapping} />
+      )}
       <Text style={styles.emptyStateText}>{message}</Text>
-      {onRetryProvider ? (
+      {!isUnavailable && onRetryProvider ? (
         <Button variant="default" size="sm" onPress={handleRetry} disabled={isRetryingProvider}>
           {isRetryingProvider ? t("modelSelector.retrying") : t("modelSelector.retry")}
         </Button>

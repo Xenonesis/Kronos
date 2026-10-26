@@ -73,7 +73,7 @@ pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
     cmd.arg("--max-old-space-size=2048");
     let refresh_timeout = env::var("KRONOS_PROVIDER_REFRESH_TIMEOUT_MS")
         .or_else(|_| env::var("PASEO_PROVIDER_REFRESH_TIMEOUT_MS"))
-        .unwrap_or_else(|_| "2500".to_string());
+        .unwrap_or_else(|_| "30000".to_string());
     cmd.arg(&script_path)
         .env("PASEO_LISTEN", "127.0.0.1:6767")
         .env("PASEO_PROVIDER_REFRESH_TIMEOUT_MS", &refresh_timeout)
