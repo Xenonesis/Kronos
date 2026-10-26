@@ -31,4 +31,12 @@ describe("pickDirectory", () => {
 
     await expect(pickDirectory(dialog)).resolves.toBeNull();
   });
+
+  it("handles array selection from dialog.open", async () => {
+    const dialog: DesktopDialogBridge = {
+      open: async () => ["/repo/project-array"],
+    };
+
+    await expect(pickDirectory(dialog)).resolves.toBe("/repo/project-array");
+  });
 });

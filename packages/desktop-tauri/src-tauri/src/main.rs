@@ -299,6 +299,38 @@ try {{
   window.paseoDesktop = {{
     platform: 'win32',
     windowChromeMode: 'custom-windows',
+    dialog: {{
+      open: async function(options) {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            if (options && options.directory) {{
+              return await window.__TAURI_INTERNALS__.invoke('pick_folder');
+            }}
+            return await window.__TAURI_INTERNALS__.invoke('pick_file');
+          }}
+        }} catch (e) {{
+          console.error('[TauriBridge] Dialog open failed:', e);
+        }}
+        return null;
+      }},
+      ask: async function(_message, _options) {{
+        return true;
+      }},
+      askWithCheckbox: async function(_message, _options) {{
+        return {{ confirmed: true, dontAskAgain: false }};
+      }}
+    }},
+    opener: {{
+      openUrl: async function(url) {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            return await window.__TAURI_INTERNALS__.invoke('plugin:opener|open_url', {{ url: url }});
+          }}
+        }} catch (e) {{
+          window.open(url, '_blank');
+        }}
+      }}
+    }},
     invoke: async function(command, args) {{
       if (command === 'desktop_daemon_status' || command === 'start_desktop_daemon') {{
         try {{

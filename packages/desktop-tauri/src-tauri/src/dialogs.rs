@@ -7,7 +7,9 @@ pub async fn pick_folder(app: tauri::AppHandle) -> Result<Option<String>, String
         .file()
         .blocking_pick_folder();
 
-    Ok(folder.map(|p| p.to_string()))
+    Ok(folder.and_then(|p| {
+        p.into_path().ok().map(|path| path.to_string_lossy().to_string())
+    }))
 }
 
 #[tauri::command]
@@ -17,5 +19,7 @@ pub async fn pick_file(app: tauri::AppHandle) -> Result<Option<String>, String> 
         .file()
         .blocking_pick_file();
 
-    Ok(file.map(|p| p.to_string()))
+    Ok(file.and_then(|p| {
+        p.into_path().ok().map(|path| path.to_string_lossy().to_string())
+    }))
 }

@@ -4,6 +4,8 @@ import {
   parseGitRemoteLocation,
 } from "@getpaseo/protocol/git-remote";
 import { shortenPath } from "@/utils/shorten-path";
+import { getIsElectronMac } from "@/constants/platform";
+import { getDesktopHost } from "@/desktop/host";
 import type { AddProjectHost, GithubRepositoryChoice } from "./model";
 
 export type AddProjectMethodId = "directory-search" | "browse" | "github" | "new-directory";
@@ -32,6 +34,19 @@ export function filterAddProjectHosts(hosts: AddProjectHost[], query: string): A
       host.serverId.toLowerCase().includes(normalized),
   );
 }
+function browseMethodDescription(): string {
+  if (getIsElectronMac()) {
+    return "Choose or create a directory in Finder";
+  }
+  const hostPlatform = getDesktopHost()?.platform?.toLowerCase();
+  if (
+    hostPlatform === "win32" ||
+    (typeof navigator !== "undefined" && navigator.userAgent.includes("Windows"))
+  ) {
+    return "Choose or create a directory in File Explorer";
+  }
+  return "Choose or create a directory in file manager";
+}
 
 export function buildAddProjectMethods(host: AddProjectHost): AddProjectMethodOption[] {
   if (!host.canAddProject) return [];
@@ -45,7 +60,7 @@ export function buildAddProjectMethods(host: AddProjectHost): AddProjectMethodOp
     options.push({
       id: "browse",
       label: "Browse",
-      description: "Choose or create a directory in Finder",
+      description: browseMethodDescription(),
     });
   }
   options.push({
