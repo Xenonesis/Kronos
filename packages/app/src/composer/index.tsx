@@ -54,6 +54,7 @@ import {
   type DraftAgentControlsProps,
 } from "@/composer/agent-controls";
 import { ContextWindowMeter } from "@/components/context-window-meter";
+import { TelemetryHud, calculateTps } from "@/components/telemetry-hud";
 import { useImageAttachmentPicker } from "@/hooks/use-image-attachment-picker";
 import {
   selectAgentSentMessages,
@@ -284,6 +285,7 @@ function buildAgentStateSelector(serverId: string, agentId: string) {
       contextWindowMaxTokens: agent?.lastUsage?.contextWindowMaxTokens ?? null,
       contextWindowUsedTokens: agent?.lastUsage?.contextWindowUsedTokens ?? null,
       totalCostUsd: agent?.lastUsage?.totalCostUsd ?? null,
+      outputTokens: agent?.lastUsage?.outputTokens ?? null,
       model: agent?.model ?? null,
     };
   };
@@ -2081,28 +2083,101 @@ function ComposerContentImpl({
     ],
   );
 
+  const turnStartedAt = useSessionStore(
+    (state) => selectAgentTurnPresentation(state.sessions[serverId], agentId).startedAt,
+  );
+  const streamHead = useSessionStore((state) =>
+    state.sessions[serverId]?.agentStreamHead?.get(agentId),
+  );
+
+  const turnTelemetryRef = useRef<{
+    turnStartedAt: Date | null;
+    firstTokenAt: Date | null;
+    ttftMs: number | null;
+  }>({
+    turnStartedAt: null,
+    firstTokenAt: null,
+    ttftMs: null,
+  });
+
+  if (turnTelemetryRef.current.turnStartedAt !== turnStartedAt) {
+    turnTelemetryRef.current = {
+      turnStartedAt,
+      firstTokenAt: null,
+      ttftMs: null,
+    };
+  }
+
+  const streamTextLength = useMemo(() => {
+    if (!streamHead || streamHead.length === 0) return 0;
+    let total = 0;
+    for (const item of streamHead) {
+      if (item.kind === "assistant_message") {
+        total += item.text.length;
+      }
+    }
+    return total;
+  }, [streamHead]);
+
+  const outputTokens =
+    agentState.outputTokens && agentState.outputTokens > 0
+      ? agentState.outputTokens
+      : Math.round(streamTextLength / 4);
+
+  if (isAgentRunning && outputTokens > 0 && !turnTelemetryRef.current.firstTokenAt) {
+    turnTelemetryRef.current.firstTokenAt = new Date();
+    if (turnStartedAt) {
+      turnTelemetryRef.current.ttftMs = Math.max(
+        0,
+        turnTelemetryRef.current.firstTokenAt.getTime() - turnStartedAt.getTime(),
+      );
+    }
+  }
+
+  let elapsedMs = 0;
+  if (turnTelemetryRef.current.firstTokenAt) {
+    elapsedMs = Math.max(1, Date.now() - turnTelemetryRef.current.firstTokenAt.getTime());
+  } else if (turnStartedAt) {
+    elapsedMs = Math.max(1, Date.now() - turnStartedAt.getTime());
+  }
+
+  const telemetryTps =
+    isAgentRunning && outputTokens > 0 && elapsedMs > 0 ? calculateTps(outputTokens, elapsedMs) : 0;
+  const telemetryTtftMs = isAgentRunning ? turnTelemetryRef.current.ttftMs : null;
+
   const contextWindowMeterGlyphSize = isCompactLayout ? ICON_SIZE.md : buttonIconSize;
   const beforeVoiceContent = useMemo(
     () =>
       hasAgent ? (
-        <View style={styles.contextWindowMeterSlot}>
-          <ContextWindowMeter
-            serverId={serverId}
-            agentId={agentId}
-            maxTokens={agentState.contextWindowMaxTokens}
-            usedTokens={agentState.contextWindowUsedTokens}
-            totalCostUsd={agentState.totalCostUsd}
-            glyphSize={contextWindowMeterGlyphSize}
+        <View style={styles.telemetryAndMeterRow}>
+          <TelemetryHud
+            isStreaming={isAgentRunning}
+            tps={telemetryTps}
+            ttftMs={telemetryTtftMs}
+            costUsd={agentState.totalCostUsd}
           />
+          <View style={styles.contextWindowMeterSlot}>
+            <ContextWindowMeter
+              serverId={serverId}
+              agentId={agentId}
+              maxTokens={agentState.contextWindowMaxTokens}
+              usedTokens={agentState.contextWindowUsedTokens}
+              totalCostUsd={agentState.totalCostUsd}
+              glyphSize={contextWindowMeterGlyphSize}
+            />
+          </View>
         </View>
       ) : null,
     [
       hasAgent,
+      isAgentRunning,
+      telemetryTps,
+      telemetryTtftMs,
+      agentState.totalCostUsd,
       serverId,
       agentId,
       agentState.contextWindowMaxTokens,
       agentState.contextWindowUsedTokens,
-      agentState.totalCostUsd,
       contextWindowMeterGlyphSize,
     ],
   );
@@ -2609,6 +2684,11 @@ const styles = StyleSheet.create((theme: Theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[1],
+  },
+  telemetryAndMeterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1.5],
   },
   contextWindowMeterSlot: {
     width: 28,
