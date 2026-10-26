@@ -1109,6 +1109,143 @@ describe("translateOpenCodeEvent", () => {
     ]);
   });
 
+  it("emits real-time usage_updated with compacted context tokens on session.compacted", () => {
+    const state = createState();
+    state.accumulatedUsage = {
+      contextWindowMaxTokens: 200_000,
+      contextWindowUsedTokens: 107_000,
+    };
+    state.suppressAssistantMessagesUntilIdle = { active: true };
+
+    // Simulate summary message with output tokens
+    translateOpenCodeEvent(
+      {
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg-compact-summary",
+            sessionID: "session-1",
+            role: "assistant",
+            tokens: {
+              input: 107_000,
+              output: 450,
+              reasoning: 0,
+              cache: { read: 0, write: 0 },
+            },
+          },
+        },
+      },
+      state,
+    );
+
+    // Simulate session.compacted event
+    const events = translateOpenCodeEvent(
+      {
+        type: "session.compacted",
+        properties: {
+          sessionID: "session-1",
+        },
+      },
+      state,
+    );
+
+    expect(events).toEqual([
+      {
+        type: "timeline",
+        provider: "opencode",
+        item: {
+          type: "compaction",
+          status: "completed",
+        },
+      },
+      {
+        type: "usage_updated",
+        provider: "opencode",
+        usage: {
+          contextWindowMaxTokens: 200_000,
+          contextWindowUsedTokens: 1450, // 450 summary tokens + 1000 baseline
+        },
+      },
+    ]);
+
+    expect(state.accumulatedUsage.contextWindowUsedTokens).toBe(1450);
+  });
+
+  it("estimates compaction usage from streamed summary text length and keeps it on session.idle", () => {
+    const state = createState();
+    state.accumulatedUsage = {
+      contextWindowMaxTokens: 200_000,
+      contextWindowUsedTokens: 107_000,
+    };
+    state.suppressAssistantMessagesUntilIdle = { active: true };
+
+    // Summary message
+    translateOpenCodeEvent(
+      {
+        type: "message.updated",
+        properties: {
+          info: { id: "msg-compact-summary", sessionID: "session-1", role: "assistant" },
+        },
+      },
+      state,
+    );
+
+    // Stream 800 characters of summary text (~200 tokens)
+    translateOpenCodeEvent(
+      {
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-compact-text",
+            sessionID: "session-1",
+            messageID: "msg-compact-summary",
+            type: "text",
+            text: "A".repeat(800),
+          },
+        },
+      },
+      state,
+    );
+
+    // session.compacted emits real-time usage_updated
+    const compactEvents = translateOpenCodeEvent(
+      {
+        type: "session.compacted",
+        properties: { sessionID: "session-1" },
+      },
+      state,
+    );
+
+    expect(compactEvents).toContainEqual({
+      type: "usage_updated",
+      provider: "opencode",
+      usage: {
+        contextWindowMaxTokens: 200_000,
+        contextWindowUsedTokens: 1200, // 800/4 = 200 + 1000 baseline
+      },
+    });
+
+    // session.idle emits turn_completed with the compacted usage
+    const idleEvents = translateOpenCodeEvent(
+      {
+        type: "session.idle",
+        properties: { sessionID: "session-1" },
+      },
+      state,
+    );
+
+    expect(idleEvents).toEqual([
+      {
+        type: "turn_completed",
+        provider: "opencode",
+        usage: {
+          contextWindowMaxTokens: 200_000,
+          contextWindowUsedTokens: 1200,
+        },
+      },
+    ]);
+  });
+
   it("emits reasoning from message.part.delta events", () => {
     const state = createState();
 

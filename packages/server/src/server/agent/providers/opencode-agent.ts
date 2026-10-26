@@ -1958,6 +1958,11 @@ export class OpenCodeAgentClient implements AgentClient {
   }
 }
 
+export interface OpenCodeCompactionSummaryState {
+  textLength: number;
+  tokens?: number;
+}
+
 export interface OpenCodeEventTranslationState {
   sessionId: string;
   cwd?: string;
@@ -1972,6 +1977,7 @@ export interface OpenCodeEventTranslationState {
   emittedStructuredMessageIds: Set<string>;
   compactionSummaryMessageIds: Set<string>;
   emittedCompactionPartIds: Set<string>;
+  compactionSummaryState?: OpenCodeCompactionSummaryState;
   hydratedMessageFingerprints?: Map<string, string>;
   hydratedPartFingerprints?: Map<string, string>;
   suppressAssistantMessagesUntilIdle?: { active: boolean };
@@ -2287,6 +2293,53 @@ function buildOpenCodePermissionDescription(params: {
   return parts.length > 0 ? parts.join(" - ") : undefined;
 }
 
+function appendOpenCodeSessionCompacted(
+  event: Extract<OpenCodeEvent, { type: "session.compacted" }>,
+  state: OpenCodeEventTranslationState,
+  events: AgentStreamEvent[],
+): void {
+  if (event.properties.sessionID !== state.sessionId) {
+    return;
+  }
+  events.push({
+    type: "timeline",
+    provider: "opencode",
+    item: createCompactionTimelineItem("completed"),
+  });
+  if (
+    state.accumulatedUsage.contextWindowMaxTokens !== undefined ||
+    state.accumulatedUsage.contextWindowUsedTokens !== undefined
+  ) {
+    const summaryTokens =
+      state.compactionSummaryState?.tokens ??
+      (state.compactionSummaryState && state.compactionSummaryState.textLength > 0
+        ? Math.ceil(state.compactionSummaryState.textLength / 4)
+        : undefined);
+    const compactedUsedTokens = (summaryTokens ?? 500) + 1000;
+    state.accumulatedUsage.contextWindowUsedTokens = compactedUsedTokens;
+    events.push({
+      type: "usage_updated",
+      provider: "opencode",
+      usage: { ...state.accumulatedUsage },
+    });
+  }
+}
+
+function appendOpenCodeSessionIdle(
+  event: Extract<OpenCodeEvent, { type: "session.idle" }>,
+  state: OpenCodeEventTranslationState,
+  events: AgentStreamEvent[],
+): void {
+  if (event.properties.sessionID !== state.sessionId) {
+    return;
+  }
+  const usage = hasNormalizedOpenCodeUsage(state.accumulatedUsage)
+    ? { ...state.accumulatedUsage }
+    : undefined;
+  resetOpenCodeTurnTrackingState(state);
+  events.push({ type: "turn_completed", provider: "opencode", usage });
+}
+
 export function translateOpenCodeEvent(
   event: OpenCodeEvent,
   state: OpenCodeEventTranslationState,
@@ -2326,19 +2379,10 @@ export function translateOpenCodeEvent(
       }
       break;
     case "session.compacted":
-      if (event.properties.sessionID === state.sessionId) {
-        events.push({
-          type: "timeline",
-          provider: "opencode",
-          item: createCompactionTimelineItem("completed"),
-        });
-      }
+      appendOpenCodeSessionCompacted(event, state, events);
       break;
     case "session.idle":
-      if (event.properties.sessionID === state.sessionId) {
-        resetOpenCodeTurnTrackingState(state);
-        events.push({ type: "turn_completed", provider: "opencode", usage: undefined });
-      }
+      appendOpenCodeSessionIdle(event, state, events);
       break;
     case "session.error":
       appendOpenCodeSessionError(event, state, events);
@@ -2355,6 +2399,10 @@ function resetOpenCodeTurnTrackingState(state: OpenCodeEventTranslationState): v
   state.partTypes.clear();
   state.compactionSummaryMessageIds.clear();
   state.emittedCompactionPartIds.clear();
+  if (state.compactionSummaryState) {
+    state.compactionSummaryState.textLength = 0;
+    state.compactionSummaryState.tokens = undefined;
+  }
   if (state.suppressAssistantMessagesUntilIdle) {
     state.suppressAssistantMessagesUntilIdle.active = false;
   }
@@ -2700,6 +2748,24 @@ function appendOpenCodeSessionDeleted(
   });
 }
 
+function captureCompactionSummaryTokens(
+  info: OpenCodeAssistantMessage,
+  state: OpenCodeEventTranslationState,
+): boolean {
+  if (
+    !state.suppressAssistantMessagesUntilIdle?.active &&
+    !isOpenCodeCompactionSummaryMessage(info)
+  ) {
+    return false;
+  }
+  state.compactionSummaryMessageIds.add(info.id);
+  const outputTokens = readPositiveFiniteNumber(info.tokens?.output);
+  if (outputTokens !== undefined) {
+    state.compactionSummaryState ??= { textLength: 0 };
+    state.compactionSummaryState.tokens = outputTokens;
+  }
+  return true;
+}
 function appendOpenCodeMessageUpdated(
   event: Extract<OpenCodeEvent, { type: "message.updated" }>,
   state: OpenCodeEventTranslationState,
@@ -2720,12 +2786,7 @@ function appendOpenCodeMessageUpdated(
   if (info.role !== "assistant") {
     return;
   }
-  if (state.suppressAssistantMessagesUntilIdle?.active) {
-    state.compactionSummaryMessageIds.add(info.id);
-    return;
-  }
-  if (isOpenCodeCompactionSummaryMessage(info)) {
-    state.compactionSummaryMessageIds.add(info.id);
+  if (captureCompactionSummaryTokens(info, state)) {
     return;
   }
   const modelLookupKey = resolveOpenCodeModelLookupKeyFromAssistantMessage(info);
@@ -2780,6 +2841,26 @@ function appendOpenCodeUserMessageUpdated(
   });
 }
 
+function captureCompactionSummaryPart(
+  part: Extract<OpenCodeEvent, { type: "message.part.updated" }>["properties"]["part"],
+  messageRole: OpenCodeMessageRole | undefined,
+  state: OpenCodeEventTranslationState,
+): boolean {
+  const isSummaryMessage = state.compactionSummaryMessageIds.has(part.messageID);
+  const shouldSuppress = shouldSuppressOpenCodeAssistantPart(part, messageRole, state);
+  if (!isSummaryMessage && !shouldSuppress) {
+    return false;
+  }
+  if (shouldSuppress) {
+    state.compactionSummaryMessageIds.add(part.messageID);
+  }
+  if (part.type === "text" && typeof part.text === "string") {
+    state.compactionSummaryState ??= { textLength: 0 };
+    state.compactionSummaryState.textLength += part.text.length;
+  }
+  return true;
+}
+
 function appendOpenCodeMessagePartUpdated(
   event: Extract<OpenCodeEvent, { type: "message.part.updated" }>,
   state: OpenCodeEventTranslationState,
@@ -2798,12 +2879,7 @@ function appendOpenCodeMessagePartUpdated(
   const messageRole = state.messageRoles.get(part.messageID);
   state.partTypes.set(part.id, part.type);
 
-  if (state.compactionSummaryMessageIds.has(part.messageID)) {
-    return;
-  }
-
-  if (shouldSuppressOpenCodeAssistantPart(part, messageRole, state)) {
-    state.compactionSummaryMessageIds.add(part.messageID);
+  if (captureCompactionSummaryPart(part, messageRole, state)) {
     return;
   }
 
@@ -3431,6 +3507,7 @@ class OpenCodeAgentSession implements AgentSession {
   private emittedStructuredMessageIds = new Set<string>();
   private compactionSummaryMessageIds = new Set<string>();
   private emittedCompactionPartIds = new Set<string>();
+  private compactionSummaryState: OpenCodeCompactionSummaryState = { textLength: 0 };
   private suppressAssistantMessagesUntilIdle = { active: false };
   private partTypes = new Map<string, string>();
   private availableModesCache: AgentMode[] | null = null;
@@ -5288,6 +5365,7 @@ class OpenCodeAgentSession implements AgentSession {
       compactionSummaryMessageIds: this.compactionSummaryMessageIds,
       emittedCompactionPartIds: this.emittedCompactionPartIds,
       suppressAssistantMessagesUntilIdle: this.suppressAssistantMessagesUntilIdle,
+      compactionSummaryState: this.compactionSummaryState,
       partTypes: this.partTypes,
       subAgentsByCallId: this.subAgentsByCallId,
       subAgentCallIdByChildSessionId: this.subAgentCallIdByChildSessionId,
@@ -5325,6 +5403,7 @@ class OpenCodeAgentSession implements AgentSession {
       compactionSummaryMessageIds: new Set(),
       emittedCompactionPartIds: new Set(),
       hydratedMessageFingerprints: new Map(),
+      compactionSummaryState: { textLength: 0 },
       hydratedPartFingerprints: new Map(),
       suppressAssistantMessagesUntilIdle: { active: false },
       partTypes: new Map(),
