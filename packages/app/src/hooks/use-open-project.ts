@@ -11,14 +11,16 @@ import {
 
 export function useOpenProject(
   serverId: string | null,
+  isBuiltInLocal = false,
 ): (path: string) => Promise<OpenProjectResult> {
   const normalizedServerId = serverId?.trim() ?? "";
   const client = useHostRuntimeClient(normalizedServerId);
   const isConnected = useHostRuntimeIsConnected(normalizedServerId);
   const canAddProject = useSessionStore((state) =>
     normalizedServerId
-      ? state.sessions[normalizedServerId]?.serverInfo?.features?.projectAdd === true &&
-        state.sessions[normalizedServerId]?.serverInfo?.features?.stableProjectIdentity === true
+      ? isBuiltInLocal ||
+        (state.sessions[normalizedServerId]?.serverInfo?.features?.projectAdd === true &&
+          state.sessions[normalizedServerId]?.serverInfo?.features?.stableProjectIdentity === true)
       : false,
   );
   const upsertProject = useCallback(

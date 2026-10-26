@@ -82,8 +82,16 @@ export async function openProjectDirectly(
 ): Promise<OpenProjectResult> {
   const normalizedServerId = input.serverId.trim();
   const trimmedPath = input.projectPath.trim();
-  if (!normalizedServerId || !trimmedPath || !input.client || !input.isConnected) {
-    return { ok: false, errorCode: null, error: null };
+  if (!normalizedServerId || !trimmedPath) {
+    return { ok: false, errorCode: null, error: "Project path cannot be empty." };
+  }
+
+  if (!input.client || !input.isConnected) {
+    return {
+      ok: false,
+      errorCode: null,
+      error: "Connecting to host... Please wait a moment and try again.",
+    };
   }
 
   if (!input.canAddProject) {
@@ -99,7 +107,7 @@ export async function openProjectDirectly(
     return {
       ok: false,
       errorCode: payload.errorCode ?? null,
-      error: payload.error,
+      error: payload.error ?? "Failed to add project to host.",
     };
   }
 

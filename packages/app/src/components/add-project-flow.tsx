@@ -430,7 +430,7 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
   const client = useHostRuntimeClient(hostId ?? "");
   const isLocalDaemon = useIsLocalDaemon(hostId ?? "");
   const recommendedPaths = useRecommendedProjectPaths(hostId);
-  const openProject = useOpenProject(hostId);
+  const openProject = useOpenProject(hostId, isLocalDaemon);
   const cloneGithubProject = useCloneGithubProject(hostId);
   const upsertProject = useCallback(
     (
@@ -547,7 +547,9 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
         }
         const reason = getOpenProjectFailureReason(result);
         const message =
-          reason === "directory_not_found" ? "Directory not found" : "Unable to add project";
+          reason === "directory_not_found"
+            ? "Directory not found"
+            : (result.error ?? "Unable to add project");
         setState((current) =>
           setPageStatus(current, sourceKind, { isSubmitting: false, error: message }),
         );
