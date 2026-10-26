@@ -85,22 +85,25 @@ function npmRegistryConfig(cwd, execFileSync) {
      fs.readFileSync(path.join(root, "packages", "server", "package.json"), "utf8"),
    );
    serverPackage.dependencies = serverPackage.dependencies || {};
-   for (const name of internalPackages) {
-     delete serverPackage.dependencies[`@getpaseo/${name}`];
-     try {
-       const childPkgPath = path.join(root, "packages", name, "package.json");
-       if (fs.existsSync(childPkgPath)) {
-         const childPkg = JSON.parse(fs.readFileSync(childPkgPath, "utf8"));
-         for (const [dep, ver] of Object.entries(childPkg.dependencies || {})) {
-           if (!dep.startsWith("@getpaseo/") && !serverPackage.dependencies[dep]) {
-             serverPackage.dependencies[dep] = ver;
-           }
-         }
-       }
-     } catch (e) {
-       console.warn(`Warning: failed to merge dependencies from ${name}:`, e.message);
-     }
-   }
+  function mergeChildDeps(serverDeps, pkgPath) {
+    const childPkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+    for (const [dep, ver] of Object.entries(childPkg.dependencies || {})) {
+      if (!dep.startsWith("@getpaseo/") && !serverDeps[dep]) {
+        serverDeps[dep] = ver;
+      }
+    }
+  }
+  for (const name of internalPackages) {
+    delete serverPackage.dependencies[`@getpaseo/${name}`];
+    try {
+      const childPkgPath = path.join(root, "packages", name, "package.json");
+      if (fs.existsSync(childPkgPath)) {
+        mergeChildDeps(serverPackage.dependencies, childPkgPath);
+      }
+    } catch (e) {
+      console.warn(`Warning: failed to merge dependencies from ${name}:`, e.message);
+    }
+  }
   fs.writeFileSync(
     path.join(stagingDir, "package.json"),
     `${JSON.stringify(serverPackage, null, 2)}\n`,

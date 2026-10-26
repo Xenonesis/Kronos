@@ -1,0 +1,7 @@
+Native directory browsing on Windows, instant local daemon pre-seeding, fast startup stall recovery, and Kronos branding refinements.
+
+Fixed
+- Fixed directory browsing in Add Project flow on Windows by exposing the native dialog bridge and fallback folder picker commands
+- Fixed transient "Choose host / Discovering Kronos daemon" modal by pre-seeding the desktop daemon connection at boot
+
+Full notes: https://paseo.sh/changelog

@@ -173,6 +173,71 @@ async function main() {
   run("node prepare-dist.mjs", path.join(rootDir, "packages", "desktop-tauri"));
 
   // Step 5: Compile Tauri Executable / Installer
+  const builtQuick = compileTauriBundle(quick, nsisDir);
+  if (builtQuick) return;
+  // Verification
+  const exePath = getLatestExe(nsisDir);
+  if (exePath && existsSync(exePath)) {
+    const stats = statSync(exePath);
+    const sizeMb = (stats.size / (1024 * 1024)).toFixed(2);
+    console.log("\n\x1b[1m\x1b[32m✔ SUCCESS! Updated installer created:\x1b[0m");
+    console.log(`  \x1b[37mPath:\x1b[0m ${exePath}`);
+    console.log(`  \x1b[37mSize:\x1b[0m ${sizeMb} MB (${stats.size.toLocaleString()} bytes)`);
+    console.log(`  \x1b[37mLast Modified:\x1b[0m ${stats.mtime.toLocaleString()}`);
+
+    const persistentPath = path.join(nsisDir, "Kronos_x64-setup.exe");
+    if (exePath !== persistentPath) {
+      copyFileSync(exePath, persistentPath);
+      console.log(`  \x1b[37mPersistent Latest Asset:\x1b[0m ${persistentPath}`);
+    }
+
+    const appVersion = getAppVersion();
+    const releaseTag = `v${appVersion}`;
+    if (publish) {
+      publishToGitHub(exePath, persistentPath, releaseTag);
+    } else {
+      console.log("\n\x1b[36mℹ Note: Built locally. To auto-upload to GitHub Releases and update the live website, run with --publish:\x1b[0m");
+      console.log("  \x1b[37mnode scripts/update-and-build-exe.mjs --publish\x1b[0m");
+    }
+  } else {
+    console.error("\n\x1b[31m✖ Error: Installer .exe was not found at expected path.\x1b[0m");
+    process.exit(1);
+  }
+}
+
+function publishToGitHub(exePath, persistentPath, releaseTag) {
+  console.log(`\n\x1b[33m[*] Uploading latest .exe to GitHub Releases (${releaseTag})...\x1b[0m`);
+  try {
+    try {
+      execSync(`gh release view ${releaseTag} --repo Xenonesis/Kronos`, { stdio: "ignore" });
+    } catch {
+      console.log(`\x1b[36mℹ Release ${releaseTag} does not exist yet. Creating release...\x1b[0m`);
+      execSync(
+        `gh release create ${releaseTag} --title "Kronos ${releaseTag}" --notes "Automated build of Kronos ${releaseTag}" --repo Xenonesis/Kronos`,
+        { stdio: "inherit" },
+      );
+    }
+    execSync(
+      `gh release upload ${releaseTag} "${exePath}" "${persistentPath}" --clobber --repo Xenonesis/Kronos`,
+      { stdio: "inherit" },
+    );
+    console.log(`\x1b[32m✔ Uploaded latest installer to GitHub Releases (${releaseTag})!\x1b[0m`);
+
+    console.log("\x1b[33m[*] Triggering GitHub Pages website deployment...\x1b[0m");
+    try {
+      execSync(`gh workflow run "Deploy to GitHub Pages" --repo Xenonesis/Kronos`, { stdio: "inherit" });
+      console.log("\x1b[32m✔ GitHub Pages website deployment triggered!\x1b[0m");
+    } catch (wfErr) {
+      console.warn("\x1b[33m⚠ Note: Could not trigger GitHub Pages workflow automatically:\x1b[0m", wfErr.message);
+    }
+  } catch (e) {
+    console.warn(
+      "\x1b[33m⚠ Warning: Could not upload to GitHub Releases automatically.\x1b[0m",
+      e.message,
+    );
+  }
+}
+function compileTauriBundle(quick, nsisDir) {
   if (quick) {
     console.log(
       "\n\x1b[33m[5/5] Compiling Fast Release Binary (skipping NSIS compression)...\x1b[0m",
@@ -195,7 +260,7 @@ async function main() {
       console.log("\n\x1b[1m\x1b[32m✔ SUCCESS! Fast release executable created:\x1b[0m");
       console.log(`  \x1b[37mPath:\x1b[0m ${releaseExe}`);
       console.log(`  \x1b[37mSize:\x1b[0m ${(stats.size / (1024 * 1024)).toFixed(2)} MB`);
-      return;
+      return true;
     }
   }
 
@@ -203,7 +268,7 @@ async function main() {
   const tempTargetDir = path.join(os.tmpdir(), "kronos_target");
   try {
     run("npx tauri build --bundles nsis", path.join(rootDir, "packages", "desktop-tauri"));
-  } catch (err) {
+  } catch {
     console.log("\x1b[33mTarget directory locked by running process; compiling with CARGO_TARGET_DIR fallback...\x1b[0m");
     run(`npx cross-env CARGO_TARGET_DIR="${tempTargetDir}" npx tauri build --bundles nsis`, path.join(rootDir, "packages", "desktop-tauri"));
     const appVersion = getAppVersion();
@@ -214,64 +279,9 @@ async function main() {
       copyFileSync(tempBundle, path.join(nsisDir, "Kronos_x64-setup.exe"));
     }
   }
-  // Verification
-  const exePath = getLatestExe(nsisDir);
-  if (exePath && existsSync(exePath)) {
-    const stats = statSync(exePath);
-    const sizeMb = (stats.size / (1024 * 1024)).toFixed(2);
-    console.log("\n\x1b[1m\x1b[32m✔ SUCCESS! Updated installer created:\x1b[0m");
-    console.log(`  \x1b[37mPath:\x1b[0m ${exePath}`);
-    console.log(`  \x1b[37mSize:\x1b[0m ${sizeMb} MB (${stats.size.toLocaleString()} bytes)`);
-    console.log(`  \x1b[37mLast Modified:\x1b[0m ${stats.mtime.toLocaleString()}`);
-
-    const persistentPath = path.join(nsisDir, "Kronos_x64-setup.exe");
-    if (exePath !== persistentPath) {
-      copyFileSync(exePath, persistentPath);
-      console.log(`  \x1b[37mPersistent Latest Asset:\x1b[0m ${persistentPath}`);
-    }
-
-    const appVersion = getAppVersion();
-    const releaseTag = `v${appVersion}`;
-    if (publish) {
-      console.log(`\n\x1b[33m[*] Uploading latest .exe to GitHub Releases (${releaseTag})...\x1b[0m`);
-      try {
-        try {
-          execSync(`gh release view ${releaseTag} --repo Xenonesis/Kronos`, { stdio: "ignore" });
-        } catch {
-          console.log(`\x1b[36mℹ Release ${releaseTag} does not exist yet. Creating release...\x1b[0m`);
-          execSync(
-            `gh release create ${releaseTag} --title "Kronos ${releaseTag}" --notes "Automated build of Kronos ${releaseTag}" --repo Xenonesis/Kronos`,
-            { stdio: "inherit" },
-          );
-        }
-        execSync(
-          `gh release upload ${releaseTag} "${exePath}" "${persistentPath}" --clobber --repo Xenonesis/Kronos`,
-          { stdio: "inherit" },
-        );
-        console.log(`\x1b[32m✔ Uploaded latest installer to GitHub Releases (${releaseTag})!\x1b[0m`);
-
-        console.log("\x1b[33m[*] Triggering GitHub Pages website deployment...\x1b[0m");
-        try {
-          execSync(`gh workflow run "Deploy to GitHub Pages" --repo Xenonesis/Kronos`, { stdio: "inherit" });
-          console.log("\x1b[32m✔ GitHub Pages website deployment triggered!\x1b[0m");
-        } catch (wfErr) {
-          console.warn("\x1b[33m⚠ Note: Could not trigger GitHub Pages workflow automatically:\x1b[0m", wfErr.message);
-        }
-      } catch (e) {
-        console.warn(
-          "\x1b[33m⚠ Warning: Could not upload to GitHub Releases automatically.\x1b[0m",
-          e.message,
-        );
-      }
-    } else {
-      console.log("\n\x1b[36mℹ Note: Built locally. To auto-upload to GitHub Releases and update the live website, run with --publish:\x1b[0m");
-      console.log("  \x1b[37mnode scripts/update-and-build-exe.mjs --publish\x1b[0m");
-    }
-  } else {
-    console.error("\n\x1b[31m✖ Error: Installer .exe was not found at expected path.\x1b[0m");
-    process.exit(1);
-  }
+  return false;
 }
+
 
 main().catch((err) => {
   console.error("\n\x1b[31m✖ Build failed:\x1b[0m", err);

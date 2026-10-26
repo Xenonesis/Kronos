@@ -1,6 +1,6 @@
 [package]
 name = "paseo-desktop"
-version = "0.13.0"
+version = "0.13.1"
 description = "Kronos Desktop App"
 authors = ["Kronos"]
 edition = "2021"

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.13.1 - 2026-10-26
+
+Native directory browsing on Windows, instant local daemon pre-seeding, fast startup stall recovery, and Kronos branding refinements.
+
+### Fixed
+
+- Fixed directory browsing in Add Project flow on Windows by exposing the native `dialog` bridge and fallback folder picker commands ([#034c863](https://github.com/Xenonesis/Kronos/commit/034c86379))
+- Fixed transient "Choose host / Discovering Kronos daemon" modal by pre-seeding the desktop daemon connection at boot ([#59c3c60](https://github.com/Xenonesis/Kronos/commit/59c3c6022))
+- Fixed 15-second daemon startup freeze caused by premature ACP agent CLI exit ([#465c0bb](https://github.com/Xenonesis/Kronos/commit/465c0bb7a))
+- Fixed NSIS installer file-lock errors during upgrades by terminating existing running Kronos processes ([#6b010fc](https://github.com/Xenonesis/Kronos/commit/6b010fc36))
+- Updated Add Project browse labels to dynamically reflect the host OS file manager (File Explorer on Windows, Finder on macOS)
+
+### Improved
+
+- Synced upstream agent runtime work guards, composer message history recall, and foldable turn summaries
+- Updated installer automation to detect hash drift and sync persistent latest release assets
+
 ## 0.13.0 - 2026-10-24
 
 Foldable phone layouts, agents that delegate work to other machines, plugin file panels, and plugin translations.

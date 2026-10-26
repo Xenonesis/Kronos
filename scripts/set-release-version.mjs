@@ -61,8 +61,9 @@ if (args.print) {
   process.exit(0);
 }
 
+const npmBin = process.platform === "win32" ? "npm.cmd" : "npm";
 execFileSync(
-  "npm",
-  ["version", nextVersion, "--include-workspace-root", "--message", "chore(release): cut %s"],
-  { cwd: rootDir, stdio: "inherit" },
+  npmBin,
+  ["version", nextVersion, "--include-workspace-root", `--message="chore(release): cut %s"`],
+  { cwd: rootDir, stdio: "inherit", shell: process.platform === "win32" },
 );

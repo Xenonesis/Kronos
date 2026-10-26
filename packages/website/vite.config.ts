@@ -131,7 +131,7 @@ const sitemapPages = [
 
 export default defineConfig(({ mode }): UserConfig => {
   const env = loadEnv(mode, __dirname, "");
-  const siteHost = env.VITE_SITE_HOST || DEFAULT_SITE_HOST;
+  const activeSiteHost = env.VITE_SITE_HOST || DEFAULT_SITE_HOST;
   return {
     base: resolveBasePath(env),
     server: {
@@ -167,7 +167,7 @@ export default defineConfig(({ mode }): UserConfig => {
         },
         pages: sitemapPages,
         sitemap: {
-          host: siteHost,
+          host: activeSiteHost,
         },
       }),
       react(),
