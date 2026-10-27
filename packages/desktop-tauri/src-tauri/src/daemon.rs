@@ -65,8 +65,24 @@ fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
 
     None
 }
+#[cfg(windows)]
+fn ensure_port_clean() {
+    let _ = Command::new("cmd")
+        .args(["/C", "for /f \"tokens=5\" %a in ('netstat -aon ^| findstr \":6767 \" ^| findstr \"LISTENING\"') do taskkill /f /pid %a"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+}
+
+#[cfg(not(windows))]
+fn ensure_port_clean() {
+    let _ = Command::new("sh")
+        .args(["-c", "lsof -ti:6767 | xargs -r kill -9 2>/dev/null || true"])
+        .output();
+}
+
 
 pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
+    ensure_port_clean();
     let (work_dir, node_bin, script_path) = resolve_runtime()?;
 
     let mut cmd = Command::new(&node_bin);
@@ -140,9 +156,18 @@ pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
 pub fn stop_daemon(state: &DaemonState) {
     if let Ok(mut lock) = state.process.lock() {
         if let Some(mut child) = lock.take() {
+            #[cfg(windows)]
+            {
+                let pid = child.id();
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output();
+            }
             let _ = child.kill();
         }
     }
+    ensure_port_clean();
 }
 
 pub fn restart_daemon(state: &DaemonState) -> bool {

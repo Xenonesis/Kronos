@@ -12,7 +12,7 @@ export async function listenToDesktopEvent<TPayload>(
 ): Promise<DesktopEventUnlisten> {
   const listen = getDesktopHost()?.events?.on;
   if (typeof listen !== "function") {
-    throw new Error("Desktop event API is unavailable.");
+    return () => {};
   }
 
   const unlisten = await listen(event, (rawEvent: unknown) => {

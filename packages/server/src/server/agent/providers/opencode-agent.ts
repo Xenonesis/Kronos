@@ -2945,6 +2945,42 @@ function isUserAuthoredOpenCodeText(part: { synthetic?: boolean }): boolean {
   return part.synthetic !== true;
 }
 
+function appendOpenCodeUserTextPart(
+  part: Extract<
+    Extract<OpenCodeEvent, { type: "message.part.updated" }>["properties"]["part"],
+    { type: "text" }
+  >,
+  state: OpenCodeEventTranslationState,
+  events: AgentStreamEvent[],
+): void {
+  if (
+    !part.text ||
+    !isUserAuthoredOpenCodeText(part) ||
+    state.emittedUserMessageIds?.has(part.messageID)
+  ) {
+    return;
+  }
+  state.emittedUserMessageIds?.add(part.messageID);
+  const pendingSteerIndex = state.pendingSteerSubmissions?.findIndex(
+    (submission) => submission.providerMessageId === part.messageID,
+  );
+  const pendingSteer =
+    pendingSteerIndex !== undefined && pendingSteerIndex >= 0
+      ? state.pendingSteerSubmissions?.splice(pendingSteerIndex, 1)[0]
+      : undefined;
+  const clientMessageId = pendingSteer?.clientMessageId ?? state.pendingClientMessageId;
+  events.push({
+    type: "timeline",
+    provider: "opencode",
+    item: {
+      type: "user_message",
+      text: part.text,
+      messageId: part.messageID,
+      ...(clientMessageId ? { clientMessageId } : {}),
+    },
+  });
+}
+
 function appendOpenCodeTextPart(
   part: Extract<
     Extract<OpenCodeEvent, { type: "message.part.updated" }>["properties"]["part"],
@@ -2955,19 +2991,7 @@ function appendOpenCodeTextPart(
   events: AgentStreamEvent[],
 ): void {
   if (messageRole === "user") {
-    if (
-      !part.text ||
-      !isUserAuthoredOpenCodeText(part) ||
-      state.emittedUserMessageIds?.has(part.messageID)
-    ) {
-      return;
-    }
-    state.emittedUserMessageIds?.add(part.messageID);
-    events.push({
-      type: "timeline",
-      provider: "opencode",
-      item: { type: "user_message", text: part.text, messageId: part.messageID },
-    });
+    appendOpenCodeUserTextPart(part, state, events);
     return;
   }
   if (!part.time?.end) {

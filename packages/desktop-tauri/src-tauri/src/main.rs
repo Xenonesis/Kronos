@@ -361,6 +361,30 @@ try {{
       }}
       return null;
     }},
+    events: {{
+      on: function(event, callback) {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.listen) {{
+            let unlistenPromise = window.__TAURI_INTERNALS__.listen(event, function(ev) {{
+              try {{
+                callback(ev && ev.payload !== undefined ? ev.payload : ev);
+              }} catch (err) {{
+                console.error('[TauriBridge] Event callback failed:', err);
+              }}
+            }});
+            return async function() {{
+              try {{
+                let unlisten = await unlistenPromise;
+                if (typeof unlisten === 'function') unlisten();
+              }} catch (_) {{}}
+            }};
+          }}
+        }} catch (e) {{
+          console.error('[TauriBridge] events.on failed:', e);
+        }}
+        return function() {{}};
+      }}
+    }},
     dialog: {{
       open: async function(options) {{
         try {{
@@ -665,7 +689,7 @@ try {{
             });
 
             // Register global shortcut to toggle main window visibility
-            for shortcut in ["CommandOrControl+Shift+P", "Alt+Space"] {
+            for shortcut in ["CommandOrControl+Shift+P"] {
                 if let Err(err) = app.global_shortcut().on_shortcut(shortcut, |app, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
                         toggle_main_window(app);
