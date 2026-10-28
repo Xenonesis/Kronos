@@ -63,6 +63,7 @@ export const en = {
       daemonClientUnavailable: "Daemon client unavailable",
       daemonClientDisconnected: "Daemon client is disconnected",
       noFileFound: "No file found for {{token}}",
+      folderOutsideWorkspace: "{{path}} is outside this workspace",
       unexpectedDictationError: "An unexpected error occurred while handling dictation.",
     },
     connectionStatus: {
@@ -1938,7 +1939,6 @@ export const en = {
     parent: {
       backToParent: "Back to parent",
       backTo: "Back to {{label}}",
-      parent: "Parent",
       parentAgent: "Parent agent",
       openParent: "Open parent",
     },
@@ -2043,12 +2043,13 @@ export const en = {
     output: "Output",
   },
   turnSummary: {
-    messages: {
-      one: "wrote {{count}} message",
-      other: "wrote {{count}} messages",
-    },
+    details: "View turn details",
+    sentBy: "Sent by {{name}}",
+    showMore: "Show more",
+    showLess: "Show less",
   },
   toolCallGroup: {
+    thought: "Thought",
     editedFiles: {
       one: "edited {{count}} file",
       other: "edited {{count}} files",
@@ -2869,6 +2870,14 @@ export const en = {
       },
       agents: {
         unavailable: "Connect to this host to manage agents",
+        resumeOnStartup: {
+          title: "Resume agents after restart",
+          info: "Reopen agents that were working when the host stopped and send the resume prompt. Applies after graceful restarts and crashes.",
+          hint: "Continue interrupted work automatically.",
+          prompt: "Resume prompt",
+          edit: "Edit",
+          editAccessibilityLabel: "Edit prompt",
+        },
         idleRuntimeCleanup: {
           title: "Release idle agents",
           hint: "Free up memory after an hour of inactivity.",
@@ -2965,6 +2974,10 @@ export const en = {
           requestFailedTitle: "Error",
           requestFailedMessage:
             "Failed to send the restart request. Kronos reconnects automatically-try again once the host shows as online.",
+          closeTerminals: "Restart and close terminals",
+          closeTerminalsHint: "Restart and also close every terminal running on this host.",
+          closeTerminalsConfirmMessage:
+            "This will restart the daemon and close every terminal on it, ending the programs running in them. The app will reconnect automatically.",
           dialogFailedMessage: "Unable to open the restart confirmation dialog.",
         },
         update: {

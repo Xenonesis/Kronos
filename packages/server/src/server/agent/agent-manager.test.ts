@@ -880,6 +880,66 @@ test("retries provider history hydration after a stream failure", async () => {
   }
 });
 
+test("notification batches share the run they start or join", async () => {
+  const session = new SteeringTestSession({ provider: "codex", cwd: process.cwd() });
+  const workdir = mkdtempSync(join(tmpdir(), "agent-notification-turns-"));
+  const manager = new AgentManager({
+    clients: {
+      codex: new (class extends TestAgentClient {
+        override async createSession(): Promise<AgentSession> {
+          return session;
+        }
+      })(),
+    },
+    logger,
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const batch = (prefix: string) =>
+    ["one", "two"]
+      .map((id) =>
+        formatAgentMessage({
+          id: `${prefix}-${id}`,
+          source: { kind: "agent-notification", agentId: "worker", event: "finished" },
+          text: "Worker finished",
+        }),
+      )
+      .join("\n\n");
+  const consume = async (prompt: string, clientMessageId: string) => {
+    for await (const _event of manager.streamAgent(agent.id, prompt, { clientMessageId })) {
+    }
+  };
+  try {
+    const first = consume("human", "human");
+    await manager.waitForAgentRunStart(agent.id);
+    await expect(
+      manager.steerAgentRun(agent.id, batch("joined"), { clientMessageId: "joined-one" }),
+    ).resolves.toEqual({ status: "accepted" });
+    session.pushEvent({ type: "turn_completed", provider: "codex", turnId: "active-turn-1" });
+    await first;
+    const second = consume(batch("idle"), "idle-one");
+    await manager.waitForAgentRunStart(agent.id);
+    session.pushEvent({ type: "turn_completed", provider: "codex", turnId: "active-turn-2" });
+    await second;
+    expect(
+      manager.fetchTimeline(agent.id, { limit: 0 }).rows.map((row) => ({
+        turnId: row.turnId,
+        id: row.item.type === "tool_call" ? row.item.callId : row.item.type,
+      })),
+    ).toEqual([
+      { turnId: "active-turn-1", id: "user_message" },
+      { turnId: "active-turn-1", id: "paseo-agent-message:joined-one" },
+      { turnId: "active-turn-1", id: "paseo-agent-message:joined-two" },
+      { turnId: "active-turn-2", id: "paseo-agent-message:idle-one" },
+      { turnId: "active-turn-2", id: "paseo-agent-message:idle-two" },
+    ]);
+  } finally {
+    await manager.closeAgent(agent.id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("unavailable steer interrupts once and starts one replacement turn", async () => {
   const session = new SteeringTestSession({ provider: "codex", cwd: process.cwd() });
   session.steerResult = "unavailable";
@@ -2868,6 +2928,92 @@ test("createAgent passes daemon launch env through the provider launch context",
     },
   });
 });
+
+test.each([
+  { provider: "codex", hasHandle: true },
+  { provider: "opencode", hasHandle: true },
+  { provider: "codex", hasHandle: false },
+  { provider: "opencode", hasHandle: false },
+])(
+  "$provider preserves explicit launch env across reloads and storage-backed resumes (handle: $hasHandle)",
+  async ({ provider, hasHandle }) => {
+    const workdir = mkdtempSync(join(tmpdir(), "agent-manager-launch-env-"));
+    const storagePath = join(workdir, "agents");
+    class LaunchEnvClient extends TestAgentClient {
+      lastLaunchContext: AgentLaunchContext | undefined;
+
+      override async createSession(
+        config: AgentSessionConfig,
+        context?: AgentLaunchContext,
+      ): Promise<AgentSession> {
+        this.lastLaunchContext = context;
+        const session = await super.createSession(config);
+        session.describePersistence = () => ({ provider, sessionId: session.id });
+        return session;
+      }
+
+      override async resumeSession(
+        handle: AgentPersistenceHandle,
+        config?: Partial<AgentSessionConfig>,
+        context?: AgentLaunchContext,
+      ): Promise<AgentSession> {
+        this.lastLaunchContext = context;
+        const session = await super.resumeSession(handle, config, context);
+        session.describePersistence = () => ({ provider, sessionId: handle.sessionId });
+        return session;
+      }
+    }
+
+    const client = new LaunchEnvClient(provider);
+    let storage = new AgentStorage(storagePath, logger);
+    let manager = new AgentManager({ clients: { [provider]: client }, registry: storage, logger });
+    const env = { XDG_DATA_HOME: join(workdir, "agent-data"), CUSTOM_EMPTY: "" };
+    const expectedEnv = { ...env };
+    const agent = await manager.createAgent({ provider, cwd: workdir }, undefined, {
+      workspaceId: undefined,
+      env,
+    });
+    onTestFinished(async () => {
+      await manager.closeAgent(agent.id);
+      await manager.flush();
+      rmSync(workdir, { recursive: true, force: true });
+    });
+    env.XDG_DATA_HOME = "caller-mutated";
+
+    await manager.closeAgent(agent.id);
+    await manager.flush();
+
+    if (!hasHandle) {
+      const record = await storage.get(agent.id);
+      if (!record) throw new Error("Created agent was not persisted");
+      await storage.upsert({ ...record, persistence: null });
+    }
+
+    // Fresh storage and manager instances must read the environment from disk.
+    for (let restart = 0; restart < 2; restart += 1) {
+      storage = new AgentStorage(storagePath, logger);
+      manager = new AgentManager({ clients: { [provider]: client }, registry: storage, logger });
+      const resumed = await ensureAgentLoaded(agent.id, {
+        agentManager: manager,
+        agentStorage: storage,
+        logger,
+      });
+      expect(client.lastLaunchContext).toEqual({
+        agentId: agent.id,
+        env: { ...expectedEnv, PASEO_AGENT_ID: agent.id, PASEO_AGENT_CWD: workdir },
+      });
+      await manager.reloadAgentSession(agent.id);
+      expect(client.lastLaunchContext).toEqual({
+        agentId: agent.id,
+        env: { ...expectedEnv, PASEO_AGENT_ID: agent.id, PASEO_AGENT_CWD: workdir },
+      });
+      expect(toAgentPayload(resumed)).not.toHaveProperty("launchEnv");
+      expect(toAgentPayload(resumed).persistence?.metadata).not.toHaveProperty("launchEnv");
+      await manager.closeAgent(agent.id);
+      await manager.flush();
+    }
+  },
+);
 
 test("createAgent passes persistSession to provider create options", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));
@@ -7747,7 +7893,7 @@ test("workspace ownership does not turn an ordinary agent into a disposable help
   expect(manager.listAgents().map((agent) => agent.id)).toEqual([agentId]);
   expect(await storage.get(agentId)).not.toBeNull();
   // Workspace ownership preserves ordinary agent lifecycle hooks.
-  expect(beforeHookCalls).toContain("agent.create");
+  expect(beforeHookCalls).toContain("agent.create.before");
 });
 
 test("global subscribers receive internal agent events only when they opt in", async () => {
@@ -11341,7 +11487,7 @@ test("listImportableSessions searches every provider result before global rankin
   ]);
 });
 
-test("user_message events wrapping a paseo-system envelope are not added to the timeline", async () => {
+test("system-injected prompts appear as trigger tools in the live timeline", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-envelope-live-"));
   const storagePath = join(workdir, "agents");
   const storage = new AgentStorage(storagePath, logger);
@@ -11370,13 +11516,16 @@ test("user_message events wrapping a paseo-system envelope are not added to the 
   await manager.runAgent(snapshot.id, { text: "do something" });
 
   const timeline = manager.getTimeline(snapshot.id);
+  expect(timeline).toContainEqual(
+    expect.objectContaining({ type: "tool_call", name: "heartbeat", status: "completed" }),
+  );
   const userMessages = timeline.filter((item) => item.type === "user_message");
 
   expect(userMessages).toHaveLength(1);
   expect(userMessages[0].text).toBe("plain user message");
 });
 
-test("user_message events wrapping a paseo-system envelope are not restored during history replay", async () => {
+test("system-injected prompts appear as trigger tools during history replay", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-envelope-history-"));
   const storagePath = join(workdir, "agents");
   const storage = new AgentStorage(storagePath, logger);
@@ -11411,6 +11560,9 @@ test("user_message events wrapping a paseo-system envelope are not restored duri
   await manager.hydrateTimelineFromProvider(snapshot.id, { force: true });
 
   const timeline = manager.getTimeline(snapshot.id);
+  expect(timeline).toContainEqual(
+    expect.objectContaining({ type: "tool_call", name: "heartbeat", status: "completed" }),
+  );
   const userMessages = timeline.filter((item) => item.type === "user_message");
 
   expect(userMessages).toHaveLength(1);
@@ -12006,15 +12158,15 @@ test.each([
     const session = client.sessions[0]!;
     session.pushEvent({ type: "turn_started", provider: "codex", turnId: "hook-turn" });
     await expect
-      .poll(() => events.filter(({ name }) => name === "agent.turn_started").length)
+      .poll(() => events.filter(({ name }) => name === "agent.turn.before").length)
       .toBe(1);
     expect(timelineStore.itemReads).toBe(readsBeforeDispatch);
     session.pushEvent(terminalEvent);
     await expect
-      .poll(() => events.filter(({ name }) => name === "agent.turn_ended"))
+      .poll(() => events.filter(({ name }) => name === "agent.turn.after"))
       .toEqual([
         {
-          name: "agent.turn_ended",
+          name: "agent.turn.after",
           event: {
             agent: {
               id: agent.id,

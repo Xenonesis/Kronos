@@ -1,3 +1,4 @@
+import { createHostPluginClientBundleStore } from "@/plugins/client-bundles";
 import { watchdog } from "@/watchdog";
 import { createHostChannelTransport } from "@getpaseo/client/internal/hosts";
 import type { OwnedSubscription } from "@getpaseo/client";
@@ -591,6 +592,7 @@ function createDefaultDeps(
         capabilities: appCapabilities,
         trace: createPerformanceTrace({ host: host.serverId, connection: connection.id }),
         providerSnapshots: "wire",
+        createPluginClientBundleStore: createHostPluginClientBundleStore,
         ...(host.password ? { password: host.password } : {}),
         localCredential: () => readDesktopManagedLocalCredential(connection),
       } satisfies Omit<DaemonClientConfig, "url">;
@@ -670,6 +672,7 @@ function createDefaultDeps(
           ),
           reconnect: { enabled: false },
           appVersion: resolveAppVersion() ?? undefined,
+          createPluginClientBundleStore: createHostPluginClientBundleStore,
         });
         try {
           await client.connect();
@@ -686,6 +689,7 @@ function createDefaultDeps(
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         capabilities: appCapabilities,
         trace: createPerformanceTrace({ host: host.serverId, connection: connection.id }),
+        createPluginClientBundleStore: createHostPluginClientBundleStore,
       });
     },
     getClientId: () => getOrCreateClientId(),

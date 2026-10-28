@@ -68,6 +68,7 @@ export const ru: TranslationResources = {
       daemonClientUnavailable: "Daemon клиента недоступен",
       daemonClientDisconnected: "Daemon клиента отключен",
       noFileFound: "Файл для {{token}} не найден",
+      folderOutsideWorkspace: "{{path}} находится вне этого рабочего пространства",
       unexpectedDictationError: "При обработке диктовки произошла непредвиденная ошибка.",
     },
     connectionStatus: {
@@ -1945,7 +1946,6 @@ export const ru: TranslationResources = {
     parent: {
       backToParent: "Назад к родителю",
       backTo: "Назад к {{label}}",
-      parent: "Родитель",
       parentAgent: "Родительский агент",
       openParent: "Открыть родителя",
     },
@@ -2051,12 +2051,13 @@ export const ru: TranslationResources = {
     output: "Выходные данные",
   },
   turnSummary: {
-    messages: {
-      one: "написано {{count}} сообщение",
-      other: "написаны сообщения ({{count}})",
-    },
+    details: "Показать подробности хода",
+    sentBy: "Отправлено агентом {{name}}",
+    showMore: "Показать больше",
+    showLess: "Свернуть",
   },
   toolCallGroup: {
+    thought: "Обдумал",
     editedFiles: {
       one: "изменён {{count}} файл",
       other: "изменены файлы ({{count}})",
@@ -2791,6 +2792,14 @@ export const ru: TranslationResources = {
       },
       agents: {
         unavailable: "Подключитесь к этому хосту, чтобы управлять агентами",
+        resumeOnStartup: {
+          title: "Возобновлять агентов после перезапуска",
+          info: "Открывает агентов, которые работали при остановке хоста, и отправляет сообщение для продолжения. Применяется после обычного перезапуска и сбоя.",
+          hint: "Автоматически продолжать прерванную работу.",
+          prompt: "Сообщение для продолжения",
+          edit: "Редактировать",
+          editAccessibilityLabel: "Изменить сообщение",
+        },
         idleRuntimeCleanup: {
           title: "Освобождать неактивных агентов",
           hint: "Освобождает память после часа бездействия.",
@@ -2889,6 +2898,10 @@ export const ru: TranslationResources = {
           requestFailedTitle: "Ошибка",
           requestFailedMessage:
             "Не удалось отправить запрос на перезапуск. Paseo переподключается автоматически. Повторите попытку, когда хост появится в сети.",
+          closeTerminals: "Перезапустить и закрыть терминалы",
+          closeTerminalsHint: "Перезапускает демон и закрывает все терминалы на этом хосте.",
+          closeTerminalsConfirmMessage:
+            "Демон будет перезапущен, а все его терминалы закрыты вместе с запущенными в них программами. Приложение переподключится автоматически.",
           dialogFailedMessage: "Не удалось открыть диалог подтверждения перезапуска.",
         },
         update: {
