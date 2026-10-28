@@ -4,15 +4,20 @@
 mod daemon;
 mod editor;
 
-mod tray;
 mod notifications;
+mod tray;
 
-use tray::{setup_tray, update_active_agents};
 use notifications::{notify_task_complete, setup_notification_listeners, show_notification};
+use tray::{setup_tray, update_active_agents};
+mod attachments;
 mod dialogs;
+use attachments::{
+    copy_attachment_file, delete_attachment_file, garbage_collect_attachment_files,
+    read_file_base64, write_attachment_base64, write_attachment_bytes,
+};
 
-use dialogs::{pick_file, pick_folder};
 use daemon::{start_daemon, stop_daemon, DaemonState};
+use dialogs::{pick_file, pick_folder};
 use editor::open_in_editor;
 use std::fs;
 use std::path::PathBuf;
@@ -43,11 +48,14 @@ fn wait_for_daemon_health(max_attempts: usize) -> bool {
         if let Ok(mut stream) = TcpStream::connect("127.0.0.1:6767") {
             let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
             let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
-            let req = b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:6767\r\nConnection: close\r\n\r\n";
+            let req =
+                b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:6767\r\nConnection: close\r\n\r\n";
             if stream.write_all(req).is_ok() {
                 let mut buf = [0u8; 64];
                 if let Ok(n) = stream.read(&mut buf) {
-                    if n > 0 && (buf.starts_with(b"HTTP/1.1 200") || buf.starts_with(b"HTTP/1.0 200")) {
+                    if n > 0
+                        && (buf.starts_with(b"HTTP/1.1 200") || buf.starts_with(b"HTTP/1.0 200"))
+                    {
                         return true;
                     }
                 }
@@ -72,7 +80,10 @@ fn get_or_create_server_id() -> String {
     }
 
     use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
     let pid = std::process::id();
     let id = format!("srv_{:x}{:x}", now, pid);
     let _ = fs::write(&server_id_file, format!("{}\n", id));
@@ -110,7 +121,8 @@ fn get_daemon_status_json() -> String {
         "ownedByDesktop": true,
         "startedAt": "2026-09-26T12:00:00.000Z",
         "error": null
-    }).to_string()
+    })
+    .to_string()
 }
 
 #[tauri::command]
@@ -175,18 +187,29 @@ fn log_desktop_event(level: String, message: String) {
 
     use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
 
     let entry = format!("[ts:{}] [{}] {}\n", now, level, message);
 
     let app_log = home.join("app.log");
-    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&app_log) {
+    if let Ok(mut f) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&app_log)
+    {
         let _ = f.write_all(entry.as_bytes());
     }
 
     if level == "error" || level == "crash" || level == "panic" {
         let crash_log = home.join("crash.log");
-        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&crash_log) {
+        if let Ok(mut f) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&crash_log)
+        {
             let _ = f.write_all(entry.as_bytes());
         }
     }
@@ -213,12 +236,14 @@ fn fast_validate_directory(path: String) -> DirectoryValidationResult {
     }
     let metadata = match std::fs::metadata(p) {
         Ok(m) => m,
-        Err(e) => return DirectoryValidationResult {
-            exists: true,
-            is_dir: false,
-            readable: false,
-            error: Some(format!("Cannot access path: {}", e)),
-        },
+        Err(e) => {
+            return DirectoryValidationResult {
+                exists: true,
+                is_dir: false,
+                readable: false,
+                error: Some(format!("Cannot access path: {}", e)),
+            }
+        }
     };
     if !metadata.is_dir() {
         return DirectoryValidationResult {
@@ -243,6 +268,118 @@ fn fast_validate_directory(path: String) -> DirectoryValidationResult {
         },
     }
 }
+#[tauri::command]
+fn stop_desktop_daemon(state: tauri::State<DaemonState>) -> serde_json::Value {
+    stop_daemon(&state);
+    let mut status: serde_json::Value =
+        serde_json::from_str(&get_daemon_status_json()).unwrap_or(serde_json::Value::Null);
+    if let Some(obj) = status.as_object_mut() {
+        obj.insert("status".to_string(), serde_json::json!("stopped"));
+        obj.insert("pid".to_string(), serde_json::Value::Null);
+    }
+    status
+}
+
+#[tauri::command]
+fn restart_desktop_daemon(state: tauri::State<DaemonState>) -> serde_json::Value {
+    let success = daemon::restart_daemon(&state);
+    if success {
+        let _ = wait_for_daemon_health(30);
+    }
+    get_live_daemon_status()
+}
+
+#[cfg(windows)]
+fn get_system_idle_time_ms() -> u64 {
+    use std::mem;
+    #[repr(C)]
+    #[allow(non_camel_case_types)]
+    #[allow(clippy::upper_case_acronyms)]
+    struct LASTINPUTINFO {
+        cb_size: u32,
+        dw_time: u32,
+    }
+    extern "system" {
+        fn GetLastInputInfo(plii: *mut LASTINPUTINFO) -> i32;
+        fn GetTickCount() -> u32;
+    }
+    unsafe {
+        let mut lii = LASTINPUTINFO {
+            cb_size: mem::size_of::<LASTINPUTINFO>() as u32,
+            dw_time: 0,
+        };
+        if GetLastInputInfo(&mut lii) != 0 {
+            let now = GetTickCount();
+            return now.wrapping_sub(lii.dw_time) as u64;
+        }
+    }
+    0
+}
+
+#[cfg(not(windows))]
+fn get_system_idle_time_ms() -> u64 {
+    0
+}
+
+#[tauri::command]
+fn get_system_idle_time() -> u64 {
+    get_system_idle_time_ms()
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PathInspectResult {
+    pub exists: bool,
+    pub is_dir: bool,
+    pub is_file: bool,
+    pub byte_size: u64,
+    pub modified_ms: u64,
+    pub readable: bool,
+}
+
+#[tauri::command]
+fn fast_inspect_path(path: String) -> PathInspectResult {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return PathInspectResult {
+            exists: false,
+            is_dir: false,
+            is_file: false,
+            byte_size: 0,
+            modified_ms: 0,
+            readable: false,
+        };
+    }
+    match std::fs::metadata(p) {
+        Ok(meta) => {
+            let is_dir = meta.is_dir();
+            let is_file = meta.is_file();
+            let byte_size = meta.len();
+            let modified_ms = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            PathInspectResult {
+                exists: true,
+                is_dir,
+                is_file,
+                byte_size,
+                modified_ms,
+                readable: true,
+            }
+        }
+        Err(_) => PathInspectResult {
+            exists: true,
+            is_dir: false,
+            is_file: false,
+            byte_size: 0,
+            modified_ms: 0,
+            readable: false,
+        },
+    }
+}
 
 fn setup_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
@@ -253,9 +390,15 @@ fn setup_panic_hook() {
 
         use std::io::Write;
         use std::time::{SystemTime, UNIX_EPOCH};
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
 
-        let location = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_else(|| "unknown".to_string());
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown".to_string());
         let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
             s.to_string()
         } else if let Some(s) = info.payload().downcast_ref::<String>() {
@@ -272,7 +415,11 @@ fn setup_panic_hook() {
             location
         );
 
-        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&crash_log) {
+        if let Ok(mut f) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&crash_log)
+        {
             let _ = f.write_all(entry.as_bytes());
         }
         eprintln!("{}", entry);
@@ -304,14 +451,21 @@ fn check_and_log_crashpad_dumps() {
                     let crash_log = home.join("crash.log");
                     use std::io::Write;
                     use std::time::{SystemTime, UNIX_EPOCH};
-                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
                     let msg = format!(
                         "[ts:{}] [crashpad] Found {} WebView2 crashpad dump(s) in reports folder: {:?}\n",
                         now,
                         dumps.len(),
                         dumps
                     );
-                    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&crash_log) {
+                    if let Ok(mut f) = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&crash_log)
+                    {
                         let _ = f.write_all(msg.as_bytes());
                     }
                 }
@@ -454,7 +608,22 @@ try {{
         }} catch (e) {{}}
         return {{ logPath: daemonData.home + '/crash.log', contents: '' }};
       }}
-      if (command === 'stop_desktop_daemon' || command === 'restart_desktop_daemon') {{
+      if (command === 'stop_desktop_daemon') {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            const res = await window.__TAURI_INTERNALS__.invoke('stop_desktop_daemon');
+            if (res) return res;
+          }}
+        }} catch (e) {{}}
+        return daemonData;
+      }}
+      if (command === 'restart_desktop_daemon') {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            const res = await window.__TAURI_INTERNALS__.invoke('restart_desktop_daemon');
+            if (res) return res;
+          }}
+        }} catch (e) {{}}
         return daemonData;
       }}
       if (command === 'get_cli_install_status' || command === 'install_cli') {{
@@ -504,6 +673,11 @@ try {{
         }};
       }}
       if (command === 'desktop_get_system_idle_time') {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            return await window.__TAURI_INTERNALS__.invoke('get_system_idle_time');
+          }}
+        }} catch (e) {{}}
         return 0;
       }}
       if (command === 'fast_validate_directory') {{
@@ -513,6 +687,32 @@ try {{
           }}
         }} catch (e) {{
           return {{ exists: false, is_dir: false, readable: false, error: String(e) }};
+        }}
+        return null;
+      }}
+      if (command === 'fast_inspect_path') {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            return await window.__TAURI_INTERNALS__.invoke('fast_inspect_path', args || {{}});
+          }}
+        }} catch (e) {{}}
+        return null;
+      }}
+      if (
+        command === 'write_attachment_base64' ||
+        command === 'write_attachment_bytes' ||
+        command === 'copy_attachment_file' ||
+        command === 'read_file_base64' ||
+        command === 'delete_attachment_file' ||
+        command === 'garbage_collect_attachment_files'
+      ) {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            return await window.__TAURI_INTERNALS__.invoke(command, args || {{}});
+          }}
+        }} catch (e) {{
+          console.error('[TauriBridge] Attachment command failed:', command, e);
+          throw e;
         }}
         return null;
       }}
@@ -651,7 +851,17 @@ try {{
             get_live_local_credential,
             get_log_contents,
             log_desktop_event,
-            fast_validate_directory
+            fast_validate_directory,
+            stop_desktop_daemon,
+            restart_desktop_daemon,
+            get_system_idle_time,
+            fast_inspect_path,
+            write_attachment_base64,
+            write_attachment_bytes,
+            copy_attachment_file,
+            read_file_base64,
+            delete_attachment_file,
+            garbage_collect_attachment_files
         ])
         .setup(move |app| {
             let _ = setup_tray(app.handle());
@@ -752,7 +962,8 @@ mod tests {
 
     #[test]
     fn test_fast_validate_directory_nonexistent() {
-        let res = fast_validate_directory("this_path_definitely_does_not_exist_123456789".to_string());
+        let res =
+            fast_validate_directory("this_path_definitely_does_not_exist_123456789".to_string());
         assert!(!res.exists);
         assert!(!res.is_dir);
         assert!(!res.readable);
@@ -766,7 +977,10 @@ mod tests {
         assert!(res.exists);
         assert!(!res.is_dir);
         assert!(!res.readable);
-        assert_eq!(res.error, Some("Selected path is a file, not a directory.".to_string()));
+        assert_eq!(
+            res.error,
+            Some("Selected path is a file, not a directory.".to_string())
+        );
     }
 
     #[test]
@@ -777,5 +991,45 @@ mod tests {
         assert!(res.is_dir);
         assert!(res.readable);
         assert!(res.error.is_none());
+    }
+
+    #[test]
+    fn test_fast_inspect_path_nonexistent() {
+        let res = fast_inspect_path("definitely_nonexistent_file_path_12345".to_string());
+        assert!(!res.exists);
+        assert!(!res.is_dir);
+        assert!(!res.is_file);
+        assert_eq!(res.byte_size, 0);
+        assert_eq!(res.modified_ms, 0);
+        assert!(!res.readable);
+    }
+
+    #[test]
+    fn test_fast_inspect_path_file() {
+        let file_path = std::env::current_dir().unwrap().join("Cargo.toml");
+        let res = fast_inspect_path(file_path.to_string_lossy().to_string());
+        assert!(res.exists);
+        assert!(!res.is_dir);
+        assert!(res.is_file);
+        assert!(res.byte_size > 0);
+        assert!(res.modified_ms > 0);
+        assert!(res.readable);
+    }
+
+    #[test]
+    fn test_fast_inspect_path_dir() {
+        let temp_dir = std::env::temp_dir();
+        let res = fast_inspect_path(temp_dir.to_string_lossy().to_string());
+        assert!(res.exists);
+        assert!(res.is_dir);
+        assert!(!res.is_file);
+        assert!(res.readable);
+    }
+
+    #[test]
+    fn test_get_system_idle_time() {
+        let idle = get_system_idle_time();
+        // Idle time in milliseconds should be a valid non-negative u64 value
+        assert!(idle < 100_000_000_000);
     }
 }

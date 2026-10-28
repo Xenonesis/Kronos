@@ -12,12 +12,20 @@ pub struct TrayState {
 }
 
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let active_agents_i = MenuItem::with_id(app, "active_agents", "Active Agents: 0", false, None::<&str>)?;
+    let active_agents_i = MenuItem::with_id(
+        app,
+        "active_agents",
+        "Active Agents: 0",
+        false,
+        None::<&str>,
+    )?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let new_chat_i = MenuItem::with_id(app, "new_chat", "New Agent Chat", true, None::<&str>)?;
-    let toggle_window_i = MenuItem::with_id(app, "toggle_window", "Toggle Window", true, None::<&str>)?;
+    let toggle_window_i =
+        MenuItem::with_id(app, "toggle_window", "Toggle Window", true, None::<&str>)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
-    let restart_daemon_i = MenuItem::with_id(app, "restart_daemon", "Restart Daemon", true, None::<&str>)?;
+    let restart_daemon_i =
+        MenuItem::with_id(app, "restart_daemon", "Restart Daemon", true, None::<&str>)?;
     let show_logs_i = MenuItem::with_id(app, "show_logs", "Show Logs", true, None::<&str>)?;
     let sep3 = PredefinedMenuItem::separator(app)?;
     let quit_i = MenuItem::with_id(app, "quit", "Quit Paseo", true, None::<&str>)?;
@@ -52,8 +60,14 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = window.show();
                     let _ = window.unminimize();
                     let _ = window.set_focus();
-                    let _ = window.emit("navigate", serde_json::json!({ "route": "/chat", "action": "new_chat" }));
-                    let _ = window.emit("paseo:new-chat", serde_json::json!({ "action": "new_chat" }));
+                    let _ = window.emit(
+                        "navigate",
+                        serde_json::json!({ "route": "/chat", "action": "new_chat" }),
+                    );
+                    let _ = window.emit(
+                        "paseo:new-chat",
+                        serde_json::json!({ "action": "new_chat" }),
+                    );
                     let _ = window.emit("open-agent", serde_json::json!({ "new": true }));
                 }
             }
@@ -88,12 +102,10 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(mut home) = dirs::home_dir() {
                     home.push(".paseo");
                     let log_file = home.join("daemon.log");
-                    let target = if log_file.exists() {
-                        log_file
-                    } else {
-                        home
-                    };
-                    let _ = app.opener().open_path(target.to_string_lossy(), None::<&str>);
+                    let target = if log_file.exists() { log_file } else { home };
+                    let _ = app
+                        .opener()
+                        .open_path(target.to_string_lossy(), None::<&str>);
                 }
             }
             "quit" => {
@@ -128,7 +140,9 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 #[tauri::command]
 pub fn update_active_agents(app: AppHandle, count: usize) -> Result<(), String> {
     if let Some(state) = app.try_state::<TrayState>() {
-        let previous = state.last_count.swap(count, std::sync::atomic::Ordering::SeqCst);
+        let previous = state
+            .last_count
+            .swap(count, std::sync::atomic::Ordering::SeqCst);
         if previous == count {
             return Ok(());
         }

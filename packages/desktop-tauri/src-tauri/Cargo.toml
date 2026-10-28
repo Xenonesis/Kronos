@@ -22,6 +22,7 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
+base64 = "0.22"
 
 [profile.release]
 incremental = true

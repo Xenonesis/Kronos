@@ -26,9 +26,17 @@ fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
             ];
             for res_dir in &candidates {
                 let res_node = res_dir.join("node.exe");
-                let res_script = res_dir.join("dist").join("server").join("server").join("daemon-worker.js");
+                let res_script = res_dir
+                    .join("dist")
+                    .join("server")
+                    .join("server")
+                    .join("daemon-worker.js");
                 if res_script.exists() {
-                    let node = if res_node.exists() { res_node } else { PathBuf::from("node") };
+                    let node = if res_node.exists() {
+                        res_node
+                    } else {
+                        PathBuf::from("node")
+                    };
                     return Some((res_dir.clone(), node, res_script));
                 }
             }
@@ -37,9 +45,19 @@ fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
 
     // 2. Optional override via environment variable
     if let Ok(repo) = env::var("KRONOS_REPO_DIR").or_else(|_| env::var("PASEO_REPO_DIR")) {
-        let script = PathBuf::from(repo).join("packages").join("server").join("dist").join("server").join("server").join("daemon-worker.js");
+        let script = PathBuf::from(repo)
+            .join("packages")
+            .join("server")
+            .join("dist")
+            .join("server")
+            .join("server")
+            .join("daemon-worker.js");
         if script.exists() {
-            return Some((script.parent()?.parent()?.parent()?.parent()?.to_path_buf(), PathBuf::from("node"), script));
+            return Some((
+                script.parent()?.parent()?.parent()?.parent()?.to_path_buf(),
+                PathBuf::from("node"),
+                script,
+            ));
         }
     }
     // 3. Local workspace walking up from exe
@@ -48,7 +66,13 @@ fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
             if !current.pop() {
                 break;
             }
-            let server_worker = current.join("packages").join("server").join("dist").join("server").join("server").join("daemon-worker.js");
+            let server_worker = current
+                .join("packages")
+                .join("server")
+                .join("dist")
+                .join("server")
+                .join("server")
+                .join("daemon-worker.js");
             if server_worker.exists() {
                 return Some((current, PathBuf::from("node"), server_worker));
             }
@@ -57,7 +81,13 @@ fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
 
     // 4. Current dir
     if let Ok(cwd) = env::current_dir() {
-        let server_worker = cwd.join("packages").join("server").join("dist").join("server").join("server").join("daemon-worker.js");
+        let server_worker = cwd
+            .join("packages")
+            .join("server")
+            .join("dist")
+            .join("server")
+            .join("server")
+            .join("daemon-worker.js");
         if server_worker.exists() {
             return Some((cwd, PathBuf::from("node"), server_worker));
         }
@@ -79,7 +109,6 @@ fn ensure_port_clean() {
         .args(["-c", "lsof -ti:6767 | xargs -r kill -9 2>/dev/null || true"])
         .output();
 }
-
 
 pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
     ensure_port_clean();
@@ -129,8 +158,7 @@ pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
         #[cfg(not(windows))]
         cmd.env("NODE_PATH", node_paths.join(":"));
     }
-    cmd.current_dir(&work_dir)
-        .stdin(Stdio::null());
+    cmd.current_dir(&work_dir).stdin(Stdio::null());
 
     if let Some(mut home) = dirs::home_dir() {
         home.push(".paseo");
@@ -179,5 +207,19 @@ pub fn restart_daemon(state: &DaemonState) -> bool {
         success
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_daemon_state_empty_stop() {
+        let state = DaemonState {
+            process: Mutex::new(None),
+        };
+        stop_daemon(&state);
+        assert!(state.process.lock().unwrap().is_none());
     }
 }
