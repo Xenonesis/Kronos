@@ -4,6 +4,7 @@
 mod daemon;
 mod editor;
 
+pub mod process_job;
 mod notifications;
 mod tray;
 
