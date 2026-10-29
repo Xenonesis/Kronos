@@ -2,10 +2,20 @@ use std::env;
 use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::{LazyLock, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 use crate::kernel::server::{DaemonHandle, EmbeddedDaemon};
 
-static EMBEDDED_DAEMON: Mutex<Option<DaemonHandle>> = Mutex::new(None);
+enum EmbeddedDaemonState {
+    Stopped,
+    Starting {
+        cancel: Arc<AtomicBool>,
+        join_handle: tokio::task::JoinHandle<()>,
+    },
+    Running(DaemonHandle),
+}
+
+static EMBEDDED_DAEMON: Mutex<EmbeddedDaemonState> = Mutex::new(EmbeddedDaemonState::Stopped);
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -22,24 +32,44 @@ fn get_or_init_runtime() -> &'static tokio::runtime::Runtime {
 #[allow(dead_code)]
 pub fn is_embedded_running() -> bool {
     if let Ok(lock) = EMBEDDED_DAEMON.lock() {
-        lock.is_some()
+        matches!(*lock, EmbeddedDaemonState::Running(_))
     } else {
         false
     }
 }
 
 pub fn stop_embedded() {
-    let handle = if let Ok(mut lock) = EMBEDDED_DAEMON.lock() {
-        lock.take()
-    } else {
-        None
+    let old_state = {
+        let mut lock = match EMBEDDED_DAEMON.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        std::mem::replace(&mut *lock, EmbeddedDaemonState::Stopped)
     };
 
-    if let Some(handle) = handle {
-        let rt = get_or_init_runtime();
-        rt.block_on(async move {
-            handle.stop().await;
-        });
+    let rt = get_or_init_runtime();
+    match old_state {
+        EmbeddedDaemonState::Stopped => {}
+        EmbeddedDaemonState::Starting { cancel, join_handle } => {
+            cancel.store(true, Ordering::SeqCst);
+            let abort_handle = join_handle.abort_handle();
+            let (tx, rx) = std::sync::mpsc::channel();
+            rt.spawn(async move {
+                let _ = join_handle.await;
+                let _ = tx.send(());
+            });
+            if rx.recv_timeout(std::time::Duration::from_millis(2500)).is_err() {
+                abort_handle.abort();
+            }
+        }
+        EmbeddedDaemonState::Running(handle) => {
+            let (tx, rx) = std::sync::mpsc::channel();
+            rt.spawn(async move {
+                handle.stop().await;
+                let _ = tx.send(());
+            });
+            let _ = rx.recv_timeout(std::time::Duration::from_millis(2500));
+        }
     }
 }
 
@@ -136,17 +166,49 @@ fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
 }
 #[cfg(windows)]
 fn ensure_port_clean() {
-    let _ = Command::new("cmd")
-        .args(["/C", "for /f \"tokens=5\" %a in ('netstat -aon ^| findstr \":6767 \" ^| findstr \"LISTENING\"') do taskkill /f /pid %a"])
+    let current_pid = std::process::id();
+    if let Ok(output) = Command::new("netstat")
+        .args(["-aon"])
         .creation_flags(CREATE_NO_WINDOW)
-        .output();
+        .output()
+    {
+        if let Ok(text) = String::from_utf8(output.stdout) {
+            for line in text.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 5
+                    && parts[1].rsplit(':').next() == Some("6767")
+                    && parts.contains(&"LISTENING")
+                {
+                    if let Some(pid_str) = parts.last() {
+                        if let Ok(pid) = pid_str.parse::<u32>() {
+                            if pid != 0 && pid != current_pid {
+                                let _ = Command::new("taskkill")
+                                    .args(["/F", "/PID", &pid.to_string()])
+                                    .creation_flags(CREATE_NO_WINDOW)
+                                    .output();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(not(windows))]
 fn ensure_port_clean() {
-    let _ = Command::new("sh")
-        .args(["-c", "lsof -ti:6767 | xargs -r kill -9 2>/dev/null || true"])
-        .output();
+    let current_pid = std::process::id();
+    if let Ok(output) = Command::new("lsof").args(["-ti:6767"]).output() {
+        if let Ok(text) = String::from_utf8(output.stdout) {
+            for line in text.lines() {
+                if let Ok(pid) = line.trim().parse::<u32>() {
+                    if pid != 0 && pid != current_pid {
+                        let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
@@ -228,18 +290,52 @@ pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
         stop_embedded();
         ensure_port_clean();
         let rt = get_or_init_runtime();
-        rt.spawn(async move {
-            match EmbeddedDaemon::start().await {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_flag = cancel.clone();
+
+        let mut lock = match EMBEDDED_DAEMON.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        let join_handle = rt.spawn(async move {
+            let result = EmbeddedDaemon::start().await;
+            let handle_to_stop = match result {
                 Ok(handle) => {
-                    if let Ok(mut lock) = EMBEDDED_DAEMON.lock() {
-                        *lock = Some(handle);
+                    let mut lock = match EMBEDDED_DAEMON.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    if cancel_flag.load(Ordering::SeqCst) {
+                        *lock = EmbeddedDaemonState::Stopped;
+                        Some(handle)
+                    } else {
+                        *lock = EmbeddedDaemonState::Running(handle);
+                        None
                     }
                 }
                 Err(e) => {
                     eprintln!("[EmbeddedDaemon] Failed to start: {}", e);
+                    let mut lock = match EMBEDDED_DAEMON.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    *lock = EmbeddedDaemonState::Stopped;
+                    None
                 }
+            };
+
+            if let Some(handle) = handle_to_stop {
+                handle.stop().await;
             }
         });
+
+        *lock = EmbeddedDaemonState::Starting {
+            cancel,
+            join_handle,
+        };
+        drop(lock);
+
         None
     }
 }
@@ -317,5 +413,24 @@ mod tests {
         assert!(child.is_none(), "Rust engine boots embedded daemon without external Child process");
         stop_daemon(&state);
         std::env::remove_var("KRONOS_DAEMON_ENGINE");
+    }
+
+    #[tokio::test]
+    async fn test_daemon_rapid_start_stop_race() {
+        std::env::set_var("KRONOS_DAEMON_ENGINE", "rust");
+        let state = DaemonState {
+            process: Mutex::new(None),
+        };
+        let _ = start_daemon(None);
+        stop_daemon(&state);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(!is_embedded_running(), "Daemon must not remain running after immediate stop");
+        std::env::remove_var("KRONOS_DAEMON_ENGINE");
+    }
+
+    #[test]
+    fn test_ensure_port_clean_does_not_kill_self() {
+        ensure_port_clean();
+        assert_eq!(std::process::id(), std::process::id());
     }
 }

@@ -15,10 +15,10 @@ mod tests {
             "type": "ping",
             "payload": {}
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(msg.to_string().into())).await.unwrap();
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(msg.to_string())).await.unwrap();
 
         let response = ws_stream.next().await.unwrap().unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&response.to_text().unwrap()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
         assert_eq!(parsed["id"], "ping-1");
         assert_eq!(parsed["type"], "pong");
         assert_eq!(parsed["success"], true);
@@ -36,10 +36,10 @@ mod tests {
             "type": "workspace.unimplemented",
             "payload": {}
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(msg.to_string().into())).await.unwrap();
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(msg.to_string())).await.unwrap();
 
         let response = ws_stream.next().await.unwrap().unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&response.to_text().unwrap()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
         assert_eq!(parsed["id"], "req-unknown-1");
         assert_eq!(parsed["success"], false);
         assert!(parsed["error"].is_string());
