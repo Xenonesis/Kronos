@@ -34,13 +34,16 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
     "Win32_Foundation",
     "Win32_Security",
-    "Win32_System_Memory"
+    "Win32_System_Memory",
+    "Win32_System_LibraryLoader",
+    "Win32_Storage_FileSystem",
 ] }
 tree-sitter = "0.24"
 tree-sitter-typescript = "0.23"
 tantivy = "0.22"
 yrs = "0.21"
 clap = { version = "4", features = ["derive"] }
+rayon = "1.10"
 
 [profile.release]
 incremental = true

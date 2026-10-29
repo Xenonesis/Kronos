@@ -4020,6 +4020,7 @@ dependencies = [
  "futures-util",
  "gix",
  "portable-pty",
+ "rayon",
  "serde",
  "serde_json",
  "similar",
