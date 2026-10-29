@@ -484,6 +484,10 @@ fn check_and_log_crashpad_dumps() {
 }
 
 fn main() {
+    if let Some(code) = kernel::cli::parse_and_dispatch() {
+        std::process::exit(code);
+    }
+
     setup_panic_hook();
     check_and_log_crashpad_dumps();
 

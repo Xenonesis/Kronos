@@ -41,14 +41,23 @@ pub type EmbeddedDaemon = DaemonHandle;
 
 impl DaemonHandle {
     pub async fn start() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Self::start_internal(6767, true).await
+        Self::start_internal(6767, true, None).await
     }
 
     pub async fn start_test(port: u16) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Self::start_internal(port, false).await
+        Self::start_internal(port, false, None).await
     }
 
-    async fn start_internal(port: u16, is_production: bool) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start_daemon(port: u16, custom_pipe: Option<String>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let is_production = port == 6767 && custom_pipe.is_none();
+        Self::start_internal(port, is_production, custom_pipe).await
+    }
+
+    async fn start_internal(
+        port: u16,
+        is_production: bool,
+        custom_pipe: Option<String>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let (shutdown_tx, _) = broadcast::channel(16);
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -95,7 +104,11 @@ impl DaemonHandle {
         });
 
         #[cfg(windows)]
-        let pipe_task = if is_production {
+        let pipe_task = if let Some(custom) = &custom_pipe {
+            let p_rx = shutdown_tx.subscribe();
+            let h = tokio::spawn(run_named_pipe(custom.clone(), p_rx));
+            Some(h)
+        } else if is_production {
             let p_rx = shutdown_tx.subscribe();
             let h = tokio::spawn(run_named_pipe(r"\\.\pipe\kronos-ipc".to_string(), p_rx));
             Some(h)
@@ -107,7 +120,11 @@ impl DaemonHandle {
         };
 
         #[cfg(not(windows))]
-        let pipe_task = if is_production {
+        let pipe_task = if let Some(custom) = &custom_pipe {
+            let p_rx = shutdown_tx.subscribe();
+            let h = tokio::spawn(run_unix_socket(custom.clone(), p_rx));
+            Some(h)
+        } else if is_production {
             let p_rx = shutdown_tx.subscribe();
             let h = tokio::spawn(run_unix_socket("/tmp/kronos-ipc.sock".to_string(), p_rx));
             Some(h)

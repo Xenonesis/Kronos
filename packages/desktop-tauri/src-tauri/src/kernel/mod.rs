@@ -8,6 +8,7 @@ pub mod vfs;
 pub mod ast;
 pub mod search;
 pub mod crdt;
+pub mod cli;
 
 #[cfg(test)]
 mod protocol_test;
@@ -21,3 +22,5 @@ pub mod vfs_test;
 pub mod search_test;
 #[cfg(test)]
 pub mod crdt_test;
+#[cfg(test)]
+pub mod cli_test;
