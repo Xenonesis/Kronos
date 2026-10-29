@@ -75,9 +75,64 @@ fn wait_for_daemon_health(max_attempts: usize) -> bool {
     false
 }
 
-fn get_or_create_server_id() -> String {
+fn detect_and_configure_portable_mode() -> Option<PathBuf> {
+    // Check KRONOS_PORTABLE=1 env var
+    let env_portable = std::env::var("KRONOS_PORTABLE").map(|v| v == "1").unwrap_or(false);
+
+    // Check if adjacent .kronos-data directory exists next to current executable
+    let mut adjacent_data_dir = None;
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let candidate = exe_dir.join(".kronos-data");
+            if candidate.exists() && candidate.is_dir() {
+                adjacent_data_dir = Some(candidate);
+            }
+        }
+    }
+
+    if env_portable || adjacent_data_dir.is_some() {
+        let portable_dir = adjacent_data_dir.unwrap_or_else(|| {
+            if let Ok(exe_path) = std::env::current_exe() {
+                if let Some(exe_dir) = exe_path.parent() {
+                    let candidate = exe_dir.join(".kronos-data");
+                    let _ = fs::create_dir_all(&candidate);
+                    return candidate;
+                }
+            }
+            PathBuf::from(".kronos-data")
+        });
+
+        let dir_str = portable_dir.to_string_lossy().to_string();
+        std::env::set_var("KRONOS_HOME", &dir_str);
+        std::env::set_var("PASEO_HOME", &dir_str);
+        return Some(portable_dir);
+    }
+    None
+}
+
+pub fn get_data_dir() -> PathBuf {
+    if let Ok(kronos_home) = std::env::var("KRONOS_HOME") {
+        if !kronos_home.is_empty() {
+            let path = PathBuf::from(kronos_home);
+            let _ = fs::create_dir_all(&path);
+            return path;
+        }
+    }
+    if let Ok(paseo_home) = std::env::var("PASEO_HOME") {
+        if !paseo_home.is_empty() {
+            let path = PathBuf::from(paseo_home);
+            let _ = fs::create_dir_all(&path);
+            return path;
+        }
+    }
     let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.push(".paseo");
+    let _ = fs::create_dir_all(&home);
+    home
+}
+
+fn get_or_create_server_id() -> String {
+    let home = get_data_dir();
     let _ = fs::create_dir_all(&home);
 
     let server_id_file = home.join("server-id");
@@ -100,8 +155,7 @@ fn get_or_create_server_id() -> String {
 }
 
 fn get_daemon_status_json() -> String {
-    let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    home.push(".paseo");
+    let home = get_data_dir();
 
     let server_id = get_or_create_server_id();
     let mut local_credential = String::new();
@@ -141,8 +195,7 @@ fn get_live_daemon_status() -> serde_json::Value {
 
 #[tauri::command]
 fn get_live_local_credential() -> Option<String> {
-    let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    home.push(".paseo");
+    let home = get_data_dir();
     let credential_file = home.join("local-credential");
     if let Ok(content) = fs::read_to_string(&credential_file) {
         let trimmed = content.trim();
@@ -171,8 +224,7 @@ fn read_tail_file(path: &std::path::Path, max_lines: usize) -> String {
 
 #[tauri::command]
 fn get_log_contents(log_type: String) -> serde_json::Value {
-    let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    home.push(".paseo");
+    let home = get_data_dir();
     let file_name = match log_type.as_str() {
         "daemon" => "daemon.log",
         "app" => "app.log",
@@ -190,9 +242,7 @@ fn get_log_contents(log_type: String) -> serde_json::Value {
 
 #[tauri::command]
 fn log_desktop_event(level: String, message: String) {
-    let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    home.push(".paseo");
-    let _ = fs::create_dir_all(&home);
+    let home = get_data_dir();
 
     use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -392,9 +442,7 @@ fn fast_inspect_path(path: String) -> PathInspectResult {
 
 fn setup_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
-        let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        home.push(".paseo");
-        let _ = fs::create_dir_all(&home);
+        let home = get_data_dir();
         let crash_log = home.join("crash.log");
 
         use std::io::Write;
@@ -454,9 +502,7 @@ fn check_and_log_crashpad_dumps() {
                     }
                 }
                 if !dumps.is_empty() {
-                    let mut home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-                    home.push(".paseo");
-                    let _ = fs::create_dir_all(&home);
+                    let home = get_data_dir();
                     let crash_log = home.join("crash.log");
                     use std::io::Write;
                     use std::time::{SystemTime, UNIX_EPOCH};
@@ -484,6 +530,8 @@ fn check_and_log_crashpad_dumps() {
 }
 
 fn main() {
+    detect_and_configure_portable_mode();
+
     if let Some(code) = kernel::cli::parse_and_dispatch() {
         std::process::exit(code);
     }
@@ -886,6 +934,7 @@ try {{
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
+        .manage(std::sync::Arc::new(crate::process_job::JobSupervisor::new().ok()))
         .manage(NativePtyManager::new())
         .invoke_handler(tauri::generate_handler![
             open_in_editor,
@@ -1083,5 +1132,18 @@ mod tests {
         let idle = get_system_idle_time();
         // Idle time in milliseconds should be a valid non-negative u64 value
         assert!(idle < 100_000_000_000);
+    }
+
+    #[test]
+    fn test_portable_mode_detection_env() {
+        let temp_dir = std::env::temp_dir().join("kronos_portable_test_dir");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        std::env::set_var("KRONOS_PORTABLE", "1");
+        std::env::set_var("KRONOS_HOME", temp_dir.to_string_lossy().to_string());
+        let data_dir = get_data_dir();
+        assert_eq!(data_dir, temp_dir);
+        std::env::remove_var("KRONOS_PORTABLE");
+        std::env::remove_var("KRONOS_HOME");
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

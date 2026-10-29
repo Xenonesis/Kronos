@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { statSync, existsSync, readdirSync, copyFileSync, readFileSync } from "node:fs";
+import { statSync, existsSync, readdirSync, copyFileSync, readFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -90,10 +90,10 @@ async function main() {
   console.log("\x1b[1m\x1b[32m=== Kronos Desktop Auto-Pull & .EXE Builder ===\x1b[0m");
 
   const args = new Set(process.argv.slice(2));
-  const force = args.has("--force");
-  const quick = args.has("--quick") || args.has("--portable");
+  const isRelease = args.has("--release");
+  const force = args.has("--force") || isRelease;
+  const quick = (args.has("--quick") || args.has("--portable")) && !isRelease;
   const publish = args.has("--publish");
-
   const nsisDir = path.join(
     rootDir,
     "packages",
@@ -174,8 +174,8 @@ async function main() {
 
   // Step 5: Compile Tauri Executable / Installer
   const builtQuick = compileTauriBundle(quick, nsisDir);
-  if (builtQuick) return;
-  // Verification
+  if (builtQuick && !isRelease) return;
+  // Verification & Packaging
   const exePath = getLatestExe(nsisDir);
   if (exePath && existsSync(exePath)) {
     const stats = statSync(exePath);
@@ -193,6 +193,40 @@ async function main() {
 
     const appVersion = getAppVersion();
     const releaseTag = `v${appVersion}`;
+
+    // Create root dist/ directory and deploy release artifacts
+    const distRootDir = path.join(rootDir, "dist");
+    mkdirSync(distRootDir, { recursive: true });
+    const distInstallerPath = path.join(distRootDir, `Kronos_${appVersion}_x64-setup.exe`);
+    copyFileSync(exePath, distInstallerPath);
+    console.log(`  \x1b[32m✔ Dist Installer Deployed:\x1b[0m ${distInstallerPath}`);
+
+    // Locate or build standalone release binary for portable target
+    const releaseBinary = path.join(
+      rootDir,
+      "packages",
+      "desktop-tauri",
+      "src-tauri",
+      "target",
+      "release",
+      "paseo-desktop.exe",
+    );
+    const tempReleaseBinary = path.join(os.tmpdir(), "kronos_target", "release", "paseo-desktop.exe");
+    const sourcePortableExe = existsSync(releaseBinary)
+      ? releaseBinary
+      : existsSync(tempReleaseBinary)
+        ? tempReleaseBinary
+        : null;
+
+    if (sourcePortableExe) {
+      const distPortablePath = path.join(distRootDir, "kronos-portable.exe");
+      copyFileSync(sourcePortableExe, distPortablePath);
+      const portableStats = statSync(distPortablePath);
+      console.log(`  \x1b[32m✔ Portable Executable Deployed:\x1b[0m ${distPortablePath} (${(portableStats.size / (1024 * 1024)).toFixed(2)} MB)`);
+    } else {
+      console.warn("  \x1b[33m⚠️ Release binary not found for portable copy\x1b[0m");
+    }
+
     if (publish) {
       publishToGitHub(exePath, persistentPath, releaseTag);
     } else {
