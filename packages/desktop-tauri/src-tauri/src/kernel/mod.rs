@@ -5,6 +5,8 @@ pub mod server;
 pub mod git;
 pub mod shm;
 pub mod vfs;
+pub mod ast;
+pub mod search;
 
 #[cfg(test)]
 mod protocol_test;
@@ -14,3 +16,5 @@ pub mod server_test;
 pub mod shm_test;
 #[cfg(test)]
 pub mod vfs_test;
+#[cfg(test)]
+pub mod search_test;

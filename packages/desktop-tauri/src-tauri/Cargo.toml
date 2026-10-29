@@ -36,6 +36,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security",
     "Win32_System_Memory"
 ] }
+tree-sitter = "0.24"
+tree-sitter-typescript = "0.23"
+tantivy = "0.22"
 
 [profile.release]
 incremental = true
