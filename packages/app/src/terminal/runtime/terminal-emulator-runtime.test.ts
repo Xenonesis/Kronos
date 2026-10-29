@@ -83,7 +83,7 @@ import {
   encodeTerminalOutput,
   TerminalEmulatorRuntime,
 } from "./terminal-emulator-runtime";
-import type { NativeTerminalBridge } from "@/desktop/host";
+import type { NativeTerminalBridge, TerminalEvent } from "@/desktop/host";
 
 interface GlobalWithDesktopBridge {
   window?: {
@@ -833,6 +833,46 @@ describe("terminal-emulator-runtime", () => {
 
       runtime.handleInput("top\r");
       expect(onInput).toHaveBeenCalledWith("top\r");
+    });
+
+    it("resets native active state when bridge receives an exit event", () => {
+      let eventCallback: ((event: TerminalEvent) => void) | undefined;
+      const handleSpawn = (
+        _sessionId: string,
+        _options: unknown,
+        onEvent: (event: TerminalEvent) => void,
+      ) => {
+        eventCallback = onEvent;
+        return Promise.resolve();
+      };
+      const mockNativeTerminal: NativeTerminalBridge = {
+        spawn: vi.fn(handleSpawn),
+        write: vi.fn().mockResolvedValue(undefined),
+        resize: vi.fn().mockResolvedValue(undefined),
+        kill: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const testGlobal = globalThis as unknown as GlobalWithDesktopBridge;
+      testGlobal.window = {
+        paseoDesktop: {
+          nativeTerminal: mockNativeTerminal,
+        },
+      };
+
+      const runtime = new TerminalEmulatorRuntime({ isLocal: true, sessionId: "session-exit" });
+      attachStubTerminal(runtime);
+      const bound = runtime.bindNativeTerminal({ sessionId: "session-exit" });
+      expect(bound).toBe(true);
+      expect(runtime.isNative).toBe(true);
+      expect(runtime.isNativeSession()).toBe(true);
+      expect(runtime.getNativeSessionId()).toBe("session-exit");
+      expect(eventCallback).toBeDefined();
+
+      eventCallback?.({ type: "exit", data: 0 });
+
+      expect(runtime.isNative).toBe(false);
+      expect(runtime.isNativeSession()).toBe(false);
+      expect(runtime.getNativeSessionId()).toBeNull();
     });
   });
 });

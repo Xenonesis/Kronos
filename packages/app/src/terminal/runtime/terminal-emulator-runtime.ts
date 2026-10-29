@@ -312,6 +312,10 @@ export class TerminalEmulatorRuntime {
         this.terminal?.write(event.data);
       } else if (event.type === "error") {
         this.terminal?.write(`\r\n\x1b[31m[Error: ${event.data}]\x1b[0m\r\n`);
+      } else if (event.type === "exit") {
+        this.isNativeActive = false;
+        this.nativeTerminal = null;
+        this.nativeSessionId = null;
       }
     });
 
