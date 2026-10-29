@@ -11,6 +11,7 @@ pub mod crdt;
 pub mod cli;
 pub mod ioring;
 pub mod mcp;
+pub mod speech;
 
 #[cfg(test)]
 mod protocol_test;
@@ -30,3 +31,5 @@ pub mod cli_test;
 pub mod ioring_test;
 #[cfg(test)]
 pub mod mcp_test;
+#[cfg(test)]
+pub mod speech_test;
