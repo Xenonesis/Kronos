@@ -22,6 +22,8 @@ This specification establishes the **Kronos Hyper-Native Kernel (HNK)** — a si
 5. **Native Tree-Sitter AST & Semantic Intelligence**: Provide AST-level semantic diffing and structural code inspection in background threads.
 6. **Embedded Tantivy Workspace Retrieval**: Sub-millisecond workspace search (<1ms) via an in-memory lexical trigram index, giving AI agents immediate context retrieval.
 7. **Zero Frontend Churn**: Maintain full protocol parity with `packages/app` using automated type generation (`@getpaseo/protocol` $\to$ Rust `serde`) and dual-transport support (Tauri IPC for local, WebSocket for remote relay).
+8. **Multi-Call Universal Binary (Single 50MB Executable)**: The single `kronos.exe` operates as GUI Desktop app, headless daemon (`kronos daemon`), autonomous CLI agent runner (`kronos agent`), AST searcher (`kronos search`), or native Model Context Protocol server (`kronos mcp`).
+9. **CRDT Multi-Agent Concurrent Memory (`yrs`)**: Integrate Conflict-free Replicated Data Types (CRDT) so multiple AI agents and human users can concurrently edit the same files with zero merge conflicts or clobbered states.
 
 ---
 
@@ -63,7 +65,18 @@ This specification establishes the **Kronos Hyper-Native Kernel (HNK)** — a si
 |  |  |             Semantic Intelligence & Search             |  |        Persistence Engine       |  |  |
 |  |  |  - Tree-sitter Background AST Parser                    |  |  - Atomic JSON Storage Engine   |  |  |
 |  |  |  - Tantivy In-Memory Trigram / Lexical Search Index     |  |  - SQLite (WAL Mode, 0ms Boot) |  |  |
-|  |  +--------------------------------------------------------+  +---------------------------------+  |  |
+  |  |  +--------------------------------------------------------+  +---------------------------------+  |  |
+  |  |  |             Semantic Intelligence & Search             |  |        Persistence Engine       |  |  |
+  |  |  |  - Tree-sitter Background AST Parser                    |  |  - Atomic JSON Storage Engine   |  |  |
+  |  |  |  - Tantivy In-Memory Trigram / Lexical Search Index     |  |  - SQLite (WAL Mode, 0ms Boot) |  |  |
+  |  |  +--------------------------------------------------------+  +---------------------------------+  |  |
+  |  |                                                                                                   |  |
+  |  |  +--------------------------------------------------------+  +---------------------------------+  |  |
+  |  |  |               Multi-Agent CRDT Memory (`yrs`)          |  |      Multi-Call CLI Engine      |  |  |
+  |  |  |  - Real-time Concurrent Edit Convergence               |  |  - `kronos` (GUI Desktop)       |  |  |
+  |  |  |  - Conflict-Free Collaborative Buffer State            |  |  - `kronos daemon / agent / mcp`|  |  |
+  |  |  +--------------------------------------------------------+  +---------------------------------+  |  |
+  |  +---------------------------------------------------------------------------------------------------+  |
 |  +---------------------------------------------------------------------------------------------------+  |
 +---------------------------------------------------------------------------------------------------------+
 ```
@@ -116,6 +129,24 @@ This specification establishes the **Kronos Hyper-Native Kernel (HNK)** — a si
 - **Win32 Job Object Supervision**:
   - Every external CLI agent (`claude`, `omp`, `codex`, language servers) is spawned through `process_job.rs` with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`.
   - Guarantees zero orphaned child processes upon Kronos termination or crash.
+
+### 4.6 Multi-Call Universal Binary Architecture
+
+- **CLI Dispatcher (`clap` in Rust)**:
+  `kronos.exe` inspects invocation arguments before initializing the GUI:
+  - `kronos`: Boots desktop GUI with Tauri v2 window and WebView2.
+  - `kronos daemon [--port <p>] [--pipe <name>]`: Runs headless background Tokio daemon for remote servers/VPS.
+  - `kronos agent <prompt> [--provider <p>]`: Executes autonomous CLI agent session in terminal stdio without launching any GUI window.
+  - `kronos search <query>`: Instant in-memory AST and trigram search across the workspace.
+  - `kronos mcp`: Native Model Context Protocol (MCP) server over stdio for external LLM integrations.
+
+### 4.7 CRDT Multi-Agent Concurrent Memory (`yrs`)
+
+- **Conflict-Free Replicated Data Types**:
+  - Integrated via `yrs` (native Rust port of Yjs).
+  - Every active buffer in the Shadow VFS is backed by a `yrs::Doc` containing a `yrs::Text` state.
+  - Multiple agents (e.g. Claude modifying backend logic while OMP modifies frontend components) submit transactional diff updates (`yrs::Transact`).
+  - Update states merge deterministically using state vectors without file locking, overwrite errors, or git merge conflicts.
 
 ---
 

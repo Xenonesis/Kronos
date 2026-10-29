@@ -354,7 +354,122 @@ Commit: `feat(kernel): add native Tree-sitter AST and Tantivy in-memory workspac
 
 ---
 
-### Task 6: Full Integration, Packaging Verification & Node Removal
+### Task 6: CRDT Multi-Agent Concurrent Memory (`yrs`)
+
+**Files:**
+
+- Create: `packages/desktop-tauri/src-tauri/src/kernel/crdt.rs`
+- Modify: `packages/desktop-tauri/src-tauri/Cargo.toml`
+- Test: `packages/desktop-tauri/src-tauri/src/kernel/crdt_test.rs`
+
+**Interfaces:**
+
+- Produces: `CrdtBuffer::new()`, `CrdtBuffer::insert()`, `CrdtBuffer::delete()`, `CrdtBuffer::merge()`.
+
+- [ ] **Step 1: Add `yrs` dependency to Cargo.toml**
+      Add `yrs = "0.21"`.
+
+- [ ] **Step 2: Write failing CRDT concurrent convergence test**
+
+Create `packages/desktop-tauri/src-tauri/src/kernel/crdt_test.rs`:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use crate::kernel::crdt::CrdtDoc;
+
+    #[test]
+    fn test_crdt_multi_agent_concurrent_convergence() {
+        let doc_a = CrdtDoc::new();
+        let doc_b = CrdtDoc::new();
+
+        doc_a.apply_edit(0, "function hello() {}\n");
+        let update_a = doc_a.export_update();
+        doc_b.apply_update(&update_a).unwrap();
+
+        // Agent A edits line 1
+        doc_a.apply_edit(0, "// modified by Claude\n");
+        // Agent B edits line 1 concurrently
+        doc_b.apply_edit(0, "// modified by OMP\n");
+
+        // Exchange updates
+        let update_a2 = doc_a.export_update();
+        let update_b2 = doc_b.export_update();
+
+        doc_a.apply_update(&update_b2).unwrap();
+        doc_b.apply_update(&update_a2).unwrap();
+
+        // Must converge to identical text deterministically with zero conflict
+        assert_eq!(doc_a.to_string(), doc_b.to_string());
+    }
+}
+```
+
+- [ ] **Step 3: Implement CRDT buffer engine in `kernel/crdt.rs`**
+- [ ] **Step 4: Run tests and commit**
+
+Run: `cargo test --manifest-path packages/desktop-tauri/src-tauri/Cargo.toml crdt_test`
+Expected: PASS.
+Commit: `feat(kernel): add CRDT multi-agent concurrent memory buffer using yrs`
+
+---
+
+### Task 7: Multi-Call Universal CLI Entrypoint (`clap`)
+
+**Files:**
+
+- Create: `packages/desktop-tauri/src-tauri/src/kernel/cli.rs`
+- Modify: `packages/desktop-tauri/src-tauri/src/main.rs`
+- Modify: `packages/desktop-tauri/src-tauri/Cargo.toml`
+- Test: `packages/desktop-tauri/src-tauri/src/kernel/cli_test.rs`
+
+**Interfaces:**
+
+- Produces: `cli::parse_and_dispatch()`, `CliMode`.
+
+- [ ] **Step 1: Add `clap = { version = "4", features = ["derive"] }` to Cargo.toml**
+- [ ] **Step 2: Write failing CLI parser test**
+
+Create `packages/desktop-tauri/src-tauri/src/kernel/cli_test.rs`:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use crate::kernel::cli::{CliArgs, CliCommand};
+    use clap::Parser;
+
+    #[test]
+    fn test_cli_dispatch_daemon_mode() {
+        let args = CliArgs::try_parse_from(["kronos", "daemon", "--port", "6767"]).unwrap();
+        match args.command {
+            Some(CliCommand::Daemon { port, .. }) => assert_eq!(port, 6767),
+            _ => panic!("Expected Daemon command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_dispatch_agent_mode() {
+        let args = CliArgs::try_parse_from(["kronos", "agent", "fix bug in auth.ts"]).unwrap();
+        match args.command {
+            Some(CliCommand::Agent { prompt, .. }) => assert_eq!(prompt, "fix bug in auth.ts"),
+            _ => panic!("Expected Agent command"),
+        }
+    }
+}
+```
+
+- [ ] **Step 3: Implement `cli.rs` and dispatch in `main.rs` before GUI boot**
+- [ ] **Step 4: Run tests and commit**
+
+Run: `cargo test --manifest-path packages/desktop-tauri/src-tauri/Cargo.toml cli_test`
+Expected: PASS.
+Commit: `feat(kernel): add multi-call universal CLI entrypoint for daemon, agent, and search`
+
+---
+
+### Task 8: Full Integration, Packaging Verification & Node Removal
+
+### Task 8: Full Integration, Packaging Verification & Node Removal
 
 **Files:**
 
