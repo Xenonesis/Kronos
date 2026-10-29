@@ -22,6 +22,24 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
             data: None,
             error: None,
         },
+        "hello" => RpcResponse {
+            id: envelope.id,
+            msg_type: "server_info".to_string(),
+            success: true,
+            data: Some(serde_json::json!({
+                "status": "server_info",
+                "protocolVersion": 1,
+                "serverId": "kronos-embedded-daemon",
+                "hostname": "localhost",
+                "version": "0.14.0",
+                "desktopManaged": true,
+                "features": {
+                    "connectedHosts": true,
+                    "hostMultiplexing": true
+                }
+            })),
+            error: None,
+        },
         other => RpcResponse::err(
             envelope.id,
             other,

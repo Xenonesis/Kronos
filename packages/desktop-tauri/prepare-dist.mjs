@@ -19,15 +19,13 @@ fs.cpSync(path.join(root, "packages/server/dist"), path.join(targetDir, "dist"),
   recursive: true,
 });
 
-// Eliminate node runtime copying for Kronos Hyper-Native Kernel
-console.log("Eliminating node.exe distribution (Hyper-Native Kernel active)...");
+// Copy node runtime directly so Tauri installed app always has Node available
+console.log("Copying node runtime...");
 const nodeBinName = process.platform === "win32" ? "node.exe" : "node";
-const dummyPlaceholder = path.join(targetDir, nodeBinName);
-// Write minimal 0-byte placeholder if needed by any legacy resource checks
-fs.writeFileSync(dummyPlaceholder, "");
+fs.copyFileSync(process.execPath, path.join(targetDir, nodeBinName));
 if (process.platform !== "win32") {
   try {
-    fs.writeFileSync(path.join(targetDir, "node.exe"), "");
+    fs.copyFileSync(process.execPath, path.join(targetDir, "node.exe"));
   } catch {}
 }
 // Copy server package.json

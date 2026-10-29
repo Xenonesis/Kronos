@@ -282,7 +282,7 @@ pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
     Some(child)
 }
 pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
-    let engine = env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "rust".to_string());
+    let engine = env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "node".to_string());
     if engine.eq_ignore_ascii_case("node") {
         stop_embedded();
         start_node_daemon(server_id)
