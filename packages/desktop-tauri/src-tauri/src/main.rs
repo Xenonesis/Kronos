@@ -6,6 +6,7 @@ mod editor;
 
 pub mod process_job;
 pub mod native_diff;
+pub mod native_pty;
 mod notifications;
 mod tray;
 
