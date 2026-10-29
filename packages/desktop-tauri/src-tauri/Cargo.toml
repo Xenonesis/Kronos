@@ -39,6 +39,7 @@ windows-sys = { version = "0.59", features = [
 tree-sitter = "0.24"
 tree-sitter-typescript = "0.23"
 tantivy = "0.22"
+yrs = "0.21"
 
 [profile.release]
 incremental = true
