@@ -154,7 +154,7 @@ fn recover_ring_state(
         }
         let seq = unsafe { u64::from_le((body_ptr.add(p + 4) as *const u64).read_unaligned()) };
         if len == 0 && seq == 0 {
-            p += 4;
+            p += 1;
             continue;
         }
         if p + RECORD_HEADER_SIZE + (len as usize) > capacity {
@@ -225,7 +225,7 @@ fn create_or_open_mapping(name: &str, capacity: usize) -> std::io::Result<(ShmMa
 
     let already_exists = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
 
-    let view = unsafe { MapViewOfFile(file_mapping_handle, FILE_MAP_ALL_ACCESS, 0, 0, total_size) };
+    let view = unsafe { MapViewOfFile(file_mapping_handle, FILE_MAP_ALL_ACCESS, 0, 0, 0) };
 
     if view.Value.is_null() {
         let err = Error::last_os_error();
@@ -293,8 +293,7 @@ pub struct ShmRingBuffer {
 impl ShmRingBuffer {
     /// Creates or opens a named shared memory ring buffer with the specified body capacity.
     pub fn new(name: &str, capacity: usize) -> std::io::Result<Self> {
-        let (mapping, already_exists) = create_or_open_mapping(name, capacity)?;
-        let mapping = Arc::new(mapping);
+        let (mut mapping, already_exists) = create_or_open_mapping(name, capacity)?;
 
         if already_exists {
             unsafe {
@@ -314,8 +313,11 @@ impl ShmRingBuffer {
                 let cap =
                     u64::from_le((mapping.ptr.add(CAP_OFFSET) as *const u64).read_unaligned())
                         as usize;
+                mapping.capacity = cap;
+                mapping.total_size = HEADER_SIZE + cap;
                 let body_ptr = mapping.ptr.add(HEADER_SIZE);
                 let state = recover_ring_state(body_ptr, cap, seq, head);
+                let mapping = Arc::new(mapping);
                 Ok(Self {
                     name: name.to_string(),
                     mapping,
@@ -323,6 +325,7 @@ impl ShmRingBuffer {
                 })
             }
         } else {
+            let mapping = Arc::new(mapping);
             unsafe {
                 (mapping.ptr.add(MAGIC_OFFSET) as *mut u64).write_unaligned(MAGIC.to_le());
                 (&*(mapping.ptr.add(SEQ_OFFSET) as *const AtomicU64)).store(0, Ordering::Release);
@@ -366,6 +369,7 @@ impl ShmRingBuffer {
             .state
             .lock()
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "Lock poisoned"))?;
+        self.sync_if_needed(&mut state);
 
         let head = state.write_head;
         let (write_offset, next_head, did_wrap) = if head + record_len <= cap {
@@ -376,6 +380,13 @@ impl ShmRingBuffer {
             if cap - head >= 4 {
                 unsafe {
                     (body_ptr.add(head) as *mut u32).write_unaligned(WRAP_SENTINEL.to_le());
+                    if cap - head > 4 {
+                        std::ptr::write_bytes(body_ptr.add(head + 4), 0, cap - head - 4);
+                    }
+                }
+            } else if cap > head {
+                unsafe {
+                    std::ptr::write_bytes(body_ptr.add(head), 0, cap - head);
                 }
             }
             (0, record_len % cap, true)
@@ -413,12 +424,13 @@ impl ShmRingBuffer {
             }
 
             // Zero out gap until next valid record or next 12 bytes
-            let zero_limit =
-                if let Some(next_rec) = state.records.front().filter(|r| r.offset > write_end) {
-                    next_rec.offset
-                } else {
-                    (write_end + RECORD_HEADER_SIZE).min(cap)
-                };
+            let zero_limit = state
+                .records
+                .iter()
+                .map(|r| r.offset)
+                .filter(|&off| off >= write_end)
+                .min()
+                .unwrap_or(cap);
             if zero_limit > write_end {
                 std::ptr::write_bytes(body_ptr.add(write_end), 0, zero_limit - write_end);
             }
@@ -443,10 +455,12 @@ impl ShmRingBuffer {
 
     /// Reads the latest payload written into the buffer.
     pub fn read_latest(&self) -> std::io::Result<Vec<u8>> {
-        let state = self
+        let mut state = self
             .state
             .lock()
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "Lock poisoned"))?;
+        self.sync_if_needed(&mut state);
+
 
         if state.records.is_empty() {
             return Err(std::io::Error::new(
@@ -469,10 +483,12 @@ impl ShmRingBuffer {
     /// Reads all records whose sequence ID is strictly greater than `sequence`.
     /// Returns ordered pairs of `(sequence, payload)`.
     pub fn read_since(&self, sequence: u64) -> std::io::Result<Vec<(u64, Vec<u8>)>> {
-        let state = self
+        let mut state = self
             .state
             .lock()
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "Lock poisoned"))?;
+
+        self.sync_if_needed(&mut state);
 
         let body_ptr = self.body_ptr();
         let mut results = Vec::new();
@@ -495,10 +511,12 @@ impl ShmRingBuffer {
     where
         F: FnOnce(&[u8]) -> R,
     {
-        let state = self
+        let mut state = self
             .state
             .lock()
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "Lock poisoned"))?;
+
+        self.sync_if_needed(&mut state);
 
         if state.records.is_empty() {
             return Err(std::io::Error::new(
@@ -552,5 +570,15 @@ impl ShmRingBuffer {
 
     fn body_ptr(&self) -> *mut u8 {
         unsafe { self.mapping.ptr.add(HEADER_SIZE) }
+    }
+
+    fn sync_if_needed(&self, state: &mut RingState) {
+        let current_seq = self.sequence();
+        if current_seq > state.sequence {
+            let cap = self.capacity();
+            let head = self.write_head() as usize;
+            let body_ptr = self.body_ptr();
+            *state = recover_ring_state(body_ptr, cap, current_seq, head);
+        }
     }
 }

@@ -198,4 +198,92 @@ mod tests {
         let all = ring.read_since(0).unwrap();
         assert_eq!(all.len(), 100);
     }
+
+    #[test]
+    fn test_shm_gap_zeroing_no_phantom_no_erasure() {
+        let name = format!("kronos_test_gap_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let capacity = 160;
+        let ring = ShmRingBuffer::new(&name, capacity).unwrap();
+
+        // Write 4 records: each 40 bytes (12 header + 28 data)
+        // Rec 1: 0..40
+        let s1 = ring.write(&[0x11; 28]).unwrap();
+        assert_eq!(s1, 1);
+        // Rec 2: 40..80
+        let s2 = ring.write(&[0x22; 28]).unwrap();
+        assert_eq!(s2, 2);
+        // Rec 3: 80..120
+        let s3 = ring.write(&[0x33; 28]).unwrap();
+        assert_eq!(s3, 3);
+        // Rec 4: 120..160
+        let s4 = ring.write(&[0x44; 28]).unwrap();
+        assert_eq!(s4, 4);
+
+        // Now write smaller record wrapping to 0: 12 header + 8 data = 20 bytes (0..20)
+        // Overwrites Rec 1 (0..40).
+        // Space 20..40 must be zeroed, while Rec 2 (40..80) MUST NOT be erased.
+        let s5 = ring.write(&[0x55; 8]).unwrap();
+        assert_eq!(s5, 5);
+
+        let records = ring.read_since(0).unwrap();
+        // Surviving records should be 2, 3, 4, 5
+        assert_eq!(records.len(), 4);
+        assert_eq!(records[0].0, 2);
+        assert_eq!(records[0].1, vec![0x22; 28]);
+        assert_eq!(records[1].0, 3);
+        assert_eq!(records[1].1, vec![0x33; 28]);
+        assert_eq!(records[2].0, 4);
+        assert_eq!(records[2].1, vec![0x44; 28]);
+        assert_eq!(records[3].0, 5);
+        assert_eq!(records[3].1, vec![0x55; 8]);
+
+        // Verify bytes 20..40 in body are cleanly zeroed
+        let body = ring.body_slice();
+        assert_eq!(&body[20..40], &[0u8; 20]);
+    }
+
+    #[test]
+    fn test_shm_cross_instance_sync() {
+        let name = format!("kronos_test_cross_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let writer = ShmRingBuffer::new(&name, 1024 * 64).unwrap();
+        let reader = ShmRingBuffer::new(&name, 1024 * 64).unwrap();
+
+        #[cfg(windows)]
+        {
+            // Initially empty
+            assert!(reader.read_latest().is_err());
+
+            // Writer writes
+            writer.write(b"payload_alpha").unwrap();
+            writer.write(b"payload_beta").unwrap();
+
+            // Reader should see latest written by writer via header sequence sync
+            let latest = reader.read_latest().unwrap();
+            assert_eq!(latest, b"payload_beta");
+
+            let since_0 = reader.read_since(0).unwrap();
+            assert_eq!(since_0.len(), 2);
+            assert_eq!(since_0[0], (1, b"payload_alpha".to_vec()));
+            assert_eq!(since_0[1], (2, b"payload_beta".to_vec()));
+
+            let since_1 = reader.read_since(1).unwrap();
+            assert_eq!(since_1.len(), 1);
+            assert_eq!(since_1[0], (2, b"payload_beta".to_vec()));
+        }
+    }
+
+    #[test]
+    fn test_shm_capacity_sync_on_open_existing() {
+        let name = format!("kronos_test_capsync_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let original_cap = 1024 * 128;
+        let creator = ShmRingBuffer::new(&name, original_cap).unwrap();
+        assert_eq!(creator.capacity(), original_cap);
+
+        #[cfg(windows)]
+        {
+            // Open existing with a different nominal capacity
+            let opener = ShmRingBuffer::new(&name, 1024 * 64).unwrap();
+            assert_eq!(opener.capacity(), original_cap);
+        }
+    }
 }

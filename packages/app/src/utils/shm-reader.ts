@@ -78,10 +78,18 @@ export class ShmReader {
     // Check for KRONOSSM header
     if (totalBytes >= SHM_HEADER_SIZE) {
       const magicLE = this.view.getBigUint64(0, true);
-      const magicBE = this.view.getBigUint64(0, false);
-      if (magicLE === SHM_MAGIC || magicBE === SHM_MAGIC) {
+      const isLE = magicLE === SHM_MAGIC;
+      const isBE = !isLE && this.view.getBigUint64(0, false) === SHM_MAGIC;
+      if (isLE || isBE) {
+        const littleEndian = isLE;
         bodyStart = SHM_HEADER_SIZE;
-        const capacity = Number(this.view.getBigUint64(24, true));
+
+        const writeSequence = this.view.getBigUint64(8, littleEndian);
+        if (writeSequence === 0n || (lastSequence >= 0 && BigInt(lastSequence) >= writeSequence)) {
+          return [];
+        }
+
+        const capacity = Number(this.view.getBigUint64(24, littleEndian));
         if (capacity > 0 && bodyStart + capacity <= totalBytes) {
           bodyLimit = bodyStart + capacity;
         }

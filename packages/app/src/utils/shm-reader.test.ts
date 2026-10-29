@@ -66,8 +66,8 @@ describe("ShmReader", () => {
     const bytes = new Uint8Array(buffer);
 
     view.setBigUint64(0, SHM_MAGIC, true);
+    view.setBigUint64(8, 10n, true);
     view.setBigUint64(24, BigInt(capacity), true);
-
     // Write record 1
     const payload1 = new Uint8Array([1, 2, 3]);
     let offset = SHM_HEADER_SIZE;
@@ -101,5 +101,29 @@ describe("ShmReader", () => {
     expect(Array.from(chunks[0])).toEqual([9, 8, 7, 6]);
 
     expect(reader.readChunksSince(42)).toHaveLength(0);
+  });
+
+  it("returns empty immediately in O(1) for empty buffer or up-to-date lastSequence", () => {
+    const capacity = 1024 * 1024; // 1MB buffer
+    const totalSize = SHM_HEADER_SIZE + capacity;
+    const buffer = new ArrayBuffer(totalSize);
+    const view = new DataView(buffer);
+
+    view.setBigUint64(0, SHM_MAGIC, true);
+    view.setBigUint64(8, 0n, true); // writeSequence = 0 (empty)
+    view.setBigUint64(16, 0n, true);
+    view.setBigUint64(24, BigInt(capacity), true);
+
+    const reader = new ShmReader(buffer);
+    // For writeSequence === 0, readFramesSince and readLatest must return empty/null immediately
+    expect(reader.readFramesSince(0)).toHaveLength(0);
+    expect(reader.readFramesSince(100)).toHaveLength(0);
+    expect(reader.readLatest()).toBeNull();
+
+    // Set writeSequence = 5
+    view.setBigUint64(8, 5n, true);
+    // If lastSequence >= 5, should also return empty immediately in O(1)
+    expect(reader.readFramesSince(5)).toHaveLength(0);
+    expect(reader.readFramesSince(6)).toHaveLength(0);
   });
 });
