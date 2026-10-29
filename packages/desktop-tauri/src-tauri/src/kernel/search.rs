@@ -56,22 +56,28 @@ impl WorkspaceSearchIndex {
 
     /// Indexes a document into the in-memory search index.
     pub fn index_document(&self, path: &str, text: &str) -> Result<(), String> {
+        self.index_documents_batch(&[(path, text)])
+    }
+
+    /// Indexes a batch of documents into the in-memory search index in a single commit.
+    pub fn index_documents_batch(&self, docs: &[(&str, &str)]) -> Result<(), String> {
         let mut writer = self
             .writer
             .lock()
             .map_err(|e| format!("Lock poisoned: {e}"))?;
 
-        let mut doc = TantivyDocument::default();
-        doc.add_text(self.path_field, path);
-        doc.add_text(self.body_field, text);
-
-        writer
-            .add_document(doc)
-            .map_err(|e| format!("Failed to add document: {e}"))?;
+        for &(path, text) in docs {
+            let mut doc = TantivyDocument::default();
+            doc.add_text(self.path_field, path);
+            doc.add_text(self.body_field, text);
+            writer
+                .add_document(doc)
+                .map_err(|e| format!("Failed to add document: {e}"))?;
+        }
 
         writer
             .commit()
-            .map_err(|e| format!("Failed to commit document: {e}"))?;
+            .map_err(|e| format!("Failed to commit documents: {e}"))?;
 
         self.reader
             .reload()

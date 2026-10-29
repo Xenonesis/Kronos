@@ -16,6 +16,24 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_dispatch_deep_link_and_os_flags_fallback() {
+        // Protocol deep links should fall back to GUI mode (None)
+        assert_eq!(parse_and_dispatch_from(["paseo", "kronos://auth/callback?code=xyz"]), None);
+        assert_eq!(parse_and_dispatch_from(["paseo", "paseo://workspace/open"]), None);
+
+        // Squirrel / OS / Windows shortcut flags should fall back to GUI mode (None)
+        assert_eq!(parse_and_dispatch_from(["paseo", "--allow-downgrade"]), None);
+        assert_eq!(parse_and_dispatch_from(["paseo", "/prefetch:1"]), None);
+        assert_eq!(parse_and_dispatch_from(["paseo", "--squirrel-firstrun"]), None);
+        assert_eq!(parse_and_dispatch_from(["paseo", "-psn_0_12345"]), None);
+        assert_eq!(parse_and_dispatch_from(["paseo", "--type=gpu-process"]), None);
+
+        // Truly invalid CLI commands/options should return Some(1)
+        assert_eq!(parse_and_dispatch_from(["paseo", "nonexistent-command-xyz"]), Some(1));
+        assert_eq!(parse_and_dispatch_from(["paseo", "--unsupported-flag-xyz"]), Some(1));
+    }
+
+    #[test]
     fn test_cli_dispatch_daemon_mode() {
         // Use an ephemeral test port to prevent collisions with default 6767
         let test_port = 16788;
@@ -88,6 +106,12 @@ mod tests {
 
         let result = parse_and_dispatch_from(args);
         assert_eq!(result, Some(0));
+
+        let matches = crate::kernel::cli::execute_search_in("WorkspaceSearchIndex", std::path::Path::new("."))
+            .expect("Search should succeed");
+        assert!(!matches.is_empty(), "Expected to find matches for WorkspaceSearchIndex");
+        let matched_search_rs = matches.iter().any(|m| m.path.contains("search.rs"));
+        assert!(matched_search_rs, "Expected search results to include nested file src/kernel/search.rs, found: {:?}", matches);
 
         let parsed = CliArgs::try_parse_from([
             "paseo",

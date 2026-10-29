@@ -283,12 +283,55 @@ async fn run_named_pipe(pipe_name: String, mut shutdown_rx: broadcast::Receiver<
     }
 }
 
+fn is_socket_file(meta: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        meta.file_type().is_socket()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        false
+    }
+}
+
+/// Validates whether a file path is safe to remove as a Unix domain socket.
+/// Permits removal only if:
+/// 1. The existing file is an actual Unix socket, OR
+/// 2. The path resides in a designated temporary directory (/tmp, /var/tmp, /dev/shm, or std::env::temp_dir())
+///    and is not a directory or symlink.
+pub(crate) fn is_safe_socket_path_to_remove(path: &std::path::Path) -> bool {
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        if is_socket_file(&meta) {
+            return true;
+        }
+
+        let is_temp = path.starts_with("/tmp")
+            || path.starts_with("/var/tmp")
+            || path.starts_with("/dev/shm")
+            || path.starts_with(std::env::temp_dir());
+
+        if is_temp && !meta.is_dir() && !meta.file_type().is_symlink() {
+            return true;
+        }
+    }
+    false
+}
+
+pub(crate) fn safe_remove_socket_file(path: &std::path::Path) {
+    if is_safe_socket_path_to_remove(path) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 #[cfg(not(windows))]
 async fn run_unix_socket(sock_path: String, mut shutdown_rx: broadcast::Receiver<()>) {
     use tokio::net::UnixListener;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-    let _ = std::fs::remove_file(&sock_path);
+    let p = std::path::Path::new(&sock_path);
+    safe_remove_socket_file(p);
     let listener = match UnixListener::bind(&sock_path) {
         Ok(l) => l,
         Err(_) => return,
@@ -338,5 +381,5 @@ async fn run_unix_socket(sock_path: String, mut shutdown_rx: broadcast::Receiver
             }
         }
     }
-    let _ = std::fs::remove_file(&sock_path);
+    safe_remove_socket_file(p);
 }

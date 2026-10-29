@@ -77,4 +77,24 @@ mod tests {
 
         daemon.stop().await;
     }
+
+    #[test]
+    fn test_safe_socket_path_validation() {
+        use crate::kernel::server::is_safe_socket_path_to_remove;
+
+        // Path in temp directory should be allowed
+        let temp_dir = std::env::temp_dir();
+        let safe_file = temp_dir.join("kronos_test_safe_socket.sock");
+        let _ = std::fs::write(&safe_file, b"test");
+        assert!(is_safe_socket_path_to_remove(&safe_file));
+        let _ = std::fs::remove_file(&safe_file);
+
+        // Path in current working directory (not temp, not socket) should NOT be allowed
+        let local_file = std::path::Path::new("Cargo.toml");
+        assert!(!is_safe_socket_path_to_remove(local_file));
+
+        // Non-existent path returns false
+        let nonexistent = std::path::Path::new("/nonexistent_path/fake.sock");
+        assert!(!is_safe_socket_path_to_remove(nonexistent));
+    }
 }
