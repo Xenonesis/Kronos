@@ -53,19 +53,11 @@ pub fn compute_file_diff_sync(old_text: &str, new_text: &str, context_lines: usi
         }
 
         let mut hunk_lines = Vec::new();
-        let mut old_start = 0;
         let mut old_lines = 0;
-        let mut new_start = 0;
         let mut new_lines = 0;
-        let mut first = true;
 
         for op in &group {
             for change in diff.iter_changes(op) {
-                if first {
-                    old_start = change.old_index().unwrap_or(0) + 1;
-                    new_start = change.new_index().unwrap_or(0) + 1;
-                    first = false;
-                }
 
                 let (line_type, old_no, new_no) = match change.tag() {
                     ChangeTag::Equal => {
@@ -105,6 +97,17 @@ pub fn compute_file_diff_sync(old_text: &str, new_text: &str, context_lines: usi
                 });
             }
         }
+        let first_op = group[0];
+        let old_start = if old_lines == 0 {
+            first_op.old_range().start
+        } else {
+            first_op.old_range().start + 1
+        };
+        let new_start = if new_lines == 0 {
+            first_op.new_range().start
+        } else {
+            first_op.new_range().start + 1
+        };
 
         let header = format!("@@ -{},{} +{},{} @@", old_start, old_lines, new_start, new_lines);
         hunks.push(DiffHunk {
@@ -150,6 +153,38 @@ mod tests {
         assert_eq!(res.additions, 2);
         assert_eq!(res.deletions, 1);
         assert!(!res.hunks.is_empty());
+    }
+    #[test]
+    fn test_compute_file_diff_mid_file_insertion_zero_context() {
+        let old = "line 1\nline 2\nline 3\nline 4\n";
+        let new = "line 1\nline 2\ninserted A\ninserted B\nline 3\nline 4\n";
+        let res = compute_file_diff_sync(old, new, 0);
+        assert_eq!(res.hunks.len(), 1);
+        let hunk = &res.hunks[0];
+        assert_eq!(hunk.old_start, 2);
+        assert_eq!(hunk.old_lines, 0);
+        assert_eq!(hunk.new_start, 3);
+        assert_eq!(hunk.new_lines, 2);
+        assert_eq!(hunk.header, "@@ -2,0 +3,2 @@");
+        assert_eq!(hunk.lines.len(), 2);
+        assert_eq!(hunk.lines[0].line_type, DiffLineType::Addition);
+        assert_eq!(hunk.lines[0].new_line_number, Some(3));
+        assert_eq!(hunk.lines[1].line_type, DiffLineType::Addition);
+        assert_eq!(hunk.lines[1].new_line_number, Some(4));
+    }
+
+    #[test]
+    fn test_compute_file_diff_mid_file_deletion_zero_context() {
+        let old = "line 1\nline 2\ndeleted A\nline 3\n";
+        let new = "line 1\nline 2\nline 3\n";
+        let res = compute_file_diff_sync(old, new, 0);
+        assert_eq!(res.hunks.len(), 1);
+        let hunk = &res.hunks[0];
+        assert_eq!(hunk.old_start, 3);
+        assert_eq!(hunk.old_lines, 1);
+        assert_eq!(hunk.new_start, 2);
+        assert_eq!(hunk.new_lines, 0);
+        assert_eq!(hunk.header, "@@ -3,1 +2,0 @@");
     }
 
     #[test]
