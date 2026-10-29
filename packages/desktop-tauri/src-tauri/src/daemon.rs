@@ -2,7 +2,46 @@ use std::env;
 use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
+use crate::kernel::server::{DaemonHandle, EmbeddedDaemon};
+
+static EMBEDDED_DAEMON: Mutex<Option<DaemonHandle>> = Mutex::new(None);
+static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .thread_name("kronos-embedded-daemon")
+        .build()
+        .expect("Failed to initialize EmbeddedDaemon Tokio runtime")
+});
+
+fn get_or_init_runtime() -> &'static tokio::runtime::Runtime {
+    &RUNTIME
+}
+
+#[allow(dead_code)]
+pub fn is_embedded_running() -> bool {
+    if let Ok(lock) = EMBEDDED_DAEMON.lock() {
+        lock.is_some()
+    } else {
+        false
+    }
+}
+
+pub fn stop_embedded() {
+    let handle = if let Ok(mut lock) = EMBEDDED_DAEMON.lock() {
+        lock.take()
+    } else {
+        None
+    };
+
+    if let Some(handle) = handle {
+        let rt = get_or_init_runtime();
+        rt.block_on(async move {
+            handle.stop().await;
+        });
+    }
+}
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -110,7 +149,7 @@ fn ensure_port_clean() {
         .output();
 }
 
-pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
+pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
     ensure_port_clean();
     let (work_dir, node_bin, script_path) = resolve_runtime()?;
 
@@ -180,6 +219,31 @@ pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
     // Daemon process spawned immediately without blocking thread sleep
     Some(child)
 }
+pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
+    let engine = env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "rust".to_string());
+    if engine.eq_ignore_ascii_case("node") {
+        stop_embedded();
+        start_node_daemon(server_id)
+    } else {
+        stop_embedded();
+        ensure_port_clean();
+        let rt = get_or_init_runtime();
+        rt.spawn(async move {
+            match EmbeddedDaemon::start().await {
+                Ok(handle) => {
+                    if let Ok(mut lock) = EMBEDDED_DAEMON.lock() {
+                        *lock = Some(handle);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[EmbeddedDaemon] Failed to start: {}", e);
+                }
+            }
+        });
+        None
+    }
+}
+
 
 pub fn stop_daemon(state: &DaemonState) {
     if let Ok(mut lock) = state.process.lock() {
@@ -195,18 +259,27 @@ pub fn stop_daemon(state: &DaemonState) {
             let _ = child.kill();
         }
     }
+    stop_embedded();
     ensure_port_clean();
 }
 
 pub fn restart_daemon(state: &DaemonState) -> bool {
     stop_daemon(state);
     let new_child = start_daemon(None);
-    if let Ok(mut lock) = state.process.lock() {
-        let success = new_child.is_some();
-        *lock = new_child;
-        success
+    let engine = env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "rust".to_string());
+    if engine.eq_ignore_ascii_case("node") {
+        if let Ok(mut lock) = state.process.lock() {
+            let success = new_child.is_some();
+            *lock = new_child;
+            success
+        } else {
+            false
+        }
     } else {
-        false
+        if let Ok(mut lock) = state.process.lock() {
+            *lock = None;
+        }
+        true
     }
 }
 
@@ -221,5 +294,28 @@ mod tests {
         };
         stop_daemon(&state);
         assert!(state.process.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_daemon_engine_switch_node() {
+        std::env::set_var("KRONOS_DAEMON_ENGINE", "node");
+        let state = DaemonState {
+            process: Mutex::new(None),
+        };
+        let _ = start_daemon(None);
+        stop_daemon(&state);
+        std::env::remove_var("KRONOS_DAEMON_ENGINE");
+    }
+
+    #[tokio::test]
+    async fn test_daemon_engine_switch_rust() {
+        std::env::set_var("KRONOS_DAEMON_ENGINE", "rust");
+        let state = DaemonState {
+            process: Mutex::new(None),
+        };
+        let child = start_daemon(None);
+        assert!(child.is_none(), "Rust engine boots embedded daemon without external Child process");
+        stop_daemon(&state);
+        std::env::remove_var("KRONOS_DAEMON_ENGINE");
     }
 }
