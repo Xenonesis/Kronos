@@ -480,10 +480,10 @@ fn main() {
 
     #[cfg(target_os = "windows")]
     {
-        // Prevent DWM occlusion freezes while allowing Chromium GPU watchdog and driver compatibility protections
+        // Prevent DWM occlusion freezes and Intel GPU driver watchdog timeouts
         std::env::set_var(
             "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-            "--disable-features=CalculateNativeWinOcclusion",
+            "--disable-features=CalculateNativeWinOcclusion --disable-gpu-watchdog",
         );
     }
 
@@ -870,7 +870,7 @@ try {{
                 .title("Kronos")
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(800.0, 600.0)
-                .shadow(true)
+                .shadow(false)
                 .visible(true)
                 .initialization_script(&bridge_script);
 

@@ -139,7 +139,23 @@ function copyNodePty(source: string, destination: string): void {
 }
 
 function isCompleteRuntime(directory: string): boolean {
-  return existsSync(path.join(directory, RUNTIME_MARKER));
+  if (!existsSync(path.join(directory, RUNTIME_MARKER))) return false;
+  if (!existsSync(path.join(directory, TERMINAL_WORKER_BUNDLE_NAME))) return false;
+  const ptyLib = path.join(directory, "node_modules", "node-pty", "lib");
+  if (!existsSync(path.join(ptyLib, "index.js"))) return false;
+  if (process.platform === "win32") {
+    if (!existsSync(path.join(ptyLib, "shared", "conout.js"))) return false;
+    const prebuildWin = path.join(
+      directory,
+      "node_modules",
+      "node-pty",
+      "prebuilds",
+      `${process.platform}-${process.arch}`,
+    );
+    const buildRelease = path.join(directory, "node_modules", "node-pty", "build", "Release");
+    if (!existsSync(prebuildWin) && !existsSync(buildRelease)) return false;
+  }
+  return true;
 }
 
 /**
