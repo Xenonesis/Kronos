@@ -188,11 +188,32 @@ pub mod windows_native {
 
     impl NativeIoRing {
         pub fn create(api: Arc<IoRingApi>, requested_queue_size: u32) -> Option<Self> {
+            let mut ring = NativeIoRing {
+                handle: std::ptr::null_mut(),
+                api,
+                queue_size: requested_queue_size,
+            };
+            if ring.reset() {
+                Some(ring)
+            } else {
+                None
+            }
+        }
+
+        /// Safely tears down the current HIORING handle via CloseIoRing (cancelling any queued
+        /// or in-flight operations so raw buffer pointers are not written to after being dropped)
+        /// and recreates a fresh ring handle via CreateIoRing.
+        pub fn reset(&mut self) -> bool {
             unsafe {
+                if !self.handle.is_null() {
+                    (self.api.close_ioring)(self.handle);
+                    self.handle = std::ptr::null_mut();
+                }
+
                 let mut caps = std::mem::zeroed::<IORING_CAPABILITIES>();
-                let hr = (api.query_capabilities)(&mut caps);
+                let hr = (self.api.query_capabilities)(&mut caps);
                 if hr != 0 {
-                    return None;
+                    return false;
                 }
 
                 let max_sub = if caps.MaxSubmissionQueueSize == 0 {
@@ -200,7 +221,7 @@ pub mod windows_native {
                 } else {
                     caps.MaxSubmissionQueueSize
                 };
-                let queue_size = requested_queue_size.clamp(16, max_sub);
+                let queue_size = self.queue_size.clamp(16, max_sub);
                 let comp_queue_size = queue_size.saturating_mul(2).clamp(
                     queue_size,
                     if caps.MaxCompletionQueueSize == 0 {
@@ -215,7 +236,7 @@ pub mod windows_native {
                     Advisory: 0,
                 };
                 let mut handle = std::ptr::null_mut();
-                let hr = (api.create_ioring)(
+                let hr = (self.api.create_ioring)(
                     1, // IORING_VERSION_1
                     flags,
                     queue_size,
@@ -224,14 +245,12 @@ pub mod windows_native {
                 );
 
                 if hr != 0 || handle.is_null() {
-                    return None;
+                    return false;
                 }
 
-                Some(NativeIoRing {
-                    handle,
-                    api,
-                    queue_size,
-                })
+                self.handle = handle;
+                self.queue_size = queue_size;
+                true
             }
         }
     }
@@ -355,12 +374,17 @@ impl IoRingBatchReader {
             IORING_HANDLE_REF_0,
         };
 
-        let ring = mutex.lock().map_err(|e| {
+        let mut ring = mutex.lock().map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::Other,
                 format!("IoRing mutex poisoned: {}", e),
             )
         })?;
+
+        if ring.handle.is_null() && !ring.reset() {
+            drop(ring);
+            return self.read_files_threadpool(paths);
+        }
 
         let chunk_limit = (ring.queue_size as usize).max(1);
         let mut results = Vec::with_capacity(paths.len());
@@ -421,6 +445,7 @@ impl IoRingBatchReader {
                 };
 
                 if hr != 0 {
+                    let _ = ring.reset();
                     return Err(windows_native::hresult_to_io_error(hr));
                 }
             }
@@ -432,11 +457,13 @@ impl IoRingBatchReader {
                 (ring.api.submit_ioring)(ring.handle, count, 30_000, &mut submitted)
             };
             if hr != 0 {
+                let _ = ring.reset();
                 return Err(windows_native::hresult_to_io_error(hr));
             }
 
             // 5. Pop completions (draining all submitted entries before error return)
             let mut first_error: Option<std::io::Error> = None;
+            let mut completions_popped = 0;
             for _ in 0..count {
                 let mut cqe = unsafe { std::mem::zeroed::<IORING_CQE>() };
                 let hr = unsafe {
@@ -446,8 +473,10 @@ impl IoRingBatchReader {
                     if first_error.is_none() {
                         first_error = Some(windows_native::hresult_to_io_error(hr));
                     }
-                    continue;
+                    break;
                 }
+                completions_popped += 1;
+
                 if cqe.ResultCode < 0 {
                     if first_error.is_none() {
                         first_error = Some(windows_native::hresult_to_io_error(cqe.ResultCode));
@@ -464,10 +493,20 @@ impl IoRingBatchReader {
                 }
             }
 
-            if let Some(err) = first_error {
-                return Err(err);
+            if completions_popped < count {
+                let _ = ring.reset();
+                if first_error.is_none() {
+                    first_error = Some(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "IoRing did not complete all operations in batch",
+                    ));
+                }
             }
 
+            if let Some(err) = first_error {
+                let _ = ring.reset();
+                return Err(err);
+            }
             results.extend(chunk_buffers);
         }
 
