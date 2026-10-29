@@ -5,6 +5,7 @@ mod daemon;
 mod editor;
 
 pub mod process_job;
+pub mod native_diff;
 mod notifications;
 mod tray;
 

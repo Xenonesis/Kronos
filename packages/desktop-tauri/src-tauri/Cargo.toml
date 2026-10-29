@@ -35,3 +35,6 @@ windows-sys = { version = "0.59", features = [
 [profile.release]
 incremental = true
 codegen-units = 16
+
+[profile.test]
+opt-level = 1
