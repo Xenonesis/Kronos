@@ -4,6 +4,7 @@
 mod daemon;
 mod editor;
 
+pub mod kernel;
 pub mod process_job;
 pub mod native_diff;
 pub mod native_pty;
