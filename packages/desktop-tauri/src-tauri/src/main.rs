@@ -18,6 +18,11 @@ use attachments::{
     copy_attachment_file, delete_attachment_file, garbage_collect_attachment_files,
     read_file_base64, write_attachment_base64, write_attachment_bytes,
 };
+use native_diff::compute_file_diff;
+use native_pty::{
+    kill_native_terminal, resize_native_terminal, spawn_native_terminal, write_native_terminal,
+    NativePtyManager,
+};
 
 use daemon::{start_daemon, stop_daemon, DaemonState};
 use dialogs::{pick_file, pick_folder};
@@ -574,6 +579,39 @@ try {{
         }}
       }}
     }},
+    nativeTerminal: {{
+      spawn: async function(id, options, onEvent) {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          const channel = new window.__TAURI_INTERNALS__.Channel();
+          channel.onmessage = onEvent;
+          return await window.__TAURI_INTERNALS__.invoke('spawn_native_terminal', {{ id, options, onEvent: channel }});
+        }}
+        throw new Error('Native terminal unavailable');
+      }},
+      write: async function(id, data) {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          return await window.__TAURI_INTERNALS__.invoke('write_native_terminal', {{ id, data }});
+        }}
+      }},
+      resize: async function(id, cols, rows) {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          return await window.__TAURI_INTERNALS__.invoke('resize_native_terminal', {{ id, cols, rows }});
+        }}
+      }},
+      kill: async function(id) {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          return await window.__TAURI_INTERNALS__.invoke('kill_native_terminal', {{ id }});
+        }}
+      }}
+    }},
+    nativeDiff: {{
+      compute: async function(oldText, newText, contextLines) {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          return await window.__TAURI_INTERNALS__.invoke('compute_file_diff', {{ oldText, newText, contextLines }});
+        }}
+        return null;
+      }}
+    }},
     invoke: async function(command, args) {{
       if (command === 'desktop_daemon_status' || command === 'start_desktop_daemon') {{
         try {{
@@ -843,6 +881,7 @@ try {{
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
+        .manage(NativePtyManager::new())
         .invoke_handler(tauri::generate_handler![
             open_in_editor,
             pick_folder,
@@ -864,7 +903,12 @@ try {{
             copy_attachment_file,
             read_file_base64,
             delete_attachment_file,
-            garbage_collect_attachment_files
+            garbage_collect_attachment_files,
+            spawn_native_terminal,
+            write_native_terminal,
+            resize_native_terminal,
+            kill_native_terminal,
+            compute_file_diff
         ])
         .setup(move |app| {
             let _ = setup_tray(app.handle());

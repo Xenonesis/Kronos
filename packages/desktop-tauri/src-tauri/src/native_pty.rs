@@ -160,7 +160,7 @@ impl NativePtyManager {
                         }
                     }
                     Err(e) => {
-                        if e.kind() == std::io::ErrorKind::BrokenPipe {
+                        if e.kind() == std::io::ErrorKind::BrokenPipe || e.raw_os_error() == Some(5) {
                             let _ = channel.send(TerminalEvent::Exit(None));
                         } else {
                             let _ = channel.send(TerminalEvent::Error(e.to_string()));
@@ -208,19 +208,23 @@ impl NativePtyManager {
 }
 
 #[tauri::command]
-pub fn spawn_native_terminal(
-    manager: tauri::State<NativePtyManager>,
+pub async fn spawn_native_terminal(
+    manager: tauri::State<'_, NativePtyManager>,
     id: String,
     options: TerminalSpawnOptions,
     on_event: Channel<TerminalEvent>,
 ) -> Result<(), String> {
     manager.spawn_terminal(id.clone(), options)?;
-    manager.attach_reader_channel(id, on_event)
+    if let Err(e) = manager.attach_reader_channel(id.clone(), on_event) {
+        let _ = manager.kill_terminal(&id);
+        return Err(e);
+    }
+    Ok(())
 }
 
 #[tauri::command]
 pub fn write_native_terminal(
-    manager: tauri::State<NativePtyManager>,
+    manager: tauri::State<'_, NativePtyManager>,
     id: String,
     data: String,
 ) -> Result<(), String> {
@@ -229,7 +233,7 @@ pub fn write_native_terminal(
 
 #[tauri::command]
 pub fn resize_native_terminal(
-    manager: tauri::State<NativePtyManager>,
+    manager: tauri::State<'_, NativePtyManager>,
     id: String,
     cols: u16,
     rows: u16,
@@ -239,7 +243,7 @@ pub fn resize_native_terminal(
 
 #[tauri::command]
 pub fn kill_native_terminal(
-    manager: tauri::State<NativePtyManager>,
+    manager: tauri::State<'_, NativePtyManager>,
     id: String,
 ) -> Result<(), String> {
     manager.kill_terminal(&id)
