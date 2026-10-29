@@ -35,7 +35,9 @@ import type {
 import type { TerminalClipboardWriter } from "../terminal/native-renderer/terminal-selection";
 import type { TerminalRendererReadyChange } from "../utils/terminal-renderer-readiness";
 import { openExternalUrl } from "../utils/open-external-url";
+import type { NativeTerminalBridge } from "@/desktop/host";
 import { focusWithRetries } from "../utils/web-focus";
+import { isMacUserAgent } from "@/utils/mac-user-agent";
 
 export interface TerminalEmulatorHandle {
   find?: TerminalFindHandle;
@@ -48,6 +50,7 @@ export interface TerminalEmulatorHandle {
   claimSize: () => void;
   showKeyboard: () => void;
   blur: () => void;
+  isNative?: () => boolean;
 }
 
 const HOST_DIV_STYLE: CSSProperties = {
@@ -98,6 +101,12 @@ interface TerminalEmulatorProps {
   ref: Ref<TerminalEmulatorHandle>;
   streamKey: string;
   supportsTerminalInputModeReplay: boolean;
+  sessionId?: string;
+  isLocal?: boolean;
+  cwd?: string;
+  command?: string;
+  args?: string[];
+  nativeTerminal?: NativeTerminalBridge;
   testId?: string;
   xtermTheme?: ITheme;
   scrollbackLines: number;
@@ -160,6 +169,12 @@ function isTerminalState(value: unknown): value is TerminalState {
 export default function TerminalEmulator({
   ref,
   streamKey,
+  sessionId,
+  isLocal = true,
+  cwd,
+  command,
+  args: spawnArgs,
+  nativeTerminal,
   testId = "terminal-surface",
   xtermTheme = {
     background: "#0b0b0b",
@@ -199,6 +214,22 @@ export default function TerminalEmulator({
   scrollbackLinesRef.current = scrollbackLines;
   fontFamilyRef.current = fontFamily;
   fontSizeRef.current = fontSize;
+  const nativeConfigRef = useRef({
+    sessionId,
+    isLocal,
+    cwd,
+    command,
+    args: spawnArgs,
+    nativeTerminal,
+  });
+  nativeConfigRef.current = {
+    sessionId,
+    isLocal,
+    cwd,
+    command,
+    args: spawnArgs,
+    nativeTerminal,
+  };
   const themeKey = useMemo(() => buildXtermThemeKey(xtermTheme), [xtermTheme]);
   const xtermThemeRef = useRef(xtermTheme);
   xtermThemeRef.current = xtermTheme;
@@ -322,6 +353,7 @@ export default function TerminalEmulator({
       blur: () => {
         runtimeRef.current?.blur();
       },
+      isNative: () => runtimeRef.current?.isNative ?? false,
     }),
     [pasteText],
   );
@@ -459,7 +491,20 @@ export default function TerminalEmulator({
       return () => {};
     }
 
-    const runtime = new TerminalEmulatorRuntime();
+    const nativeConfig = nativeConfigRef.current;
+    const resolvedSessionId =
+      nativeConfig.sessionId ??
+      (streamKey.includes(":") ? streamKey.split(":").pop() : streamKey) ??
+      streamKey;
+    const runtime = new TerminalEmulatorRuntime({
+      isMac: isMacUserAgent(),
+      sessionId: resolvedSessionId,
+      isLocal: nativeConfig.isLocal,
+      cwd: nativeConfig.cwd,
+      command: nativeConfig.command,
+      args: nativeConfig.args,
+      nativeTerminal: nativeConfig.nativeTerminal,
+    });
     runtimeRef.current = runtime;
     runtime.setCallbacks({
       callbacks: {
@@ -476,6 +521,12 @@ export default function TerminalEmulator({
       theme: mountedThemeRef.current,
       fontFamily: fontFamilyRef.current,
       fontSize: fontSizeRef.current,
+      sessionId: resolvedSessionId,
+      isLocal: nativeConfig.isLocal,
+      cwd: nativeConfig.cwd,
+      command: nativeConfig.command,
+      args: nativeConfig.args,
+      nativeTerminal: nativeConfig.nativeTerminal,
     });
     onRendererReadyChangeRef.current?.({ streamKey, isReady: true });
 

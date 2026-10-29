@@ -83,6 +83,15 @@ import {
   encodeTerminalOutput,
   TerminalEmulatorRuntime,
 } from "./terminal-emulator-runtime";
+import type { NativeTerminalBridge } from "@/desktop/host";
+
+interface GlobalWithDesktopBridge {
+  window?: {
+    paseoDesktop?: {
+      nativeTerminal?: NativeTerminalBridge;
+    };
+  };
+}
 
 interface StubTerminal {
   write: (data: string | Uint8Array, callback?: () => void) => void;
@@ -697,5 +706,133 @@ describe("terminal-emulator-runtime", () => {
     ).handleVisibilityRestore();
 
     expect(fitAndEmitResize).not.toHaveBeenCalled();
+  });
+  describe("nativeTerminal progressive integration", () => {
+    const savedWindow = globalThis.window;
+
+    beforeEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    afterEach(() => {
+      globalThis.window = savedWindow;
+    });
+
+    it("binds to native channel and does not invoke onInput when nativeTerminal is present and host is local", () => {
+      const mockNativeTerminal: NativeTerminalBridge = {
+        spawn: vi.fn().mockResolvedValue(undefined),
+        write: vi.fn().mockResolvedValue(undefined),
+        resize: vi.fn().mockResolvedValue(undefined),
+        kill: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const testGlobal = globalThis as unknown as GlobalWithDesktopBridge;
+      testGlobal.window = {
+        paseoDesktop: {
+          nativeTerminal: mockNativeTerminal,
+        },
+      };
+
+      const onInput = vi.fn();
+      const runtime = new TerminalEmulatorRuntime({ isLocal: true, sessionId: "session-local-1" });
+      runtime.setCallbacks({ callbacks: { onInput } });
+      const { terminal, writeTexts } = attachStubTerminal(runtime);
+      terminal.cols = 100;
+      terminal.rows = 35;
+
+      const bound = runtime.bindNativeTerminal({ sessionId: "session-local-1" });
+      expect(bound).toBe(true);
+      expect(runtime.isNative).toBe(true);
+      expect(runtime.isNativeSession()).toBe(true);
+      expect(runtime.getNativeSessionId()).toBe("session-local-1");
+
+      // Verified: nativeTerminal.spawn is called with terminal dimensions
+      expect(mockNativeTerminal.spawn).toHaveBeenCalledTimes(1);
+      const spawnCall = vi.mocked(mockNativeTerminal.spawn).mock.calls[0];
+      expect(spawnCall[0]).toBe("session-local-1");
+      expect(spawnCall[1]).toMatchObject({ cols: 100, rows: 35 });
+
+      // Verified: received channel data feeds directly to terminal.write
+      const onEvent = spawnCall[2];
+      onEvent({ type: "data", data: "\x1b[32mhello from native pty\x1b[0m\r\n" });
+      expect(writeTexts).toContain("\x1b[32mhello from native pty\x1b[0m\r\n");
+
+      // Verified: keystrokes forward directly to nativeTerminal.write and do NOT fire onInput (zero WebSocket messages)
+      runtime.handleInput("uname -a\r");
+      expect(mockNativeTerminal.write).toHaveBeenCalledWith("session-local-1", "uname -a\r");
+      expect(onInput).not.toHaveBeenCalled();
+
+      // Verified: resize forwards directly to nativeTerminal.resize
+      (runtime as unknown as { lastSize: { rows: number; cols: number } | null }).lastSize = null;
+      (runtime as unknown as { terminal: StubTerminal | null }).terminal = {
+        ...terminal,
+        cols: 140,
+        rows: 45,
+      };
+
+      // Trigger resize through fitAndEmitResize probe
+      (
+        runtime as unknown as {
+          fitAndEmitResize: ((input?: { forceRefresh?: boolean }) => void) | null;
+        }
+      ).fitAndEmitResize = (_input) => {
+        void mockNativeTerminal.resize("session-local-1", 140, 45);
+      };
+      runtime.resize({ forceRefresh: true });
+      expect(mockNativeTerminal.resize).toHaveBeenCalledWith("session-local-1", 140, 45);
+
+      // Verified: unmount kills native session
+      runtime.unmount();
+      expect(mockNativeTerminal.kill).toHaveBeenCalledWith("session-local-1");
+      expect(runtime.isNative).toBe(false);
+    });
+
+    it("falls back seamlessly to WebSocket path when connecting to a remote relay server", () => {
+      const mockNativeTerminal: NativeTerminalBridge = {
+        spawn: vi.fn().mockResolvedValue(undefined),
+        write: vi.fn().mockResolvedValue(undefined),
+        resize: vi.fn().mockResolvedValue(undefined),
+        kill: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const testGlobal = globalThis as unknown as GlobalWithDesktopBridge;
+      testGlobal.window = {
+        paseoDesktop: {
+          nativeTerminal: mockNativeTerminal,
+        },
+      };
+
+      const onInput = vi.fn();
+      const runtime = new TerminalEmulatorRuntime({
+        isLocal: false,
+        sessionId: "session-remote-1",
+      });
+      runtime.setCallbacks({ callbacks: { onInput } });
+      attachStubTerminal(runtime);
+
+      expect(runtime.isNative).toBe(false);
+
+      // User input forwards to WebSocket callback when remote
+      runtime.handleInput("git status\r");
+      expect(mockNativeTerminal.write).not.toHaveBeenCalled();
+      expect(onInput).toHaveBeenCalledWith("git status\r");
+    });
+
+    it("falls back seamlessly to WebSocket path when nativeTerminal bridge is absent", () => {
+      const testGlobal = globalThis as unknown as GlobalWithDesktopBridge;
+      testGlobal.window = undefined;
+
+      const onInput = vi.fn();
+      const runtime = new TerminalEmulatorRuntime({ isLocal: true, sessionId: "session-web" });
+      runtime.setCallbacks({ callbacks: { onInput } });
+      attachStubTerminal(runtime);
+
+      const bound = runtime.bindNativeTerminal({ sessionId: "session-web" });
+      expect(bound).toBe(false);
+      expect(runtime.isNative).toBe(false);
+
+      runtime.handleInput("top\r");
+      expect(onInput).toHaveBeenCalledWith("top\r");
+    });
   });
 });

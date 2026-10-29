@@ -367,6 +367,8 @@ export function TerminalPane({
   }, [filePastes, isConnected, reportFilePasteFailure, t]);
   // Only the desktop app's own daemon can read files on this machine by path.
   const isLocalHost = useIsLocalDaemon(serverId);
+  const isNativeTerminal =
+    typeof window !== "undefined" && Boolean(window.paseoDesktop?.nativeTerminal) && isLocalHost;
   useBlockMobilePanelOpenGestures(isMobile && isWorkspaceFocused && isPaneFocused && hasSelection);
   const emulatorRef = useRef<TerminalEmulatorHandle>(null);
   const findRef = useRef<TerminalPaneFindHandle>(null);
@@ -645,10 +647,9 @@ export function TerminalPane({
     setIsAttaching(false);
     setStreamError(null);
 
-    if (!client || !isConnected) {
+    if (!client || !isConnected || isNativeTerminal) {
       return;
     }
-
     const controller = new TerminalStreamController({
       client,
       getPreferredSize: getPreferredStreamSize,
@@ -678,6 +679,7 @@ export function TerminalPane({
     handleStreamSnapshot,
     handleStreamExit,
     isConnected,
+    isNativeTerminal,
   ]);
 
   useEffect(() => {
@@ -825,7 +827,7 @@ export function TerminalPane({
 
   const handleTerminalData = useCallback(
     async (data: string) => {
-      if (data.length === 0) {
+      if (data.length === 0 || isNativeTerminal) {
         return;
       }
       // Ctrl+C abandons file pastes that have not landed yet.
@@ -881,6 +883,7 @@ export function TerminalPane({
       modifiers,
       sendTerminalKey,
       enqueuePendingTerminalInput,
+      isNativeTerminal,
     ],
   );
 
@@ -948,6 +951,9 @@ export function TerminalPane({
       },
     });
     let sent = false;
+    if (isNativeTerminal) {
+      return;
+    }
     if (client && terminalId && claim.shouldSend) {
       lastSentTerminalSizeRef.current = nextSize;
       client.sendTerminalInput(terminalId, {
@@ -1190,7 +1196,7 @@ export function TerminalPane({
     terminalStreamKey,
   });
 
-  if (!client || !isConnected) {
+  if ((!client || !isConnected) && !isNativeTerminal) {
     return (
       <View style={styles.centerState}>
         <Text style={styles.stateText}>{t("workspace.terminal.hostDisconnected")}</Text>
@@ -1207,6 +1213,9 @@ export function TerminalPane({
             ref={emulatorRef}
             dom={TERMINAL_EMULATOR_DOM_PROPS}
             streamKey={terminalStreamKey}
+            sessionId={terminalId}
+            isLocal={isLocalHost}
+            cwd={cwd}
             supportsTerminalInputModeReplay={supportsTerminalInputModeReplay}
             testId="terminal-surface"
             xtermTheme={xtermTheme}

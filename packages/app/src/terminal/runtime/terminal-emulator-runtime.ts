@@ -35,6 +35,7 @@ import { isMacUserAgent } from "@/utils/mac-user-agent";
 import { resolveTerminalFontFamily, resolveTerminalFontSize } from "./terminal-font";
 import { imageExtension, readTerminalFile, type TerminalFile } from "../file-paste";
 
+import type { NativeTerminalBridge, TerminalSpawnOptions, TerminalEvent } from "@/desktop/host";
 export type TerminalOutputData = Uint8Array;
 
 export interface TerminalFindHandle {
@@ -60,6 +61,22 @@ export interface TerminalEmulatorRuntimeMountInput {
   theme: ITheme;
   fontFamily?: string;
   fontSize?: number;
+  sessionId?: string;
+  isLocal?: boolean;
+  cwd?: string;
+  command?: string;
+  args?: string[];
+  nativeTerminal?: NativeTerminalBridge;
+}
+
+export interface TerminalEmulatorRuntimeOptions {
+  isMac?: boolean;
+  sessionId?: string;
+  isLocal?: boolean;
+  cwd?: string;
+  command?: string;
+  args?: string[];
+  nativeTerminal?: NativeTerminalBridge;
 }
 
 export interface TerminalEmulatorRuntimeCallbacks {
@@ -131,8 +148,8 @@ interface TerminalEmulatorRuntimeDisposables {
   disposeFitAddon: () => void;
   disposeWebglAddon: () => void;
   disposeTerminal: () => void;
+  disposeNative?: () => void;
 }
-
 interface TerminalOutputOperation {
   type: "write" | "clear" | "snapshot";
   data: TerminalOutputData;
@@ -225,10 +242,124 @@ function findFileOnlyPaste(transfer: DataTransfer | null): File | null {
 }
 
 export class TerminalEmulatorRuntime {
+  private readonly options: TerminalEmulatorRuntimeOptions & FindShortcutPlatform;
+
   constructor(
-    private readonly options: FindShortcutPlatform = { isMac: isMacUserAgent() },
+    options: TerminalEmulatorRuntimeOptions = {},
     private readonly clipboard: TerminalClipboard = browserClipboard,
-  ) {}
+  ) {
+    this.options = {
+      ...options,
+      isMac: options.isMac ?? isMacUserAgent(),
+    };
+  }
+
+  private isNativeActive = false;
+  private nativeTerminal: NativeTerminalBridge | null = null;
+  private nativeSessionId: string | null = null;
+
+  get isNative(): boolean {
+    return this.isNativeActive;
+  }
+
+  isNativeSession(): boolean {
+    return this.isNativeActive;
+  }
+
+  getNativeSessionId(): string | null {
+    return this.nativeSessionId;
+  }
+
+  bindNativeTerminal(input: {
+    sessionId: string;
+    nativeTerminal?: NativeTerminalBridge;
+    cwd?: string;
+    command?: string;
+    args?: string[];
+  }): boolean {
+    const bridge =
+      input.nativeTerminal ??
+      this.options.nativeTerminal ??
+      (typeof window !== "undefined" ? window.paseoDesktop?.nativeTerminal : undefined);
+
+    if (!bridge) {
+      this.isNativeActive = false;
+      this.nativeTerminal = null;
+      this.nativeSessionId = null;
+      return false;
+    }
+
+    this.isNativeActive = true;
+    this.nativeTerminal = bridge;
+    this.nativeSessionId = input.sessionId;
+
+    const cols = this.terminal?.cols ?? 80;
+    const rows = this.terminal?.rows ?? 24;
+
+    const spawnOptions: TerminalSpawnOptions = {
+      cols,
+      rows,
+      cwd: input.cwd ?? this.options.cwd,
+      command: input.command ?? this.options.command,
+      args: input.args ?? this.options.args ?? [],
+    };
+
+    void bridge.spawn(input.sessionId, spawnOptions, (event: TerminalEvent) => {
+      if (!this.isNativeActive) {
+        return;
+      }
+      if (event.type === "data") {
+        this.terminal?.write(event.data);
+      } else if (event.type === "error") {
+        this.terminal?.write(`\r\n\x1b[31m[Error: ${event.data}]\x1b[0m\r\n`);
+      }
+    });
+
+    return true;
+  }
+  private maybeBindNativeTerminal(input: TerminalEmulatorRuntimeMountInput): void {
+    const nativeBridge =
+      input.nativeTerminal ??
+      this.options.nativeTerminal ??
+      (typeof window !== "undefined" ? window.paseoDesktop?.nativeTerminal : undefined);
+
+    const isLocal = input.isLocal ?? this.options.isLocal ?? true;
+    if (nativeBridge && isLocal) {
+      const sessionId = input.sessionId ?? this.options.sessionId ?? "default";
+      this.bindNativeTerminal({
+        sessionId,
+        nativeTerminal: nativeBridge,
+        cwd: input.cwd ?? this.options.cwd,
+        command: input.command ?? this.options.command,
+        args: input.args ?? this.options.args,
+      });
+    }
+  }
+  private maybeResizeNativeTerminal(cols: number, rows: number): void {
+    if (this.isNativeActive && this.nativeTerminal && this.nativeSessionId) {
+      void this.nativeTerminal.resize(this.nativeSessionId, cols, rows);
+    }
+  }
+
+  disposeNativeTerminal(): void {
+    if (this.isNativeActive && this.nativeTerminal && this.nativeSessionId) {
+      void this.nativeTerminal.kill(this.nativeSessionId);
+    }
+    this.isNativeActive = false;
+    this.nativeTerminal = null;
+    this.nativeSessionId = null;
+  }
+
+  handleInput(data: string): void {
+    if (this.suppressInput) {
+      return;
+    }
+    if (this.isNativeActive && this.nativeTerminal && this.nativeSessionId) {
+      void this.nativeTerminal.write(this.nativeSessionId, data);
+      return;
+    }
+    this.callbacks.onInput?.(data);
+  }
 
   private callbacks: TerminalEmulatorRuntimeCallbacks = {};
   private pendingModifiers: PendingTerminalModifiers = {
@@ -686,6 +817,7 @@ export class TerminalEmulatorRuntime {
 
       this.lastSize = { rows: nextRows, cols: nextCols };
       this.refreshVisibleRows();
+      this.maybeResizeNativeTerminal(nextCols, nextRows);
       this.callbacks.onResize?.(
         createTerminalResizeEvent({
           rows: nextRows,
@@ -699,11 +831,10 @@ export class TerminalEmulatorRuntime {
 
     fitAndEmitResize({ forceRefresh: true, shouldClaim: false });
 
+    this.maybeBindNativeTerminal(input);
+
     const inputDisposable = terminal.onData((data) => {
-      if (this.suppressInput) {
-        return;
-      }
-      this.callbacks.onInput?.(data);
+      this.handleInput(data);
     });
 
     this.attachKeyEventHandler(terminal);
@@ -831,6 +962,9 @@ export class TerminalEmulatorRuntime {
         localFileLinkProvider.dispose();
         terminal.dispose();
       },
+      disposeNative: () => {
+        this.disposeNativeTerminal();
+      },
     };
 
     this.cleanup = () => {
@@ -847,6 +981,7 @@ export class TerminalEmulatorRuntime {
       disposables.disposeFitAddon();
       disposables.disposeWebglAddon();
       disposables.disposeTerminal();
+      disposables.disposeNative?.();
       disposables.restoreDocumentStyles();
       disposables.restoreViewportStyles();
     };
@@ -1048,6 +1183,7 @@ export class TerminalEmulatorRuntime {
     }
     this.hasUngatedWrites = false;
 
+    this.disposeNativeTerminal();
     this.cleanup?.();
     this.cleanup = null;
     if (window.__paseoTerminal === this.terminal) {

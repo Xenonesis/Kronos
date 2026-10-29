@@ -15,6 +15,7 @@ import type { TerminalClipboardWriter } from "../terminal/native-renderer/termin
 import type { TerminalFile } from "../terminal/file-paste";
 import type { PendingTerminalModifiers } from "../utils/terminal-keys";
 import type { TerminalRendererReadyChange } from "../utils/terminal-renderer-readiness";
+import type { NativeTerminalBridge } from "@/desktop/host";
 
 export interface TerminalEmulatorHandle {
   find?: TerminalFindHandle;
@@ -27,6 +28,7 @@ export interface TerminalEmulatorHandle {
   claimSize: () => void;
   showKeyboard: () => void;
   blur: () => void;
+  isNative?: () => boolean;
 }
 
 export interface TerminalEmulatorProps {
@@ -34,6 +36,12 @@ export interface TerminalEmulatorProps {
   ref: Ref<TerminalEmulatorHandle>;
   streamKey: string;
   supportsTerminalInputModeReplay: boolean;
+  sessionId?: string;
+  isLocal?: boolean;
+  cwd?: string;
+  command?: string;
+  args?: string[];
+  nativeTerminal?: NativeTerminalBridge;
   testId?: string;
   xtermTheme?: ITheme;
   scrollbackLines: number;
