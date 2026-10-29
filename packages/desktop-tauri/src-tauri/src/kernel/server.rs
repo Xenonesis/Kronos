@@ -307,18 +307,31 @@ pub(crate) fn is_safe_socket_path_to_remove(path: &std::path::Path) -> bool {
             return true;
         }
 
-        let is_temp = path.starts_with("/tmp")
-            || path.starts_with("/var/tmp")
-            || path.starts_with("/dev/shm")
-            || path.starts_with(std::env::temp_dir());
+        if meta.is_dir() || meta.file_type().is_symlink() {
+            return false;
+        }
 
-        if is_temp && !meta.is_dir() && !meta.file_type().is_symlink() {
-            return true;
+        if let Ok(canonical_path) = path.canonicalize() {
+            let allowed_temp_dirs = [
+                std::env::temp_dir(),
+                std::path::PathBuf::from("/tmp"),
+                std::path::PathBuf::from("/var/tmp"),
+                std::path::PathBuf::from("/dev/shm"),
+            ];
+
+            for temp_dir in &allowed_temp_dirs {
+                if let Ok(canonical_temp) = temp_dir.canonicalize() {
+                    if canonical_path.starts_with(&canonical_temp) {
+                        return true;
+                    }
+                }
+            }
         }
     }
     false
 }
 
+#[allow(dead_code)]
 pub(crate) fn safe_remove_socket_file(path: &std::path::Path) {
     if is_safe_socket_path_to_remove(path) {
         let _ = std::fs::remove_file(path);

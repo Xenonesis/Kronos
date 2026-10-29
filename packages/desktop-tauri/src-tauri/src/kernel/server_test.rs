@@ -93,6 +93,14 @@ mod tests {
         let local_file = std::path::Path::new("Cargo.toml");
         assert!(!is_safe_socket_path_to_remove(local_file));
 
+        // Path attempting traversal escape outside temp directory should NOT be allowed
+        // e.g., <temp_dir>/../<current_dir>/Cargo.toml resolves to Cargo.toml
+        let traversal_path = temp_dir.join("..").join("kronos_test_traversal.sock");
+        assert!(!is_safe_socket_path_to_remove(&traversal_path));
+
+        let unix_style_traversal = std::path::Path::new("/tmp/../var/log/important.txt");
+        assert!(!is_safe_socket_path_to_remove(unix_style_traversal));
+
         // Non-existent path returns false
         let nonexistent = std::path::Path::new("/nonexistent_path/fake.sock");
         assert!(!is_safe_socket_path_to_remove(nonexistent));
