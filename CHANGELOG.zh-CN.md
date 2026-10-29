@@ -1,6 +1,17 @@
 # 更新日志
 
-## 0.14.0-beta.1 - 2026-10-27
+尚未发布。以下变更已合入 `main`，但不包含在 0.14.0-beta.2 中；下一个版本的条目会包含它们。
+
+新增：
+
+- 在 setup 和 Agent 启动前，使用内置的 `worktree-include` 插件将 `.worktreeinclude` 选中的被 gitignore 忽略的文件复制到新工作树 ([#8100](https://github.com/getpaseo/paseo/pull/8100))
+- 插件可通过 `worktree.create.before` 选择工作树路径和创建选项，自定义位置的工作树支持列出、归档、删除和恢复；附带同级目录放置示例 ([#8117](https://github.com/getpaseo/paseo/pull/8117))
+
+改进：
+
+- 新增采用 `subject.operation.position` 命名的 `server.addHook` 和在 setup 及 Agent 之前等待的 `worktree.create.after` 钩子，弃用原有的插件钩子注册方法并保留原有行为 ([#8081](https://github.com/getpaseo/paseo/pull/8081))
+
+## 0.14.0-beta.2 - 2026-10-28
 
 插件现在可以为单个 Agent 添加工具，并在会话打开时配置其 MCP 服务器。
 
@@ -11,7 +22,7 @@
 ### 新增
 
 - 插件现在可以为特定 Agent 提供工具 ([#7938](https://github.com/getpaseo/paseo/pull/7938))
-- 新增已完成对话轮次的折叠和展开功能 ([#7785](https://github.com/getpaseo/paseo/pull/7785), [#7990](https://github.com/getpaseo/paseo/pull/7990), [#8026](https://github.com/getpaseo/paseo/pull/8026) by [@akaready](https://github.com/akaready), [@Dey11](https://github.com/Dey11), [@Sebeb](https://github.com/Sebeb), [@Waishnav](https://github.com/Waishnav))
+- 新增“聊天显示”设置，可将工具调用分组或折叠已完成的对话轮次 ([#7785](https://github.com/getpaseo/paseo/pull/7785), [#7990](https://github.com/getpaseo/paseo/pull/7990), [#8026](https://github.com/getpaseo/paseo/pull/8026), [#8042](https://github.com/getpaseo/paseo/pull/8042), [#8109](https://github.com/getpaseo/paseo/pull/8109) by [@akaready](https://github.com/akaready), [@Dey11](https://github.com/Dey11), [@Sebeb](https://github.com/Sebeb), [@Waishnav](https://github.com/Waishnav))
 - 插件现在可以在每次打开 Agent 会话时添加 MCP 服务器 ([#7983](https://github.com/getpaseo/paseo/pull/7983))
 - 语音设置新增可下载的本地语音模型，支持使用 SenseVoice 和 Whisper 进行中文听写 ([#7295](https://github.com/getpaseo/paseo/pull/7295))
 - 新增 Enter 或 ⌘/Ctrl+Enter 发送消息的快捷键选项 ([#5503](https://github.com/getpaseo/paseo/pull/5503) by [@lukelabonte](https://github.com/lukelabonte))
@@ -21,10 +32,9 @@
 
 ### 改进
 
-- 新增采用 `subject.operation.position` 命名的 `server.addHook` 和在 setup 及 Agent 之前等待的 `worktree.create.after` 钩子，弃用原有的插件钩子注册方法并保留原有行为 ([#8081](https://github.com/getpaseo/paseo/pull/8081))
-
 - 符合条件的 Agent 运行时空闲一小时后释放，下次发送提示词时恢复已保存的会话 ([#7782](https://github.com/getpaseo/paseo/pull/7782))
 - 在子 Agent 窗格中新增返回父 Agent 的链接 ([#7784](https://github.com/getpaseo/paseo/pull/7784))
+- 在手机上从子 Agent 列表打开子 Agent 时直接替换列表，点按“返回”可回到列表 ([#8093](https://github.com/getpaseo/paseo/pull/8093))
 - 问题卡片新增可点击链接和可选中的描述文本 ([#7419](https://github.com/getpaseo/paseo/pull/7419) by [@NoSync](https://github.com/NoSync))
 - 减少网页端长会话导入列表的操作卡顿 ([#7872](https://github.com/getpaseo/paseo/pull/7872) by [@royenheart](https://github.com/royenheart))
 - 增大手机上项目和工作区菜单按钮的点击区域 ([#7928](https://github.com/getpaseo/paseo/pull/7928))
@@ -50,10 +60,12 @@
 - 修复工作区外的文件夹链接使 Files 显示访问错误的问题 ([#7726](https://github.com/getpaseo/paseo/pull/7726) by [@jtomaszewski](https://github.com/jtomaszewski))
 - 修复手机上命令建议与不断增高的 Composer 重叠的问题 ([#7910](https://github.com/getpaseo/paseo/pull/7910))
 - 修复 Markdown 裸链接丢失端口或在路径冒号处截断的问题 ([#7859](https://github.com/getpaseo/paseo/pull/7859) by [@mariotaku](https://github.com/mariotaku))
-- 修复强调、链接和标题中行内代码的字号问题 ([#7889](https://github.com/getpaseo/paseo/pull/7889))
+- 修复强调、链接和标题中行内代码的字号问题 ([#7889](https://github.com/getpaseo/paseo/pull/7889), [#8088](https://github.com/getpaseo/paseo/pull/8088))
+- 修复宽度 600–719 的停靠布局使用紧凑导航尺寸、设置详情面板过窄的问题 ([#8052](https://github.com/getpaseo/paseo/pull/8052) by [@zeyugao](https://github.com/zeyugao))
 - 修复切换设置页面时丢失已选主机或侧栏滚动位置的问题 ([#7893](https://github.com/getpaseo/paseo/pull/7893), [#7899](https://github.com/getpaseo/paseo/pull/7899) by [@bingqilinweimaotai](https://github.com/bingqilinweimaotai), [@wangnan0916](https://github.com/wangnan0916))
 - 修复 OpenCode v2 子 Agent 行缺少模型和 token 详情的问题 ([#7799](https://github.com/getpaseo/paseo/pull/7799) by [@Davnn1](https://github.com/Davnn1))
 - 修复离开聊天后文件链接提示仍遮挡预览的问题 ([#7842](https://github.com/getpaseo/paseo/pull/7842))
+- 修复模型发现错误信息紧贴模型选择器边缘的问题 ([#8039](https://github.com/getpaseo/paseo/pull/8039) by [@ilteoood](https://github.com/ilteoood))
 - 修复模型选择器在打开设置后仍然显示的问题 ([#7783](https://github.com/getpaseo/paseo/pull/7783) by [@ragokan](https://github.com/ragokan))
 
 ### 说明

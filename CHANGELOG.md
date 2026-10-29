@@ -1,6 +1,17 @@
 # Changelog
 
-## 0.14.0-beta.1 - 2026-10-27
+Not released yet. These changes are on `main` but not in 0.14.0-beta.2; the next release entry includes them.
+
+Added:
+
+- Copy gitignored files selected by `.worktreeinclude` into new worktrees before setup and agents, using the built-in `worktree-include` plugin ([#8100](https://github.com/getpaseo/paseo/pull/8100))
+- Let plugins choose worktree paths and creation options through `worktree.create.before`, with listing, archive, deletion, and recovery at custom locations; includes a sibling-directory placement example ([#8117](https://github.com/getpaseo/paseo/pull/8117))
+
+Improved:
+
+- Added `server.addHook` with `subject.operation.position` names and the awaited `worktree.create.after` hook before setup and agents; deprecated the previous plugin hook registration methods without changing their behavior ([#8081](https://github.com/getpaseo/paseo/pull/8081))
+
+## 0.14.0-beta.2 - 2026-10-28
 
 Plugins can now add tools to individual agents and configure their MCP servers when sessions open.
 
@@ -10,10 +21,8 @@ Voice settings now let you configure speech providers and download local models 
 
 ### Added
 
-- Copy gitignored files selected by `.worktreeinclude` into new worktrees before setup and agents, using the built-in `worktree-include` plugin ([#8100](https://github.com/getpaseo/paseo/pull/8100))
-- Let plugins choose worktree paths and creation options through `worktree.create.before`, with listing, archive, deletion, and recovery at custom locations; includes a sibling-directory placement example ([#8117](https://github.com/getpaseo/paseo/pull/8117))
 - Let plugins give tools to specific agents ([#7938](https://github.com/getpaseo/paseo/pull/7938))
-- Added collapse and expand controls for completed conversation turns ([#7785](https://github.com/getpaseo/paseo/pull/7785), [#7990](https://github.com/getpaseo/paseo/pull/7990), [#8026](https://github.com/getpaseo/paseo/pull/8026) by [@akaready](https://github.com/akaready), [@Dey11](https://github.com/Dey11), [@Sebeb](https://github.com/Sebeb), [@Waishnav](https://github.com/Waishnav))
+- Added Chat display settings that group tool calls or collapse completed conversation turns ([#7785](https://github.com/getpaseo/paseo/pull/7785), [#7990](https://github.com/getpaseo/paseo/pull/7990), [#8026](https://github.com/getpaseo/paseo/pull/8026), [#8042](https://github.com/getpaseo/paseo/pull/8042), [#8109](https://github.com/getpaseo/paseo/pull/8109) by [@akaready](https://github.com/akaready), [@Dey11](https://github.com/Dey11), [@Sebeb](https://github.com/Sebeb), [@Waishnav](https://github.com/Waishnav))
 - Let plugins add MCP servers whenever an agent session opens ([#7983](https://github.com/getpaseo/paseo/pull/7983))
 - Added downloadable local speech models in Voice settings, including SenseVoice and Whisper for Chinese dictation ([#7295](https://github.com/getpaseo/paseo/pull/7295))
 - Added a choice of Enter or ⌘/Ctrl+Enter to send messages ([#5503](https://github.com/getpaseo/paseo/pull/5503) by [@lukelabonte](https://github.com/lukelabonte))
@@ -23,10 +32,9 @@ Voice settings now let you configure speech providers and download local models 
 
 ### Improved
 
-- Added `server.addHook` with `subject.operation.position` names and the awaited `worktree.create.after` hook before setup and agents; deprecated the previous plugin hook registration methods without changing their behavior ([#8081](https://github.com/getpaseo/paseo/pull/8081))
-
 - Release eligible agent runtimes after one idle hour, resuming the saved session on the next prompt ([#7782](https://github.com/getpaseo/paseo/pull/7782))
 - Added a link back to the parent in subagent panes ([#7784](https://github.com/getpaseo/paseo/pull/7784))
+- Opened subagents in place of the subagent list on phones, with Back returning to the list ([#8093](https://github.com/getpaseo/paseo/pull/8093))
 - Added clickable links and selectable descriptions to question cards ([#7419](https://github.com/getpaseo/paseo/pull/7419) by [@NoSync](https://github.com/NoSync))
 - Kept large Import session lists responsive on web ([#7872](https://github.com/getpaseo/paseo/pull/7872) by [@royenheart](https://github.com/royenheart))
 - Enlarged project and workspace menu buttons on phones ([#7928](https://github.com/getpaseo/paseo/pull/7928))
@@ -52,10 +60,12 @@ Voice settings now let you configure speech providers and download local models 
 - Fixed outside-folder links replacing Files with an access error ([#7726](https://github.com/getpaseo/paseo/pull/7726) by [@jtomaszewski](https://github.com/jtomaszewski))
 - Fixed command suggestions overlapping a growing Composer on phones ([#7910](https://github.com/getpaseo/paseo/pull/7910))
 - Fixed bare Markdown URLs losing ports or stopping at colons in paths ([#7859](https://github.com/getpaseo/paseo/pull/7859) by [@mariotaku](https://github.com/mariotaku))
-- Fixed inline code sizing inside emphasis, links and headings ([#7889](https://github.com/getpaseo/paseo/pull/7889))
+- Fixed inline code sizing inside emphasis, links and headings ([#7889](https://github.com/getpaseo/paseo/pull/7889), [#8088](https://github.com/getpaseo/paseo/pull/8088))
+- Fixed compact navigation sizes and a cramped Settings detail pane in docked windows 600–719 wide ([#8052](https://github.com/getpaseo/paseo/pull/8052) by [@zeyugao](https://github.com/zeyugao))
 - Fixed Settings losing the selected host or sidebar scroll position between sections ([#7893](https://github.com/getpaseo/paseo/pull/7893), [#7899](https://github.com/getpaseo/paseo/pull/7899) by [@bingqilinweimaotai](https://github.com/bingqilinweimaotai), [@wangnan0916](https://github.com/wangnan0916))
 - Fixed OpenCode v2 subagent rows missing model and token details ([#7799](https://github.com/getpaseo/paseo/pull/7799) by [@Davnn1](https://github.com/Davnn1))
 - Fixed file-link tooltips staying over the preview after leaving a chat ([#7842](https://github.com/getpaseo/paseo/pull/7842))
+- Fixed model discovery errors touching the model picker edges ([#8039](https://github.com/getpaseo/paseo/pull/8039) by [@ilteoood](https://github.com/ilteoood))
 - Fixed model selectors staying open over Settings ([#7783](https://github.com/getpaseo/paseo/pull/7783) by [@ragokan](https://github.com/ragokan))
 
 ### Notes
