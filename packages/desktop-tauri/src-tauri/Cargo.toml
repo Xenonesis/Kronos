@@ -28,6 +28,7 @@ tauri-plugin-updater = "2"
 base64 = "0.22"
 portable-pty = "0.8"
 similar = { version = "2.6", features = ["inline"] }
+gix = { version = "0.66", default-features = false, features = ["status", "worktree-mutation", "revision"] }
 windows-sys = { version = "0.59", features = [
     "Win32_System_JobObjects",
     "Win32_System_Threading",
