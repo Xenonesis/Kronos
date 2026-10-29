@@ -24,6 +24,11 @@ This specification establishes the **Kronos Hyper-Native Kernel (HNK)** — a si
 7. **Zero Frontend Churn**: Maintain full protocol parity with `packages/app` using automated type generation (`@getpaseo/protocol` $\to$ Rust `serde`) and dual-transport support (Tauri IPC for local, WebSocket for remote relay).
 8. **Multi-Call Universal Binary (Single 50MB Executable)**: The single `kronos.exe` operates as GUI Desktop app, headless daemon (`kronos daemon`), autonomous CLI agent runner (`kronos agent`), AST searcher (`kronos search`), or native Model Context Protocol server (`kronos mcp`).
 9. **CRDT Multi-Agent Concurrent Memory (`yrs`)**: Integrate Conflict-free Replicated Data Types (CRDT) so multiple AI agents and human users can concurrently edit the same files with zero merge conflicts or clobbered states.
+10. **Windows `IoRing` Asynchronous Kernel Disk I/O**: Leverage Windows 11 `IoRing` (Linux `io_uring` counterpart) to batch tens of thousands of file reads into a single submission queue, scanning 100,000-file repositories in ~15ms.
+11. **Native Embedded MCP Hub**: Expose core tools (`read_file`, `edit_ast`, `git_diff`, `execute_terminal`, `search_code`) as native Rust MCP tools at sub-microsecond invocation latencies.
+12. **Embedded Offline Voice-to-Code (`whisper.cpp`)**: Lightweight local speech recognition via DirectML and CPU AVX2 acceleration for instantaneous, offline voice prompt dictation.
+13. **Zero-Allocation Binary In-Place Serialization (`rkyv`)**: Direct in-place deserialization without heap allocation over memory-mapped rings.
+14. **Standalone Portable Single-File Target (`kronos-portable.exe`)**: Self-contained executable requiring zero installer, zero admin rights, and isolating state into `./.kronos-data/`.
 
 ---
 
@@ -147,6 +152,37 @@ This specification establishes the **Kronos Hyper-Native Kernel (HNK)** — a si
   - Every active buffer in the Shadow VFS is backed by a `yrs::Doc` containing a `yrs::Text` state.
   - Multiple agents (e.g. Claude modifying backend logic while OMP modifies frontend components) submit transactional diff updates (`yrs::Transact`).
   - Update states merge deterministically using state vectors without file locking, overwrite errors, or git merge conflicts.
+
+### 4.8 Windows `IoRing` Asynchronous Kernel Disk I/O
+
+- **Kernel Queue Rings**:
+  - Utilizes Windows 11 `IORING` APIs through `windows-sys`.
+  - Pre-registers file buffers and submits batched `IORING_OP_READ` operations concurrently.
+  - Eliminates per-file system call context switches, delivering up to 10x faster AST indexing over traditional `ReadFile`.
+
+### 4.9 Native Embedded MCP Hub
+
+- **Model Context Protocol Implementation (`kernel/mcp.rs`)**:
+  - Implements the MCP JSON-RPC 2.0 specification over standard I/O and in-process channels.
+  - Directly maps LLM tool calls (`read_file`, `apply_diff`, `ast_grep`, `terminal_exec`) to native Rust functions without spinning up Python or Node wrapper processes.
+
+### 4.10 Embedded Offline Voice-to-Code (`whisper.cpp`)
+
+- **DirectML / AVX2 Speech Pipeline (`kernel/speech.rs`)**:
+  - Integrates quantized Whisper models (tiny.en / base.en) via native C++ bindings with fallback to AVX2/FMA CPU kernels.
+  - Microphone audio buffers stream directly into the transcriber, emitting transcribed prompt tokens with sub-100ms latency without cloud API calls.
+
+### 4.11 Zero-Allocation In-Place Serialization (`rkyv`)
+
+- **Zero-Copy Memory-Mapped Protocol**:
+  - Replaces traditional serialization for high-volume telemetry buffers with `rkyv`.
+  - Deserialization is a non-allocating memory cast (`rkyv::access`), achieving 0 byte heap allocations during high-frequency token streams.
+
+### 4.12 Standalone Portable Single-File Executable (`kronos-portable.exe`)
+
+- **Zero-Install Deployment**:
+  - Compiles an optional portable target that detects a `./.kronos-data/` directory adjacent to the binary.
+  - Enables zero-admin-rights usage from USB drives or enterprise workstations without NSIS installation.
 
 ---
 

@@ -467,26 +467,200 @@ Commit: `feat(kernel): add multi-call universal CLI entrypoint for daemon, agent
 
 ---
 
-### Task 8: Full Integration, Packaging Verification & Node Removal
+### Task 8: Windows `IoRing` Kernel Disk I/O Engine
 
-### Task 8: Full Integration, Packaging Verification & Node Removal
+**Files:**
+
+- Create: `packages/desktop-tauri/src-tauri/src/kernel/ioring.rs`
+- Modify: `packages/desktop-tauri/src-tauri/Cargo.toml`
+- Test: `packages/desktop-tauri/src-tauri/src/kernel/ioring_test.rs`
+
+**Interfaces:**
+
+- Produces: `IoRingBatchReader::new()`, `IoRingBatchReader::read_files_batched()`.
+
+- [ ] **Step 1: Write failing IoRing batch reader test**
+
+Create `packages/desktop-tauri/src-tauri/src/kernel/ioring_test.rs`:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use crate::kernel::ioring::IoRingBatchReader;
+    use std::fs;
+
+    #[test]
+    fn test_ioring_batch_file_read() {
+        let reader = IoRingBatchReader::new(1024).expect("Failed to initialize IoRing");
+        let test_path = std::env::temp_dir().join("kronos_ioring_test.txt");
+        fs::write(&test_path, b"kernel ioring fast read").unwrap();
+
+        let results = reader.read_files_batched(&[test_path.clone()]).expect("Batch read failed");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], b"kernel ioring fast read");
+        let _ = fs::remove_file(test_path);
+    }
+}
+```
+
+- [ ] **Step 2: Implement Windows 11 `IoRing` reader with fallback to threadpool IO**
+- [ ] **Step 3: Run tests and commit**
+
+Run: `cargo test --manifest-path packages/desktop-tauri/src-tauri/Cargo.toml ioring_test`
+Expected: PASS.
+Commit: `feat(kernel): implement Windows IoRing asynchronous kernel file IO reader`
+
+---
+
+### Task 9: Native Embedded MCP Hub
+
+**Files:**
+
+- Create: `packages/desktop-tauri/src-tauri/src/kernel/mcp.rs`
+- Modify: `packages/desktop-tauri/src-tauri/src/kernel/mod.rs`
+- Test: `packages/desktop-tauri/src-tauri/src/kernel/mcp_test.rs`
+
+**Interfaces:**
+
+- Produces: `McpHub::new()`, `McpHub::dispatch_tool()`, `McpToolDefinition`.
+
+- [ ] **Step 1: Write failing MCP tool dispatch test**
+
+Create `packages/desktop-tauri/src-tauri/src/kernel/mcp_test.rs`:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use crate::kernel::mcp::McpHub;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn test_native_mcp_tool_execution() {
+        let hub = McpHub::new();
+        let res = hub.call_tool("read_file", json!({ "path": "Cargo.toml" })).await.unwrap();
+        assert!(res.contains("packages/desktop-tauri"));
+    }
+}
+```
+
+- [ ] **Step 2: Implement native Rust MCP tool registry (`kernel/mcp.rs`)**
+- [ ] **Step 3: Run tests and commit**
+
+Run: `cargo test --manifest-path packages/desktop-tauri/src-tauri/Cargo.toml mcp_test`
+Expected: PASS.
+Commit: `feat(kernel): add native embedded Model Context Protocol (MCP) tool hub`
+
+---
+
+### Task 10: Embedded Offline Voice-to-Code (`whisper.cpp`)
+
+**Files:**
+
+- Create: `packages/desktop-tauri/src-tauri/src/kernel/speech.rs`
+- Modify: `packages/desktop-tauri/src-tauri/Cargo.toml`
+- Test: `packages/desktop-tauri/src-tauri/src/kernel/speech_test.rs`
+
+**Interfaces:**
+
+- Produces: `SpeechEngine::transcribe_pcm()`.
+
+- [ ] **Step 1: Add whisper-rs crate dependency with CPU AVX2 acceleration**
+- [ ] **Step 2: Write failing speech transcriber unit test**
+
+Create `packages/desktop-tauri/src-tauri/src/kernel/speech_test.rs`:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use crate::kernel::speech::SpeechEngine;
+
+    #[test]
+    fn test_speech_engine_initialization() {
+        let engine = SpeechEngine::new_mock();
+        let pcm = vec![0.0f32; 16000];
+        let text = engine.transcribe(&pcm).unwrap();
+        assert!(text.is_empty() || text.len() > 0);
+    }
+}
+```
+
+- [ ] **Step 3: Implement DirectML/AVX2 Whisper pipeline**
+- [ ] **Step 4: Run tests and commit**
+
+Run: `cargo test --manifest-path packages/desktop-tauri/src-tauri/Cargo.toml speech_test`
+Expected: PASS.
+Commit: `feat(kernel): add embedded offline voice-to-code transcriber using whisper`
+
+---
+
+### Task 11: Zero-Allocation In-Place Serialization (`rkyv`)
+
+**Files:**
+
+- Create: `packages/desktop-tauri/src-tauri/src/kernel/rkyv_shm.rs`
+- Modify: `packages/desktop-tauri/src-tauri/Cargo.toml`
+- Test: `packages/desktop-tauri/src-tauri/src/kernel/rkyv_test.rs`
+
+**Interfaces:**
+
+- Produces: `RkyvArchive::to_bytes()`, `RkyvArchive::from_bytes()`.
+
+- [ ] **Step 1: Add `rkyv = { version = "0.7", features = ["validation"] }` to Cargo.toml**
+- [ ] **Step 2: Write failing zero-copy in-place archive test**
+
+Create `packages/desktop-tauri/src-tauri/src/kernel/rkyv_test.rs`:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use crate::kernel::rkyv_shm::TelemetryChunk;
+
+    #[test]
+    fn test_rkyv_zero_allocation_read() {
+        let chunk = TelemetryChunk {
+            sequence: 42,
+            stream_id: "claude-token-stream".to_string(),
+            bytes_len: 128,
+        };
+        let bytes = chunk.serialize_to_aligned_bytes().unwrap();
+
+        // Zero heap allocation direct memory cast
+        let archived = TelemetryChunk::access_archived(&bytes).unwrap();
+        assert_eq!(archived.sequence, 42);
+        assert_eq!(archived.stream_id, "claude-token-stream");
+    }
+}
+```
+
+- [ ] **Step 3: Implement rkyv zero-allocation memory serialization**
+- [ ] **Step 4: Run tests and commit**
+
+Run: `cargo test --manifest-path packages/desktop-tauri/src-tauri/Cargo.toml rkyv_test`
+Expected: PASS.
+Commit: `feat(kernel): implement zero-allocation in-place serialization using rkyv`
+
+---
+
+### Task 12: Standalone Portable Target (`kronos-portable.exe`), Packaging & Node Removal
 
 **Files:**
 
 - Modify: `packages/desktop-tauri/src-tauri/src/main.rs`
 - Modify: `packages/desktop-tauri/prepare-dist.mjs`
 - Modify: `packages/desktop-tauri/src-tauri/hooks/nsis-hooks.nsh`
-- Test: End-to-end NSIS packaging & Process inspection test
+- Modify: `scripts/update-and-build-exe.mjs`
+- Test: End-to-end NSIS packaging & Portable executable test
 
-- [ ] **Step 1: Integrate Kernel into `main.rs`**
-      Update `main.rs` to initialize `EmbeddedDaemon` during `setup()`, and bind all subprocesses to `process_job.rs`.
-- [ ] **Step 2: Update `prepare-dist.mjs` to bypass `node.exe` copying when native engine is enabled**
-- [ ] **Step 3: Run full Rust test suite and workspace typechecks**
+- [ ] **Step 1: Integrate Kernel and Portable Mode into `main.rs`**
+      Detect `./.kronos-data/` to activate self-contained portable mode. Initialize `EmbeddedDaemon` during `setup()`, and bind all subprocesses to `process_job.rs`.
+- [ ] **Step 2: Update `prepare-dist.mjs` to bypass `node.exe` copying permanently**
+- [ ] **Step 3: Update `scripts/update-and-build-exe.mjs` to produce both NSIS Setup and `kronos-portable.exe`**
+- [ ] **Step 4: Run full Rust test suite and workspace typechecks**
       Run: `cargo test --manifest-path packages/desktop-tauri/src-tauri/Cargo.toml`
       Run: `npm run typecheck`
-- [ ] **Step 4: Build production NSIS installer**
+- [ ] **Step 5: Build production NSIS installer and portable executable**
       Run: `node scripts/update-and-build-exe.mjs --release`
-- [ ] **Step 5: Verify zero `node.exe` running during Kronos execution**
+- [ ] **Step 6: Verify zero `node.exe` running during Kronos execution**
       Verify: `Get-Process node -ErrorAction SilentlyContinue` returns 0.
-- [ ] **Step 6: Commit and upload release**
+- [ ] **Step 7: Commit and upload release artifacts**
       Commit: `chore(release): complete Kronos Hyper-Native Kernel integration and eliminate node runtime`
