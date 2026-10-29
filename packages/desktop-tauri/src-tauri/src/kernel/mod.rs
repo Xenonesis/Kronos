@@ -12,6 +12,7 @@ pub mod cli;
 pub mod ioring;
 pub mod mcp;
 pub mod speech;
+pub mod rkyv_shm;
 
 #[cfg(test)]
 mod protocol_test;
@@ -33,3 +34,5 @@ pub mod ioring_test;
 pub mod mcp_test;
 #[cfg(test)]
 pub mod speech_test;
+#[cfg(test)]
+pub mod rkyv_test;

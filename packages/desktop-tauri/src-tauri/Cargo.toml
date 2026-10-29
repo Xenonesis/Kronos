@@ -45,6 +45,7 @@ yrs = "0.21"
 clap = { version = "4", features = ["derive"] }
 rayon = "1.10"
 whisper-rs = "0.16.0"
+rkyv = { version = "0.7", features = ["validation"] }
 
 [profile.release]
 incremental = true
