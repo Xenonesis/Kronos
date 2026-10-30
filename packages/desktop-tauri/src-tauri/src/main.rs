@@ -154,7 +154,7 @@ fn get_daemon_status_json() -> String {
     serde_json::json!({
         "serverId": server_id,
         "status": status,
-        "listen": if is_healthy { Some(listen) } else { None },
+        "listen": Some(listen),
         "hostname": hostname,
         "pid": detected_pid,
         "localCredential": local_credential,
@@ -552,7 +552,7 @@ fn main() {
         process: Mutex::new(daemon_child),
     };
     let daemon_server_id = server_id.clone();
-    let _ = wait_for_daemon_health(40);
+    let _ = wait_for_daemon_health(2);
     let status_json = get_daemon_status_json();
     let bridge_script = format!(
         r#"
@@ -1065,8 +1065,11 @@ try {{
         .expect("error while running tauri application")
         .run(|app_handle, event| match event {
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {
-                if let Some(state) = app_handle.try_state::<DaemonState>() {
-                    stop_daemon(&state);
+                let should_kill = std::env::var("KRONOS_STOP_ON_EXIT").map(|v| v == "1" || v == "true").unwrap_or(false);
+                if should_kill {
+                    if let Some(state) = app_handle.try_state::<DaemonState>() {
+                        stop_daemon(&state);
+                    }
                 }
             }
             _ => {}
