@@ -25,7 +25,7 @@ use native_pty::{
     NativePtyManager,
 };
 
-use daemon::{start_daemon, stop_daemon, DaemonState};
+use daemon::{start_daemon, stop_daemon, wait_for_daemon_health, DaemonState};
 use dialogs::{pick_file, pick_folder};
 use editor::open_in_editor;
 use std::fs;
@@ -47,32 +47,6 @@ fn toggle_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             let _ = win.set_focus();
         }
     }
-}
-fn wait_for_daemon_health(max_attempts: usize) -> bool {
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-    use std::time::Duration;
-
-    for _ in 0..max_attempts {
-        if let Ok(mut stream) = TcpStream::connect("127.0.0.1:6767") {
-            let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-            let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
-            let req =
-                b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:6767\r\nConnection: close\r\n\r\n";
-            if stream.write_all(req).is_ok() {
-                let mut buf = [0u8; 64];
-                if let Ok(n) = stream.read(&mut buf) {
-                    if n > 0
-                        && (buf.starts_with(b"HTTP/1.1 200") || buf.starts_with(b"HTTP/1.0 200"))
-                    {
-                        return true;
-                    }
-                }
-            }
-        }
-        std::thread::sleep(Duration::from_millis(300));
-    }
-    false
 }
 
 fn detect_and_configure_portable_mode() -> Option<PathBuf> {
@@ -167,22 +141,28 @@ fn get_daemon_status_json() -> String {
         }
     }
 
+    let is_healthy = wait_for_daemon_health(1);
     let listen = "127.0.0.1:6767".to_string();
     let hostname = "localhost".to_string();
-    let pid: u32 = std::process::id();
+    let detected_pid = if is_healthy {
+        daemon::find_pid_listening_on_port(6767)
+    } else {
+        None
+    };
+    let status = if is_healthy { "running" } else { "stopped" };
 
     serde_json::json!({
         "serverId": server_id,
-        "status": "running",
-        "listen": listen,
+        "status": status,
+        "listen": if is_healthy { Some(listen) } else { None },
         "hostname": hostname,
-        "pid": pid,
+        "pid": detected_pid,
         "localCredential": local_credential,
         "home": home.to_string_lossy().to_string(),
         "version": env!("CARGO_PKG_VERSION"),
         "desktopManaged": true,
         "ownedByDesktop": true,
-        "startedAt": "2026-09-26T12:00:00.000Z",
+        "startedAt": if is_healthy { Some("2026-09-26T12:00:00.000Z") } else { None },
         "error": null
     })
     .to_string()
@@ -327,6 +307,24 @@ fn fast_validate_directory(path: String) -> DirectoryValidationResult {
         },
     }
 }
+#[tauri::command]
+fn start_desktop_daemon(state: tauri::State<DaemonState>) -> serde_json::Value {
+    let mut lock = state.process.lock().unwrap();
+    let is_running = if let Some(child) = lock.as_mut() {
+        child.try_wait().map(|status| status.is_none()).unwrap_or(false)
+    } else {
+        false
+    };
+    if !is_running && !wait_for_daemon_health(1) {
+        let server_id = get_or_create_server_id();
+        let new_child = daemon::start_daemon(Some(&server_id));
+        *lock = new_child;
+        let _ = wait_for_daemon_health(20);
+    }
+    drop(lock);
+    get_live_daemon_status()
+}
+
 #[tauri::command]
 fn stop_desktop_daemon(state: tauri::State<DaemonState>) -> serde_json::Value {
     stop_daemon(&state);
@@ -554,7 +552,7 @@ fn main() {
         process: Mutex::new(daemon_child),
     };
     let daemon_server_id = server_id.clone();
-
+    let _ = wait_for_daemon_health(15);
     let status_json = get_daemon_status_json();
     let bridge_script = format!(
         r#"
@@ -666,7 +664,16 @@ try {{
       }}
     }},
     invoke: async function(command, args) {{
-      if (command === 'desktop_daemon_status' || command === 'start_desktop_daemon') {{
+      if (command === 'start_desktop_daemon') {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            const res = await window.__TAURI_INTERNALS__.invoke('start_desktop_daemon');
+            if (res) return res;
+          }}
+        }} catch (e) {{}}
+        return daemonData;
+      }}
+      if (command === 'desktop_daemon_status') {{
         try {{
           if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
             const live = await window.__TAURI_INTERNALS__.invoke('get_live_daemon_status');
@@ -948,6 +955,7 @@ try {{
             get_log_contents,
             log_desktop_event,
             fast_validate_directory,
+            start_desktop_daemon,
             stop_desktop_daemon,
             restart_desktop_daemon,
             get_system_idle_time,

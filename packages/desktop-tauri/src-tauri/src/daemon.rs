@@ -29,6 +29,33 @@ fn get_or_init_runtime() -> &'static tokio::runtime::Runtime {
     &RUNTIME
 }
 
+pub fn wait_for_daemon_health(max_attempts: usize) -> bool {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    for _ in 0..max_attempts {
+        if let Ok(mut stream) = TcpStream::connect("127.0.0.1:6767") {
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+            let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+            let req =
+                b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:6767\r\nConnection: close\r\n\r\n";
+            if stream.write_all(req).is_ok() {
+                let mut buf = [0u8; 64];
+                if let Ok(n) = stream.read(&mut buf) {
+                    if n > 0
+                        && (buf.starts_with(b"HTTP/1.1 200") || buf.starts_with(b"HTTP/1.0 200"))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    false
+}
+
 #[allow(dead_code)]
 pub fn is_embedded_running() -> bool {
     if let Ok(lock) = EMBEDDED_DAEMON.lock() {
@@ -83,6 +110,88 @@ const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
 pub struct DaemonState {
     pub process: Mutex<Option<Child>>,
 }
+pub fn is_valid_node_executable(path: &std::path::Path) -> bool {
+    if !path.exists() {
+        return false;
+    }
+    if let Ok(metadata) = std::fs::metadata(path) {
+        if !metadata.is_file() || metadata.len() < 1024 * 1024 {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        Command::new(path)
+            .arg("-v")
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new(path)
+            .arg("-v")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+}
+
+pub fn find_system_node() -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        if Command::new("node")
+            .arg("-v")
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return PathBuf::from("node");
+        }
+        if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
+            let pi_node = PathBuf::from(&local_app_data)
+                .join("pi-node")
+                .join("current")
+                .join("node.exe");
+            if is_valid_node_executable(&pi_node) {
+                return pi_node;
+            }
+            let user_node = PathBuf::from(&local_app_data)
+                .join("Programs")
+                .join("node")
+                .join("node.exe");
+            if is_valid_node_executable(&user_node) {
+                return user_node;
+            }
+        }
+        if let Ok(prog_files) = env::var("ProgramFiles") {
+            let prog_node = PathBuf::from(&prog_files)
+                .join("nodejs")
+                .join("node.exe");
+            if is_valid_node_executable(&prog_node) {
+                return prog_node;
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if Command::new("node")
+            .arg("-v")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return PathBuf::from("node");
+        }
+    }
+    PathBuf::from("node")
+}
 
 fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
     // 1. Installed location (_up_/server-dist or resources/server-dist) takes priority
@@ -101,10 +210,10 @@ fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
                     .join("server")
                     .join("daemon-worker.js");
                 if res_script.exists() {
-                    let node = if res_node.exists() {
+                    let node = if is_valid_node_executable(&res_node) {
                         res_node
                     } else {
-                        PathBuf::from("node")
+                        find_system_node()
                     };
                     return Some((res_dir.clone(), node, res_script));
                 }
@@ -124,7 +233,7 @@ fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
         if script.exists() {
             return Some((
                 script.parent()?.parent()?.parent()?.parent()?.to_path_buf(),
-                PathBuf::from("node"),
+                find_system_node(),
                 script,
             ));
         }
@@ -143,7 +252,7 @@ fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
                 .join("server")
                 .join("daemon-worker.js");
             if server_worker.exists() {
-                return Some((current, PathBuf::from("node"), server_worker));
+                return Some((current, find_system_node(), server_worker));
             }
         }
     }
@@ -158,10 +267,55 @@ fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
             .join("server")
             .join("daemon-worker.js");
         if server_worker.exists() {
-            return Some((cwd, PathBuf::from("node"), server_worker));
+            return Some((cwd, find_system_node(), server_worker));
         }
     }
 
+    None
+}
+
+#[cfg(windows)]
+pub fn find_pid_listening_on_port(port: u16) -> Option<u32> {
+    let port_str = port.to_string();
+    if let Ok(output) = Command::new("netstat")
+        .args(["-aon"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
+        if let Ok(text) = String::from_utf8(output.stdout) {
+            for line in text.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 5
+                    && parts[1].rsplit(':').next() == Some(port_str.as_str())
+                    && parts.contains(&"LISTENING")
+                {
+                    if let Some(pid_str) = parts.last() {
+                        if let Ok(pid) = pid_str.parse::<u32>() {
+                            if pid != 0 {
+                                return Some(pid);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+pub fn find_pid_listening_on_port(port: u16) -> Option<u32> {
+    if let Ok(output) = Command::new("lsof").args(["-ti", &format!(":{}", port)]).output() {
+        if let Ok(text) = String::from_utf8(output.stdout) {
+            for line in text.lines() {
+                if let Ok(pid) = line.trim().parse::<u32>() {
+                    if pid != 0 {
+                        return Some(pid);
+                    }
+                }
+            }
+        }
+    }
     None
 }
 #[cfg(windows)]
@@ -212,6 +366,9 @@ fn ensure_port_clean() {
 }
 
 pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
+    if wait_for_daemon_health(1) {
+        return None;
+    }
     ensure_port_clean();
     let (work_dir, node_bin, script_path) = resolve_runtime()?;
 
@@ -277,11 +434,71 @@ pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
     {
         cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
     }
-    let child = cmd.spawn().ok()?;
-    // Daemon process spawned immediately without blocking thread sleep
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[Daemon] Primary spawn failed with {:?}: {}", node_bin, e);
+            let sys_node = find_system_node();
+            if sys_node != node_bin {
+                eprintln!("[Daemon] Falling back to system node {:?}", sys_node);
+                let mut fallback_cmd = Command::new(&sys_node);
+                fallback_cmd.arg("--max-old-space-size=2048");
+                fallback_cmd.arg(&script_path)
+                    .env("PASEO_LISTEN", "127.0.0.1:6767")
+                    .env("PASEO_PROVIDER_REFRESH_TIMEOUT_MS", &refresh_timeout)
+                    .env("KRONOS_PROVIDER_REFRESH_TIMEOUT_MS", &refresh_timeout);
+                if let Some(id) = server_id {
+                    fallback_cmd.env("PASEO_SERVER_ID", id);
+                } else if let Some(mut home) = dirs::home_dir() {
+                    home.push(".paseo");
+                    home.push("server-id");
+                    if let Ok(content) = fs::read_to_string(&home) {
+                        let trimmed = content.trim();
+                        if !trimmed.is_empty() {
+                            fallback_cmd.env("PASEO_SERVER_ID", trimmed);
+                        }
+                    }
+                }
+                if !node_paths.is_empty() {
+                    #[cfg(windows)]
+                    fallback_cmd.env("NODE_PATH", node_paths.join(";"));
+                    #[cfg(not(windows))]
+                    fallback_cmd.env("NODE_PATH", node_paths.join(":"));
+                }
+                fallback_cmd.current_dir(&work_dir).stdin(Stdio::null());
+                if let Some(mut home) = dirs::home_dir() {
+                    home.push(".paseo");
+                    let _ = std::fs::create_dir_all(&home);
+                    home.push("daemon.log");
+                    if let Ok(f) = OpenOptions::new().create(true).append(true).open(&home) {
+                        if let Ok(f_err) = f.try_clone() {
+                            fallback_cmd.stdout(Stdio::from(f));
+                            fallback_cmd.stderr(Stdio::from(f_err));
+                        }
+                    }
+                }
+                #[cfg(windows)]
+                {
+                    fallback_cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+                }
+                match fallback_cmd.spawn() {
+                    Ok(c) => c,
+                    Err(fallback_err) => {
+                        eprintln!("[Daemon] Fallback spawn failed with {:?}: {}", sys_node, fallback_err);
+                        return None;
+                    }
+                }
+            } else {
+                return None;
+            }
+        }
+    };
     Some(child)
 }
 pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
+    if wait_for_daemon_health(1) {
+        return None;
+    }
     let engine = env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "node".to_string());
     if engine.eq_ignore_ascii_case("node") {
         stop_embedded();
@@ -382,6 +599,7 @@ pub fn restart_daemon(state: &DaemonState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn test_daemon_state_empty_stop() {
@@ -394,6 +612,7 @@ mod tests {
 
     #[test]
     fn test_daemon_engine_switch_node() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         std::env::set_var("KRONOS_DAEMON_ENGINE", "node");
         let state = DaemonState {
             process: Mutex::new(None),
@@ -405,6 +624,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_daemon_engine_switch_rust() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         std::env::set_var("KRONOS_DAEMON_ENGINE", "rust");
         let state = DaemonState {
             process: Mutex::new(None),
@@ -417,6 +637,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_daemon_rapid_start_stop_race() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         std::env::set_var("KRONOS_DAEMON_ENGINE", "rust");
         let state = DaemonState {
             process: Mutex::new(None),
@@ -427,10 +648,24 @@ mod tests {
         assert!(!is_embedded_running(), "Daemon must not remain running after immediate stop");
         std::env::remove_var("KRONOS_DAEMON_ENGINE");
     }
-
     #[test]
     fn test_ensure_port_clean_does_not_kill_self() {
         ensure_port_clean();
         assert_eq!(std::process::id(), std::process::id());
+    }
+
+    #[test]
+    fn test_is_valid_node_executable_rejects_empty_file() {
+        let temp_dir = std::env::temp_dir();
+        let empty_node = temp_dir.join("test-zero-byte-node.exe");
+        let _ = std::fs::write(&empty_node, b"");
+        assert!(!is_valid_node_executable(&empty_node));
+        let _ = std::fs::remove_file(empty_node);
+    }
+
+    #[test]
+    fn test_find_system_node_returns_executable() {
+        let sys_node = find_system_node();
+        assert!(!sys_node.as_os_str().is_empty());
     }
 }

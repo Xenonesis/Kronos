@@ -28,6 +28,16 @@ if (process.platform !== "win32") {
     fs.copyFileSync(process.execPath, path.join(targetDir, "node.exe"));
   } catch {}
 }
+const nodePath = path.join(targetDir, nodeBinName);
+const nodeStat = fs.statSync(nodePath);
+if (nodeStat.size < 1024 * 1024) {
+  throw new Error(
+    `Copied node runtime is suspiciously small or empty (${nodeStat.size} bytes at ${nodePath})!`,
+  );
+}
+console.log(
+  `Verified node runtime: ${nodeBinName} (${(nodeStat.size / (1024 * 1024)).toFixed(1)} MB)`,
+);
 // Copy server package.json
 fs.copyFileSync(
   path.join(root, "packages/server/package.json"),
@@ -51,13 +61,15 @@ function npmRegistryConfig(cwd, execFileSync) {
     return "unknown";
   }
 }
- const nobleCurves = path.join(serverDistNodeModules, "@noble", "curves");
- if (!fs.existsSync(serverDistNodeModules) || !fs.existsSync(nobleCurves)) {
-   if (fs.existsSync(serverDistNodeModules)) {
-     console.log("Existing server-dist node_modules missing transitive dependencies (@noble/curves); refreshing...");
-     fs.rmSync(serverDistNodeModules, { recursive: true, force: true });
-   }
-   console.log("Installing production node_modules into server-dist...");
+const nobleCurves = path.join(serverDistNodeModules, "@noble", "curves");
+if (!fs.existsSync(serverDistNodeModules) || !fs.existsSync(nobleCurves)) {
+  if (fs.existsSync(serverDistNodeModules)) {
+    console.log(
+      "Existing server-dist node_modules missing transitive dependencies (@noble/curves); refreshing...",
+    );
+    fs.rmSync(serverDistNodeModules, { recursive: true, force: true });
+  }
+  console.log("Installing production node_modules into server-dist...");
   const { runWithRetry } = await import("../../scripts/npm-retry.mjs");
   const { execFileSync } = await import("node:child_process");
   const os = await import("node:os");
@@ -81,10 +93,10 @@ function npmRegistryConfig(cwd, execFileSync) {
   // from the manifest for the install. Leaving them in makes npm try to
   // resolve them from the registry, which is a second source of truth for
   // npm to disagree with.
-   const serverPackage = JSON.parse(
-     fs.readFileSync(path.join(root, "packages", "server", "package.json"), "utf8"),
-   );
-   serverPackage.dependencies = serverPackage.dependencies || {};
+  const serverPackage = JSON.parse(
+    fs.readFileSync(path.join(root, "packages", "server", "package.json"), "utf8"),
+  );
+  serverPackage.dependencies = serverPackage.dependencies || {};
   function mergeChildDeps(serverDeps, pkgPath) {
     const childPkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
     for (const [dep, ver] of Object.entries(childPkg.dependencies || {})) {
