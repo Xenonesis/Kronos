@@ -1041,7 +1041,15 @@ try {{
                                 println!("[updater] Application is up to date");
                             }
                             Err(e) => {
-                                eprintln!("[updater] Failed to check for updates: {e}");
+                                let err_msg = e.to_string();
+                                if err_msg.contains("valid release JSON") || err_msg.contains("404") {
+                                    println!(
+                                        "[updater] No remote release manifest found; running current release (v{})",
+                                        env!("CARGO_PKG_VERSION")
+                                    );
+                                } else {
+                                    eprintln!("[updater] Failed to check for updates: {e}");
+                                }
                             }
                         }
                     }
