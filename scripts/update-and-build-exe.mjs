@@ -75,14 +75,14 @@ function touchesSources(changedFiles, prefixes) {
 }
 
 function needsServerBuild({ force, serverDistExists, changedFiles }) {
-  if (force || !serverDistExists) return true;
-  if (changedFiles.length === 0) return true;
+  if (!serverDistExists) return true;
+  if (force) return true;
   return touchesSources(changedFiles, SERVER_SOURCE_PREFIXES);
 }
 
 function needsAppBuild({ force, appDistExists, changedFiles }) {
-  if (force || !appDistExists) return true;
-  if (changedFiles.length === 0) return true;
+  if (!appDistExists) return true;
+  if (force) return true;
   return touchesSources(changedFiles, ["packages/app/"]);
 }
 
