@@ -51,7 +51,7 @@ pub fn wait_for_daemon_health(max_attempts: usize) -> bool {
                 }
             }
         }
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(Duration::from_millis(250));
     }
     false
 }
@@ -495,7 +495,13 @@ pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
     };
     Some(child)
 }
+static DAEMON_SPAWN_LOCK: Mutex<()> = Mutex::new(());
+
 pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
+    if wait_for_daemon_health(1) {
+        return None;
+    }
+    let _guard = DAEMON_SPAWN_LOCK.lock().ok()?;
     if wait_for_daemon_health(1) {
         return None;
     }

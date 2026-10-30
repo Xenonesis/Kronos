@@ -319,7 +319,7 @@ fn start_desktop_daemon(state: tauri::State<DaemonState>) -> serde_json::Value {
         let server_id = get_or_create_server_id();
         let new_child = daemon::start_daemon(Some(&server_id));
         *lock = new_child;
-        let _ = wait_for_daemon_health(20);
+        let _ = wait_for_daemon_health(40);
     }
     drop(lock);
     get_live_daemon_status()
@@ -552,7 +552,7 @@ fn main() {
         process: Mutex::new(daemon_child),
     };
     let daemon_server_id = server_id.clone();
-    let _ = wait_for_daemon_health(15);
+    let _ = wait_for_daemon_health(40);
     let status_json = get_daemon_status_json();
     let bridge_script = format!(
         r#"
