@@ -238,7 +238,7 @@ export interface HostRuntimeStartOptions {
   };
 }
 
-const PROBE_TICK_MS = 2_000;
+const PROBE_TICK_MS = 500;
 const PROBE_STEADY_MS = 10_000;
 const PROBE_MAX_BACKOFF_MS = 30_000;
 const PROBE_INACTIVE_WHILE_ONLINE_MS = 120_000;
@@ -554,8 +554,11 @@ function probeIntervalForConnection(
   if (hasActiveOnlineConnection) {
     return PROBE_INACTIVE_WHILE_ONLINE_MS;
   }
+  if (isLoopback) {
+    // Local loopback is zero-cost; never back off to 30s. Keep at 250ms so UI connects immediately on daemon launch.
+    return 250;
+  }
   const age = now - firstSeenAt;
-  if (isLoopback && age < 10_000) return 250;
   if (age < 10_000) return 2_000;
   if (age < 30_000) return 5_000;
   if (age < 60_000) return PROBE_STEADY_MS;
@@ -1738,6 +1741,7 @@ export class HostRuntimeStore {
               serverId: status.serverId,
               hostname: status.hostname ?? "localhost",
             });
+            void this.runProbeCycleNow(status.serverId);
           }
         }
       } catch (e) {

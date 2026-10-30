@@ -746,6 +746,7 @@ export async function createPaseoDaemon(
     appBaseUrl = typeof value === "string" ? value : "https://app.paseo.sh";
   });
   let wsServer: VoiceAssistantWebSocketServer | null = null;
+  let isDaemonReady = false;
   let serviceProxyListenTarget: ListenTarget | null = null;
   const scriptHealthMonitor = new ScriptHealthMonitor({
     serviceProxy,
@@ -856,9 +857,13 @@ export async function createPaseoDaemon(
   // Serve static files from public directory
   app.use("/public", express.static(staticDir));
 
-  // Health check endpoint
+  // Health check endpoint: ready when WebSocket server is accepting connections
   app.get("/api/health", (_req, res) => {
-    res.json({ status: "ok", timestamp: new Date().toISOString() });
+    if (!isDaemonReady) {
+      res.status(503).json({ status: "starting", ready: false });
+      return;
+    }
+    res.json({ status: "ok", ready: true, timestamp: new Date().toISOString() });
   });
 
   app.get("/api/status", (_req, res) => {
@@ -1898,6 +1903,7 @@ export async function createPaseoDaemon(
             restartRecovery.resumePending();
             await finishSubscriptions.start();
             wsServer.beginAcceptingConnections();
+            isDaemonReady = true;
             const relaySecurityLogger = logger.child({ module: "relay-security" });
             relayRuntime = createRelayRuntime({
               config: {
