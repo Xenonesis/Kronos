@@ -275,6 +275,24 @@ Desktop release builds now publish in two phases:
 
 Drafts do not appear in GitHub's releases feed. Updater clients continue to see the previous complete release until all three manifests are available. If a desktop build or manifest upload fails, the new release stays a draft.
 
+### Windows package-manager manifests
+
+For a published Windows release, `Desktop Release` generates Winget-compatible
+version, installer, and locale manifests plus a Scoop manifest from the exact
+nonempty NSIS installer bytes. It computes the SHA-256 during that workflow and
+uploads the manifests as versioned GitHub Release assets beside the installer.
+The step is skipped when publishing is disabled or for smoke tags; it does not
+submit to `winget-pkgs` or an external Scoop bucket.
+
+These assets are not an official Winget source or a maintained Scoop bucket.
+To install with Winget before upstream catalog submission, download all three
+`Xenonesis.Kronos*.yaml` assets for one version into the same local directory,
+then run `winget install --manifest .\Xenonesis.Kronos.yaml` from that directory.
+For Scoop, download `Kronos.json` and run `scoop install .\Kronos.json`; no
+bucket needs to be added for this local-manifest install. The NSIS setup can
+prompt for per-user or per-machine installation. The manifests intentionally
+do not claim silent installer switches.
+
 ### Default behavior
 
 `npm run release:patch` or `npm run release:minor` → tag push → 36h ramp. No extra action needed.

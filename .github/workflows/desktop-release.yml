@@ -444,6 +444,35 @@ jobs:
           prerelease: ${{ env.IS_PRERELEASE == 'true' }}
           includeRelease: ${{ env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true' }}
 
+      - name: Generate and upload Windows package-manager manifests
+        if: env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          installer="packages/desktop-tauri/src-tauri/target/release/bundle/nsis/Kronos_${DESKTOP_VERSION}_x64-setup.exe"
+          output="$RUNNER_TEMP/kronos-package-manifests"
+          node scripts/generate-windows-package-manifests.mjs \
+            --version "$DESKTOP_VERSION" \
+            --installer "$installer" \
+            --output "$output"
+          gh release upload "$RELEASE_TAG" \
+            "$output/winget/Xenonesis.Kronos.yaml" \
+            "$output/winget/Xenonesis.Kronos.installer.yaml" \
+            "$output/winget/Xenonesis.Kronos.locale.en-US.yaml" \
+            "$output/scoop/Kronos.json" \
+            --clobber --repo "${{ github.repository }}"
+
+      - name: Upload package-manager manifests to workflow run
+        if: env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package-manager-manifests
+          path: ${{ runner.temp }}/kronos-package-manifests
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload artifacts to workflow run
         uses: actions/upload-artifact@v4
         with:

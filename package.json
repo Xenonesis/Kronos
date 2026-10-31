@@ -73,6 +73,7 @@
     "watch:client": "tsc -p packages/client/tsconfig.json --watch --preserveWatchOutput",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "typecheck:server": "npm run typecheck --workspace=@getpaseo/relay && npm run typecheck --workspace=@getpaseo/protocol && npm run typecheck --workspace=@getpaseo/client && npm run typecheck --workspace=@getpaseo/builtin-plugins && npm run typecheck --workspace=@getpaseo/server && npm run typecheck --workspace=@getpaseo/cli",
+    "test:windows-package-manifests": "node --test scripts/generate-windows-package-manifests.test.mjs",
     "test": "npm run test --workspaces --if-present",
     "format": "oxfmt .",
     "format:files": "oxfmt",
