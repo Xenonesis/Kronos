@@ -1,5 +1,13 @@
 import { execSync } from "node:child_process";
-import { statSync, existsSync, readdirSync, copyFileSync, readFileSync, mkdirSync } from "node:fs";
+import {
+  statSync,
+  existsSync,
+  readdirSync,
+  copyFileSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -26,7 +34,13 @@ function getLatestExe(nsisDir) {
 }
 function getAppVersion() {
   try {
-    const tauriConfPath = path.join(rootDir, "packages", "desktop-tauri", "src-tauri", "tauri.conf.json");
+    const tauriConfPath = path.join(
+      rootDir,
+      "packages",
+      "desktop-tauri",
+      "src-tauri",
+      "tauri.conf.json",
+    );
     if (existsSync(tauriConfPath)) {
       const conf = JSON.parse(readFileSync(tauriConfPath, "utf8"));
       if (conf.version) return conf.version;
@@ -40,7 +54,6 @@ function getAppVersion() {
     return "0.13.0";
   }
 }
-
 
 function getChangedFiles(oldHead, newHead) {
   if (!oldHead || !newHead || oldHead === newHead) return [];
@@ -163,7 +176,10 @@ async function main() {
   // Step 3: Export Web Bundle
   console.log("\n\x1b[33m[3/5] Frontend web bundle export...\x1b[0m");
   if (appNeedsBuild) {
-    run("npx cross-env NODE_ENV=production PASEO_WEB_PLATFORM=electron npx expo export --platform web --clear", path.join(rootDir, "packages", "app"));
+    run(
+      "npx cross-env NODE_ENV=production PASEO_WEB_PLATFORM=electron npx expo export --platform web --clear",
+      path.join(rootDir, "packages", "app"),
+    );
   } else {
     console.log("\x1b[32m⏩ [SKIP] Frontend files unchanged. Reusing cached web export.\x1b[0m");
   }
@@ -211,7 +227,12 @@ async function main() {
       "release",
       "paseo-desktop.exe",
     );
-    const tempReleaseBinary = path.join(os.tmpdir(), "kronos_target", "release", "paseo-desktop.exe");
+    const tempReleaseBinary = path.join(
+      os.tmpdir(),
+      "kronos_target",
+      "release",
+      "paseo-desktop.exe",
+    );
     const sourcePortableExe = existsSync(releaseBinary)
       ? releaseBinary
       : existsSync(tempReleaseBinary)
@@ -222,15 +243,23 @@ async function main() {
       const distPortablePath = path.join(distRootDir, "kronos-portable.exe");
       copyFileSync(sourcePortableExe, distPortablePath);
       const portableStats = statSync(distPortablePath);
-      console.log(`  \x1b[32m✔ Portable Executable Deployed:\x1b[0m ${distPortablePath} (${(portableStats.size / (1024 * 1024)).toFixed(2)} MB)`);
+      console.log(
+        `  \x1b[32m✔ Portable Executable Deployed:\x1b[0m ${distPortablePath} (${(portableStats.size / (1024 * 1024)).toFixed(2)} MB)`,
+      );
     } else {
       console.warn("  \x1b[33m⚠️ Release binary not found for portable copy\x1b[0m");
     }
 
+    // Generate latest.json manifest for Tauri v2 updater
+    const latestJsonPath = path.join(distRootDir, "latest.json");
+    generateUpdateManifest(appVersion, latestJsonPath);
+
     if (publish) {
-      publishToGitHub(exePath, persistentPath, releaseTag);
+      publishToGitHub(exePath, persistentPath, latestJsonPath, releaseTag);
     } else {
-      console.log("\n\x1b[36mℹ Note: Built locally. To auto-upload to GitHub Releases and update the live website, run with --publish:\x1b[0m");
+      console.log(
+        "\n\x1b[36mℹ Note: Built locally. To auto-upload to GitHub Releases and update the live website, run with --publish:\x1b[0m",
+      );
       console.log("  \x1b[37mnode scripts/update-and-build-exe.mjs --publish\x1b[0m");
     }
   } else {
@@ -239,8 +268,27 @@ async function main() {
   }
 }
 
-function publishToGitHub(exePath, persistentPath, releaseTag) {
-  console.log(`\n\x1b[33m[*] Uploading latest .exe to GitHub Releases (${releaseTag})...\x1b[0m`);
+function generateUpdateManifest(appVersion, targetPath) {
+  const tag = `v${appVersion}`;
+  const manifest = {
+    version: tag,
+    notes: `Kronos ${tag} Release: Instant boot, Windows 11 Mica backdrop, native Myers diff, and dual global hotkeys.`,
+    pub_date: new Date().toISOString(),
+    platforms: {
+      "windows-x86_64": {
+        signature: "",
+        url: `https://github.com/Xenonesis/Kronos/releases/download/${tag}/Kronos_${appVersion}_x64-setup.exe`,
+      },
+    },
+  };
+  writeFileSync(targetPath, JSON.stringify(manifest, null, 2), "utf8");
+  console.log(`  \x1b[32m✔ Tauri Updater Manifest Generated:\x1b[0m ${targetPath}`);
+}
+
+function publishToGitHub(exePath, persistentPath, latestJsonPath, releaseTag) {
+  console.log(
+    `\n\x1b[33m[*] Uploading latest .exe and manifest to GitHub Releases (${releaseTag})...\x1b[0m`,
+  );
   try {
     try {
       execSync(`gh release view ${releaseTag} --repo Xenonesis/Kronos`, { stdio: "ignore" });
@@ -251,18 +299,29 @@ function publishToGitHub(exePath, persistentPath, releaseTag) {
         { stdio: "inherit" },
       );
     }
-    execSync(
-      `gh release upload ${releaseTag} "${exePath}" "${persistentPath}" --clobber --repo Xenonesis/Kronos`,
-      { stdio: "inherit" },
+    const uploadFiles = [exePath, persistentPath];
+    if (latestJsonPath && existsSync(latestJsonPath)) {
+      uploadFiles.push(latestJsonPath);
+    }
+    const uploadArgs = uploadFiles.map((f) => `"${f}"`).join(" ");
+    execSync(`gh release upload ${releaseTag} ${uploadArgs} --clobber --repo Xenonesis/Kronos`, {
+      stdio: "inherit",
+    });
+    console.log(
+      `\x1b[32m✔ Uploaded latest installer and updater manifest to GitHub Releases (${releaseTag})!\x1b[0m`,
     );
-    console.log(`\x1b[32m✔ Uploaded latest installer to GitHub Releases (${releaseTag})!\x1b[0m`);
 
     console.log("\x1b[33m[*] Triggering GitHub Pages website deployment...\x1b[0m");
     try {
-      execSync(`gh workflow run "Deploy to GitHub Pages" --repo Xenonesis/Kronos`, { stdio: "inherit" });
+      execSync(`gh workflow run "Deploy to GitHub Pages" --repo Xenonesis/Kronos`, {
+        stdio: "inherit",
+      });
       console.log("\x1b[32m✔ GitHub Pages website deployment triggered!\x1b[0m");
     } catch (wfErr) {
-      console.warn("\x1b[33m⚠ Note: Could not trigger GitHub Pages workflow automatically:\x1b[0m", wfErr.message);
+      console.warn(
+        "\x1b[33m⚠ Note: Could not trigger GitHub Pages workflow automatically:\x1b[0m",
+        wfErr.message,
+      );
     }
   } catch (e) {
     console.warn(
@@ -303,8 +362,13 @@ function compileTauriBundle(quick, nsisDir) {
   try {
     run("npx tauri build --bundles nsis", path.join(rootDir, "packages", "desktop-tauri"));
   } catch {
-    console.log("\x1b[33mTarget directory locked by running process; compiling with CARGO_TARGET_DIR fallback...\x1b[0m");
-    run(`npx cross-env CARGO_TARGET_DIR="${tempTargetDir}" npx tauri build --bundles nsis`, path.join(rootDir, "packages", "desktop-tauri"));
+    console.log(
+      "\x1b[33mTarget directory locked by running process; compiling with CARGO_TARGET_DIR fallback...\x1b[0m",
+    );
+    run(
+      `npx cross-env CARGO_TARGET_DIR="${tempTargetDir}" npx tauri build --bundles nsis`,
+      path.join(rootDir, "packages", "desktop-tauri"),
+    );
     const appVersion = getAppVersion();
     const versionedName = `Kronos_${appVersion}_x64-setup.exe`;
     const tempBundle = path.join(tempTargetDir, "release", "bundle", "nsis", versionedName);
@@ -315,7 +379,6 @@ function compileTauriBundle(quick, nsisDir) {
   }
   return false;
 }
-
 
 main().catch((err) => {
   console.error("\n\x1b[31m✖ Build failed:\x1b[0m", err);
