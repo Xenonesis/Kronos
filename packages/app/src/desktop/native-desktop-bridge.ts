@@ -1,3 +1,4 @@
+import { listenToDesktopEvent, type DesktopEventUnlisten } from "@/desktop/electron/events";
 import { invokeDesktopCommand } from "@/desktop/electron/invoke";
 import { getDesktopHost } from "@/desktop/host";
 
@@ -37,4 +38,17 @@ export async function showNativeTaskCompleteNotification(input: {
   } catch {
     // Graceful no-op if notification permissions not granted
   }
+}
+
+export interface QuickTogglePayload {
+  timestamp: number;
+}
+
+/**
+ * Listens for global hotkey quick-toggle events emitted by the native desktop shell.
+ */
+export async function onQuickToggle(
+  callback: (payload: QuickTogglePayload) => void,
+): Promise<DesktopEventUnlisten> {
+  return listenToDesktopEvent<QuickTogglePayload>("kronos://quick-toggle", callback);
 }

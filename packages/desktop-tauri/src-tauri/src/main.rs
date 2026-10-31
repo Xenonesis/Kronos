@@ -31,23 +31,253 @@ use editor::open_in_editor;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_updater::UpdaterExt;
 
-fn toggle_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    if let Some(win) = app.get_webview_window("main") {
-        let is_visible = win.is_visible().unwrap_or(false);
-        let is_focused = win.is_focused().unwrap_or(false);
-        if is_visible && is_focused {
-            let _ = win.hide();
-        } else {
-            let _ = win.show();
-            let _ = win.unminimize();
-            let _ = win.set_focus();
+#[cfg(target_os = "windows")]
+pub fn apply_mica_effect<R: tauri::Runtime>(window: &WebviewWindow<R>) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMWA_CAPTION_COLOR, DWMWA_SYSTEMBACKDROP_TYPE,
+        DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
+    };
+
+    if let Ok(hwnd) = window.hwnd() {
+        let hwnd_raw = hwnd.0 as windows_sys::Win32::Foundation::HWND;
+        unsafe {
+            // 1. Force Immersive Dark Mode for window frame & titlebar (attribute 20, TRUE)
+            let dark_mode: i32 = 1;
+            let _ = DwmSetWindowAttribute(
+                hwnd_raw,
+                DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
+                &dark_mode as *const _ as *const _,
+                std::mem::size_of::<i32>() as u32,
+            );
+
+            // 2. Apply Mica Backdrop on Windows 11 (DWMSBT_MAINWINDOW = 2, attribute 38)
+            let backdrop_type: u32 = DWMSBT_MAINWINDOW as u32;
+            let _ = DwmSetWindowAttribute(
+                hwnd_raw,
+                DWMWA_SYSTEMBACKDROP_TYPE as u32,
+                &backdrop_type as *const _ as *const _,
+                std::mem::size_of::<u32>() as u32,
+            );
+
+            // 3. Caption background: #0A0A0A (BGR format: 0x000A0A0A, attribute 35)
+            let caption_color: u32 = 0x000A0A0A;
+            let _ = DwmSetWindowAttribute(
+                hwnd_raw,
+                DWMWA_CAPTION_COLOR as u32,
+                &caption_color as *const _ as *const _,
+                std::mem::size_of::<u32>() as u32,
+            );
+
+            // 4. Caption text: #EAEAEA (BGR format: 0x00EAEAEA, attribute 36)
+            let text_color: u32 = 0x00EAEAEA;
+            let _ = DwmSetWindowAttribute(
+                hwnd_raw,
+                DWMWA_TEXT_COLOR as u32,
+                &text_color as *const _ as *const _,
+                std::mem::size_of::<u32>() as u32,
+            );
         }
     }
 }
+
+#[cfg(not(target_os = "windows"))]
+pub fn apply_mica_effect<R: tauri::Runtime>(_window: &WebviewWindow<R>) {}
+
+pub fn apply_windows_window_decorations<R: tauri::Runtime>(win: &WebviewWindow<R>) {
+    apply_mica_effect(win);
+}
+
+pub fn toggle_window<R: tauri::Runtime>(win: &WebviewWindow<R>) {
+    let is_minimized = win.is_minimized().unwrap_or(false);
+    let is_visible = win.is_visible().unwrap_or(false);
+    let is_focused = win.is_focused().unwrap_or(false);
+    if is_visible && !is_minimized && is_focused {
+        let _ = win.hide();
+    } else {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let _ = win.emit(
+            "kronos://quick-toggle",
+            serde_json::json!({
+                "timestamp": now_ms,
+            }),
+        );
+    }
+}
+
+pub fn toggle_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(win) = app.get_webview_window("main") {
+        toggle_window(&win);
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct UpdateState(pub std::sync::Arc<tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>>);
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[allow(non_snake_case)]
+pub struct DesktopAppUpdateCheckResult {
+    pub hasUpdate: bool,
+    pub readyToInstall: bool,
+    pub currentVersion: Option<String>,
+    pub latestVersion: Option<String>,
+    pub body: Option<String>,
+    pub date: Option<String>,
+    pub errorMessage: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[allow(non_snake_case)]
+pub struct DesktopAppUpdateInstallResult {
+    pub installed: bool,
+    pub version: Option<String>,
+    pub message: String,
+}
+
+#[tauri::command]
+async fn check_app_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, UpdateState>,
+    release_channel: Option<String>,
+    intent: Option<String>,
+) -> Result<DesktopAppUpdateCheckResult, String> {
+    let _ = (release_channel, intent);
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(e) => {
+            return Ok(DesktopAppUpdateCheckResult {
+                hasUpdate: false,
+                readyToInstall: false,
+                currentVersion: Some(env!("CARGO_PKG_VERSION").to_string()),
+                latestVersion: None,
+                body: None,
+                date: None,
+                errorMessage: Some(format!("Updater not initialized: {e}")),
+            });
+        }
+    };
+
+    match updater.check().await {
+        Ok(Some(update)) => {
+            println!(
+                "[updater] Update available: v{} (current: v{})",
+                update.version, update.current_version
+            );
+            let result = DesktopAppUpdateCheckResult {
+                hasUpdate: true,
+                readyToInstall: true,
+                currentVersion: Some(update.current_version.clone()),
+                latestVersion: Some(update.version.clone()),
+                body: update.body.clone(),
+                date: update.date.map(|d| d.to_string()),
+                errorMessage: None,
+            };
+            *state.0.lock().await = Some(update);
+            Ok(result)
+        }
+        Ok(None) => {
+            println!("[updater] Application is up to date");
+            Ok(DesktopAppUpdateCheckResult {
+                hasUpdate: false,
+                readyToInstall: false,
+                currentVersion: Some(env!("CARGO_PKG_VERSION").to_string()),
+                latestVersion: None,
+                body: None,
+                date: None,
+                errorMessage: None,
+            })
+        }
+        Err(e) => {
+            let err_msg = e.to_string();
+            if err_msg.contains("valid release JSON") || err_msg.contains("404") {
+                println!(
+                    "[updater] No remote release manifest found; running current release (v{})",
+                    env!("CARGO_PKG_VERSION")
+                );
+                Ok(DesktopAppUpdateCheckResult {
+                    hasUpdate: false,
+                    readyToInstall: false,
+                    currentVersion: Some(env!("CARGO_PKG_VERSION").to_string()),
+                    latestVersion: None,
+                    body: None,
+                    date: None,
+                    errorMessage: None,
+                })
+            } else {
+                eprintln!("[updater] Failed to check for updates: {e}");
+                Ok(DesktopAppUpdateCheckResult {
+                    hasUpdate: false,
+                    readyToInstall: false,
+                    currentVersion: Some(env!("CARGO_PKG_VERSION").to_string()),
+                    latestVersion: None,
+                    body: None,
+                    date: None,
+                    errorMessage: Some(err_msg),
+                })
+            }
+        }
+    }
+}
+
+#[tauri::command]
+async fn install_app_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, UpdateState>,
+    release_channel: Option<String>,
+) -> Result<DesktopAppUpdateInstallResult, String> {
+    let _ = release_channel;
+    let mut lock = state.0.lock().await;
+    let update = if let Some(u) = lock.take() {
+        u
+    } else {
+        let updater = app.updater().map_err(|e| format!("Updater not initialized: {e}"))?;
+        match updater.check().await {
+            Ok(Some(u)) => u,
+            Ok(None) => {
+                return Ok(DesktopAppUpdateInstallResult {
+                    installed: false,
+                    version: None,
+                    message: "No pending update ready to install.".into(),
+                });
+            }
+            Err(e) => {
+                return Err(format!("Check before install failed: {e}"));
+            }
+        }
+    };
+
+    let version = update.version.clone();
+    println!("[updater] Downloading and installing update v{}...", version);
+    let mut downloaded = 0;
+    update
+        .download_and_install(
+            |chunk_length, content_length| {
+                downloaded += chunk_length;
+                println!("[updater] Downloaded {downloaded} bytes of {:?}", content_length);
+            },
+            || {
+                println!("[updater] Download complete, installing update...");
+            },
+        )
+        .await
+        .map_err(|e| format!("Download/install failed: {e}"))?;
+
+    Ok(DesktopAppUpdateInstallResult {
+        installed: true,
+        version: Some(version),
+        message: "Update applied successfully. Restart Kronos to launch the new version.".into(),
+    })
+}
+
 
 fn detect_and_configure_portable_mode() -> Option<PathBuf> {
     // Check KRONOS_PORTABLE=1 env var
@@ -943,6 +1173,7 @@ try {{
         .manage(state)
         .manage(std::sync::Arc::new(crate::process_job::JobSupervisor::new().ok()))
         .manage(NativePtyManager::new())
+        .manage(UpdateState::default())
         .invoke_handler(tauri::generate_handler![
             open_in_editor,
             pick_folder,
@@ -970,7 +1201,9 @@ try {{
             write_native_terminal,
             resize_native_terminal,
             kill_native_terminal,
-            compute_file_diff
+            compute_file_diff,
+            check_app_update,
+            install_app_update
         ])
         .setup(move |app| {
             let _ = setup_tray(app.handle());
@@ -984,9 +1217,10 @@ try {{
                 .initialization_script(&bridge_script);
 
             let win = win_builder.build().ok();
-            if let Some(w) = win {
-                let _ = w.show();
-                let _ = w.set_focus();
+            if let Some(main_window) = &win {
+                apply_mica_effect(main_window);
+                let _ = main_window.show();
+                let _ = main_window.set_focus();
             }
 
             let handle_for_daemon = app.handle().clone();
@@ -1007,11 +1241,17 @@ try {{
                 }
             });
 
-            // Register global shortcut to toggle main window visibility
-            for shortcut in ["CommandOrControl+Shift+P"] {
-                if let Err(err) = app.global_shortcut().on_shortcut(shortcut, |app, _shortcut, event| {
+            // Register global shortcuts to toggle main window visibility
+            let window_clone = win.clone();
+            for shortcut in ["CommandOrControl+Shift+K", "CommandOrControl+Shift+P"] {
+                let window_clone = window_clone.clone();
+                if let Err(err) = app.global_shortcut().on_shortcut(shortcut, move |app, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
-                        toggle_main_window(app);
+                        if let Some(window_clone) = &window_clone {
+                            toggle_window(window_clone);
+                        } else if let Some(window_clone) = app.get_webview_window("main") {
+                            toggle_window(&window_clone);
+                        }
                     }
                 }) {
                     eprintln!("[shortcut] Failed to register global shortcut '{shortcut}': {err}");

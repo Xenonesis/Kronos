@@ -4,6 +4,7 @@ import { useRouter } from "expo-router";
 import type { PaletteItem } from "./types";
 import { useSessionStore } from "@/stores/session-store";
 import { useHosts } from "@/runtime/host-runtime";
+import { onQuickToggle } from "@/desktop/native-desktop-bridge";
 
 export function useCommandPalette() {
   const [isOpen, setIsOpen] = useState(false);
@@ -24,6 +25,26 @@ export function useCommandPalette() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Global hotkey quick-toggle listener (e.g. summoned via Ctrl+Shift+K / Ctrl+Shift+P)
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let mounted = true;
+    void (async () => {
+      const cleanup = await onQuickToggle(() => {
+        setIsOpen(true);
+      });
+      if (!mounted) {
+        cleanup();
+        return;
+      }
+      unlisten = cleanup;
+    })();
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
   }, []);
 
   const open = useCallback(() => setIsOpen(true), []);

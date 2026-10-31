@@ -28,15 +28,10 @@ tauri-plugin-updater = "2"
 base64 = "0.22"
 portable-pty = "0.8"
 similar = { version = "2.6", features = ["inline"] }
-gix = { version = "0.66", default-features = false, features = ["status", "worktree-mutation", "revision"] }
-windows-sys = { version = "0.59", features = [
-    "Win32_System_JobObjects",
-    "Win32_System_Threading",
-    "Win32_Foundation",
-    "Win32_Security",
-    "Win32_System_Memory",
-    "Win32_System_LibraryLoader",
-    "Win32_Storage_FileSystem",
+gix = { version = "0.66", default-features = false, features = [
+  "status",
+  "worktree-mutation",
+  "revision",
 ] }
 tree-sitter = "0.24"
 tree-sitter-typescript = "0.23"
@@ -46,6 +41,19 @@ clap = { version = "4", features = ["derive"] }
 rayon = "1.10"
 whisper-rs = "0.16.0"
 rkyv = { version = "0.7", features = ["validation"] }
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.59"
+features = [
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Memory",
+  "Win32_System_LibraryLoader",
+  "Win32_Storage_FileSystem",
+  "Win32_Graphics_Dwm",
+]
 
 [profile.release]
 incremental = true
