@@ -300,6 +300,10 @@ function publishToGitHub(exePath, persistentPath, latestJsonPath, releaseTag) {
       );
     }
     const uploadFiles = [exePath, persistentPath];
+    const portablePath = path.join(rootDir, "dist", "kronos-portable.exe");
+    if (existsSync(portablePath)) {
+      uploadFiles.push(portablePath);
+    }
     if (latestJsonPath && existsSync(latestJsonPath)) {
       uploadFiles.push(latestJsonPath);
     }
