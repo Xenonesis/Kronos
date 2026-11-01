@@ -3,6 +3,179 @@ mod tests {
     use crate::kernel::server::EmbeddedDaemon;
     use tokio_tungstenite::connect_async;
     use futures_util::{SinkExt, StreamExt};
+    use crate::kernel::protocol::RpcEnvelope;
+    use crate::kernel::server::{dispatch_envelope, dispatch_session_message};
+
+    #[tokio::test]
+    async fn test_embedded_daemon_mcp_envelope_dispatch() {
+        let envelope = RpcEnvelope {
+            id: "mcp-env-1".to_string(),
+            msg_type: "mcp/request".to_string(),
+            payload: serde_json::json!({
+                "request": serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "inner-1",
+                    "method": "tools/list"
+                }).to_string()
+            }),
+        };
+
+        let response = dispatch_envelope(envelope).await;
+        assert!(response.success);
+        assert_eq!(response.msg_type, "mcp/response");
+        let data = response.data.expect("Response data expected");
+        let inner_json: &str = data["response"].as_str().expect("inner response string");
+        let inner_val: serde_json::Value = serde_json::from_str(inner_json).unwrap();
+        assert_eq!(inner_val["id"], "inner-1");
+        assert!(inner_val["result"]["tools"].as_array().unwrap().len() >= 5);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_mcp_envelope_tool_call() {
+        let envelope = RpcEnvelope {
+            id: "mcp-call-env".to_string(),
+            msg_type: "mcp/jsonrpc".to_string(),
+            payload: serde_json::json!({
+                "request": {
+                    "jsonrpc": "2.0",
+                    "id": "inner-call-1",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "git_status",
+                        "arguments": {
+                            "path": "."
+                        }
+                    }
+                }
+            }),
+        };
+
+        let response = dispatch_envelope(envelope).await;
+        assert!(response.success);
+        assert_eq!(response.msg_type, "mcp/response");
+        let data = response.data.expect("Response data expected");
+        let inner_json: &str = data["response"].as_str().expect("inner response string");
+        let inner_val: serde_json::Value = serde_json::from_str(inner_json).unwrap();
+        assert_eq!(inner_val["id"], "inner-call-1");
+        assert!(inner_val["result"]["content"].is_array());
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_mcp_envelope_notification() {
+        let envelope = RpcEnvelope {
+            id: "mcp-notif-env".to_string(),
+            msg_type: "mcp/request".to_string(),
+            payload: serde_json::json!({
+                "request": {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized"
+                }
+            }),
+        };
+
+        let response = dispatch_envelope(envelope).await;
+        assert!(response.success);
+        assert_eq!(response.msg_type, "mcp/response");
+        let data = response.data.expect("Response data expected");
+        assert!(data["response"].is_null());
+        assert_eq!(data["notification"], true);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_mcp_session_message_dispatch() {
+        let session_msg = serde_json::json!({
+            "type": "mcp/request",
+            "requestId": "sess-req-1",
+            "payload": {
+                "request": serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "sess-inner-1",
+                    "method": "tools/list"
+                }).to_string()
+            }
+        });
+
+        let resp = dispatch_session_message(&session_msg).await;
+        assert_eq!(resp["type"], "mcp/response");
+        assert_eq!(resp["requestId"], "sess-req-1");
+        assert_eq!(resp["success"], true);
+        let inner_str = resp["payload"]["response"].as_str().expect("inner response string");
+        let inner_val: serde_json::Value = serde_json::from_str(inner_str).unwrap();
+        assert_eq!(inner_val["id"], "sess-inner-1");
+        assert!(inner_val["result"]["tools"].as_array().unwrap().len() >= 5);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_mcp_session_message_tool_call_and_notification() {
+        let call_msg = serde_json::json!({
+            "type": "mcp_request",
+            "requestId": "sess-call-1",
+            "request": {
+                "jsonrpc": "2.0",
+                "id": "sess-call-inner",
+                "method": "tools/call",
+                "params": {
+                    "name": "git_status",
+                    "arguments": { "path": "." }
+                }
+            }
+        });
+
+        let resp = dispatch_session_message(&call_msg).await;
+        assert_eq!(resp["type"], "mcp/response");
+        assert_eq!(resp["requestId"], "sess-call-1");
+        let inner_str = resp["payload"]["response"].as_str().expect("response str");
+        let inner_val: serde_json::Value = serde_json::from_str(inner_str).unwrap();
+        assert_eq!(inner_val["id"], "sess-call-inner");
+        assert!(inner_val["result"]["content"].is_array());
+
+        let notif_msg = serde_json::json!({
+            "type": "mcp/jsonrpc",
+            "requestId": "sess-notif-1",
+            "payload": {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+            }
+        });
+
+        let notif_resp = dispatch_session_message(&notif_msg).await;
+        assert_eq!(notif_resp["type"], "mcp/response");
+        assert_eq!(notif_resp["requestId"], "sess-notif-1");
+        assert!(notif_resp["payload"]["response"].is_null());
+        assert_eq!(notif_resp["payload"]["notification"], true);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_mcp_websocket_flow() {
+        let daemon = EmbeddedDaemon::start_test(0).await.expect("Failed to start daemon");
+        let url = format!("ws://127.0.0.1:{}", daemon.port);
+        let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+
+        let msg = serde_json::json!({
+            "id": "ws-mcp-env",
+            "type": "mcp/request",
+            "payload": {
+                "request": {
+                    "jsonrpc": "2.0",
+                    "id": "ws-inner-req",
+                    "method": "tools/list"
+                }
+            }
+        });
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(msg.to_string())).await.unwrap();
+
+        let response = ws_stream.next().await.unwrap().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+        assert_eq!(parsed["id"], "ws-mcp-env");
+        assert_eq!(parsed["type"], "mcp/response");
+        assert_eq!(parsed["success"], true);
+        let inner_str = parsed["data"]["response"].as_str().unwrap();
+        let inner_val: serde_json::Value = serde_json::from_str(inner_str).unwrap();
+        assert_eq!(inner_val["id"], "ws-inner-req");
+        assert!(inner_val["result"]["tools"].as_array().unwrap().len() >= 5);
+
+        daemon.stop().await;
+    }
 
     #[tokio::test]
     async fn test_embedded_daemon_websocket_handshake() {

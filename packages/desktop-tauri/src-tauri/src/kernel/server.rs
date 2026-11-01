@@ -9,6 +9,44 @@ use axum::{
 use tokio::sync::{broadcast, Mutex};
 use crate::kernel::protocol::{RpcEnvelope, RpcResponse};
 
+static MCP_HUB: std::sync::OnceLock<crate::kernel::mcp::McpHub> = std::sync::OnceLock::new();
+
+pub fn get_mcp_hub() -> &'static crate::kernel::mcp::McpHub {
+    MCP_HUB.get_or_init(crate::kernel::mcp::McpHub::new)
+}
+
+fn extract_jsonrpc_request_str(val: &serde_json::Value) -> Option<String> {
+    if let Some(req) = val.get("request") {
+        if let Some(s) = req.as_str() {
+            return Some(s.to_string());
+        } else if req.is_object() || req.is_array() {
+            return serde_json::to_string(req).ok();
+        }
+    }
+    if let Some(payload) = val.get("payload") {
+        if let Some(s) = payload.as_str() {
+            return Some(s.to_string());
+        }
+        if let Some(req) = payload.get("request") {
+            if let Some(s) = req.as_str() {
+                return Some(s.to_string());
+            } else if req.is_object() || req.is_array() {
+                return serde_json::to_string(req).ok();
+            }
+        }
+        if payload.get("jsonrpc").is_some() {
+            return serde_json::to_string(payload).ok();
+        }
+    }
+    if let Some(s) = val.as_str() {
+        return Some(s.to_string());
+    }
+    if val.get("jsonrpc").is_some() {
+        return serde_json::to_string(val).ok();
+    }
+    None
+}
+
 pub async fn health_check() -> axum::response::Response {
     use axum::response::IntoResponse;
     axum::Json(serde_json::json!({
@@ -73,6 +111,25 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                 "error": null,
                 "requestId": envelope.id
             })))
+        }
+        "mcp/request" | "mcp/jsonrpc" | "mcp_request" => {
+            let req_str = extract_jsonrpc_request_str(&envelope.payload).unwrap_or_default();
+            let hub = get_mcp_hub();
+            match hub.handle_jsonrpc(&req_str) {
+                Some(res) => RpcResponse::ok(
+                    &envelope.id,
+                    "mcp/response",
+                    Some(serde_json::json!({ "response": res })),
+                ),
+                None => RpcResponse::ok(
+                    &envelope.id,
+                    "mcp/response",
+                    Some(serde_json::json!({
+                        "response": null,
+                        "notification": true
+                    })),
+                ),
+            }
         }
         other => RpcResponse::err(
             envelope.id,
@@ -179,6 +236,34 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }
             })
         }
+        "mcp/request" | "mcp/jsonrpc" | "mcp_request" => {
+            let req_str = extract_jsonrpc_request_str(msg).unwrap_or_default();
+            let hub = get_mcp_hub();
+            match hub.handle_jsonrpc(&req_str) {
+                Some(res) => serde_json::json!({
+                    "type": "mcp/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": true,
+                    "payload": {
+                        "response": res
+                    },
+                    "response": res
+                }),
+                None => serde_json::json!({
+                    "type": "mcp/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": true,
+                    "payload": {
+                        "response": null,
+                        "notification": true
+                    },
+                    "response": null,
+                    "notification": true
+                }),
+            }
+        }
         other => {
             serde_json::json!({
                 "type": format!("{}/response", other),
@@ -223,6 +308,10 @@ pub async fn process_incoming_frame(text: &str) -> Option<String> {
                     let wrapped = crate::kernel::protocol::wrap_session_outbound(res);
                     return serde_json::to_string(&wrapped).ok();
                 }
+            }
+            "mcp/request" | "mcp/jsonrpc" | "mcp_request" => {
+                let res = dispatch_session_message(&val).await;
+                return serde_json::to_string(&res).ok();
             }
             _ => {}
         }
