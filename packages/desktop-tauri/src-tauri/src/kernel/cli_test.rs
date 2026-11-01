@@ -123,8 +123,45 @@ mod tests {
             parsed.command,
             Some(CliCommand::Search {
                 query: "tantivy".to_string(),
+                json: false,
+                limit: 20,
             })
         );
+    }
+
+    #[test]
+    fn test_cli_search_json_flag_and_limit() {
+        let args = [
+            "paseo",
+            "search",
+            "WorkspaceSearchIndex",
+            "--json",
+            "--limit",
+            "5",
+        ];
+
+        let parsed = CliArgs::try_parse_from(args).expect("Failed to parse search args with --json");
+        assert_eq!(
+            parsed.command,
+            Some(CliCommand::Search {
+                query: "WorkspaceSearchIndex".to_string(),
+                json: true,
+                limit: 5,
+            })
+        );
+    }
+
+    #[test]
+    fn test_cli_search_directory_fallback_for_paths() {
+        // Queries containing path separators should return directory and file suggestions
+        let (dirs, entries) = crate::kernel::search::suggest_directory_entries(
+            std::path::Path::new("."),
+            "kernel",
+            true,
+            true,
+            10,
+        );
+        assert!(!dirs.is_empty() || !entries.is_empty(), "Expected directory suggestions for 'kernel'");
     }
 
     #[test]
@@ -242,6 +279,124 @@ mod tests {
         let input = "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"initialize\"}\n";
         let reader = Cursor::new(input.as_bytes());
         let writer = FailingWriter;
+
+        let exit_code = run_mcp_stdio_loop(reader, writer, &hub);
+        assert_eq!(exit_code, 1);
+    }
+
+    #[test]
+    fn test_cli_search_json_execution() {
+        use crate::kernel::cli::{execute_search_to, CliSearchOutput};
+
+        let mut output = Vec::new();
+        let code = execute_search_to(
+            "WorkspaceSearchIndex",
+            true,
+            5,
+            std::path::Path::new("."),
+            &mut output,
+        );
+        assert_eq!(code, Some(0));
+
+        let json_text = String::from_utf8(output).expect("Valid UTF-8 output");
+        let parsed: CliSearchOutput = serde_json::from_str(&json_text).expect("Valid JSON response");
+        assert_eq!(parsed.query, "WorkspaceSearchIndex");
+        assert!(!parsed.matches.is_empty());
+        assert!(!parsed.fallback);
+
+        let search_rs = parsed
+            .matches
+            .iter()
+            .find(|m| m.path.contains("search.rs"))
+            .expect("Should contain search.rs");
+        assert!(search_rs.line.is_some());
+        assert!(search_rs
+            .snippet
+            .as_ref()
+            .unwrap()
+            .contains("WorkspaceSearchIndex"));
+    }
+
+    #[test]
+    fn test_cli_search_terminal_text_execution() {
+        use crate::kernel::cli::execute_search_to;
+
+        let mut output = Vec::new();
+        let code = execute_search_to(
+            "WorkspaceSearchIndex",
+            false,
+            5,
+            std::path::Path::new("."),
+            &mut output,
+        );
+        assert_eq!(code, Some(0));
+
+        let text = String::from_utf8(output).expect("Valid UTF-8 output");
+        assert!(text.contains("[Kernel CLI] Search query \"WorkspaceSearchIndex\" matched"));
+        assert!(text.contains("search.rs:"));
+        assert!(text.contains("WorkspaceSearchIndex"));
+    }
+
+    #[test]
+    fn test_cli_search_directory_fallback_when_zero_matches() {
+        use crate::kernel::cli::{execute_search_to, CliSearchOutput};
+
+        // Query contains path separator or is a path with no tantivy matches
+        let mut output = Vec::new();
+        let code = execute_search_to(
+            "kernel/cli",
+            true,
+            5,
+            std::path::Path::new("."),
+            &mut output,
+        );
+        assert_eq!(code, Some(0));
+
+        let json_text = String::from_utf8(output).expect("Valid UTF-8 output");
+        let parsed: CliSearchOutput = serde_json::from_str(&json_text).expect("Valid JSON response");
+        assert!(!parsed.matches.is_empty(), "Expected directory suggestion matches for path 'kernel/cli'");
+        assert!(parsed.matches.iter().any(|m| m.path.contains("cli.rs")));
+    }
+
+    #[test]
+    fn test_cli_search_respects_limit() {
+        use crate::kernel::cli::{execute_search_to, CliSearchOutput};
+
+        let mut output = Vec::new();
+        let code = execute_search_to(
+            "kernel",
+            true,
+            2,
+            std::path::Path::new("."),
+            &mut output,
+        );
+        assert_eq!(code, Some(0));
+
+        let json_text = String::from_utf8(output).expect("Valid UTF-8 output");
+        let parsed: CliSearchOutput = serde_json::from_str(&json_text).expect("Valid JSON response");
+        assert!(parsed.matches.len() <= 2);
+    }
+
+    #[test]
+    fn test_cli_mcp_stdio_flush_error_returns_nonzero() {
+        use std::io::{Cursor, Error, ErrorKind, Write};
+        use crate::kernel::cli::run_mcp_stdio_loop;
+        use crate::kernel::mcp::McpHub;
+
+        struct FailingFlushWriter;
+        impl Write for FailingFlushWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(Error::new(ErrorKind::BrokenPipe, "simulated flush broken pipe"))
+            }
+        }
+
+        let hub = McpHub::new();
+        let input = "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"initialize\"}\n";
+        let reader = Cursor::new(input.as_bytes());
+        let writer = FailingFlushWriter;
 
         let exit_code = run_mcp_stdio_loop(reader, writer, &hub);
         assert_eq!(exit_code, 1);

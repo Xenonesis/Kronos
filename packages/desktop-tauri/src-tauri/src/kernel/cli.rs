@@ -22,9 +22,13 @@ pub enum CliCommand {
         #[arg(short, long)]
         provider: Option<String>,
     },
-    /// Lexical search across workspace index
+    /// Lexical and path search across workspace
     Search {
         query: String,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        #[arg(short, long, default_value_t = 20)]
+        limit: usize,
     },
     /// Model Context Protocol stdio server
     Mcp,
@@ -147,25 +151,220 @@ pub fn execute_search_in(
     index.search(query)
 }
 
-/// Dispatches the search command across the current working directory.
-pub fn execute_search(query: &str) -> Option<i32> {
-    match execute_search_in(query, std::path::Path::new(".")) {
-        Ok(matches) => {
-            println!(
-                "[Kernel CLI] Search query \"{}\" matched {} documents:",
-                query,
-                matches.len()
-            );
-            for m in &matches {
-                println!("  - {} (score: {:.2})", m.path, m.score);
-            }
-            Some(0)
+/// Single search match representing either a lexical document match or a directory suggestion fallback.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct CliSearchMatch {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
+/// Structured payload emitted by `kronos search <query> --json`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct CliSearchOutput {
+    pub query: String,
+    pub count: usize,
+    pub matches: Vec<CliSearchMatch>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub suggestions: Vec<crate::kernel::search::DirectorySuggestionEntry>,
+    pub fallback: bool,
+}
+
+/// Locates the 1-based line number and a trimmed snippet containing `query` in `file_path`.
+pub fn find_snippet_and_line(
+    file_path: &std::path::Path,
+    query: &str,
+) -> (Option<usize>, Option<String>) {
+    let content = match std::fs::read_to_string(file_path) {
+        Ok(c) => c,
+        Err(_) => return (None, None),
+    };
+
+    let query_lower = query.to_ascii_lowercase();
+    let query_words: Vec<&str> = query_lower.split_whitespace().collect();
+    let mut best_line: Option<(usize, String)> = None;
+
+    for (idx, line) in content.lines().enumerate() {
+        let line_lower = line.to_ascii_lowercase();
+        if line_lower.contains(&query_lower) {
+            let trimmed = line.trim();
+            let snippet = if trimmed.len() > 120 {
+                format!("{}...", &trimmed[..120])
+            } else {
+                trimmed.to_string()
+            };
+            return (Some(idx + 1), Some(snippet));
         }
-        Err(err) => {
-            eprintln!("[Kernel CLI] Search query error: {err}");
-            Some(1)
+
+        if best_line.is_none()
+            && !query_words.is_empty()
+            && query_words.iter().all(|w| line_lower.contains(w))
+        {
+            let trimmed = line.trim();
+            let snippet = if trimmed.len() > 120 {
+                format!("{}...", &trimmed[..120])
+            } else {
+                trimmed.to_string()
+            };
+            best_line = Some((idx + 1, snippet));
         }
     }
+
+    if let Some((line_num, snippet)) = best_line {
+        return (Some(line_num), Some(snippet));
+    }
+
+    for (idx, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            let snippet = if trimmed.len() > 120 {
+                format!("{}...", &trimmed[..120])
+            } else {
+                trimmed.to_string()
+            };
+            return (Some(idx + 1), Some(snippet));
+        }
+    }
+
+    (None, None)
+}
+
+/// Dispatches the search command across the current working directory, printing to stdout.
+pub fn execute_search(query: &str, as_json: bool, limit: usize) -> Option<i32> {
+    execute_search_to(query, as_json, limit, std::path::Path::new("."), std::io::stdout())
+}
+
+/// Core search implementation writing formatted text or JSON to an arbitrary writer.
+pub fn execute_search_to<W: std::io::Write>(
+    query: &str,
+    as_json: bool,
+    limit: usize,
+    root: &std::path::Path,
+    mut writer: W,
+) -> Option<i32> {
+    let effective_limit = if limit == 0 { 20 } else { limit };
+    let has_path_sep = query.contains('/') || query.contains('\\');
+
+    let tantivy_matches = execute_search_in(query, root).ok().unwrap_or_default();
+
+    let mut matches: Vec<CliSearchMatch> = Vec::new();
+    let mut seen_paths = std::collections::HashSet::new();
+
+    // 1. Populate matches from Tantivy index
+    for m in tantivy_matches {
+        if matches.len() >= effective_limit {
+            break;
+        }
+        if seen_paths.insert(m.path.clone()) {
+            let file_path = if root.join(&m.path).exists() {
+                root.join(&m.path)
+            } else {
+                std::path::PathBuf::from(&m.path)
+            };
+            let (line, snippet) = find_snippet_and_line(&file_path, query);
+            matches.push(CliSearchMatch {
+                path: m.path,
+                line,
+                snippet,
+                score: Some(m.score),
+                kind: Some("file".to_string()),
+            });
+        }
+    }
+
+    // 2. Fallback or complement with directory suggestions
+    let mut suggestions: Vec<crate::kernel::search::DirectorySuggestionEntry> = Vec::new();
+    let fallback = matches.is_empty();
+
+    if fallback || has_path_sep {
+        let (_dirs, entries) = crate::kernel::search::suggest_directory_entries(
+            root,
+            query,
+            true,
+            true,
+            effective_limit,
+        );
+
+        for entry in &entries {
+            if matches.len() >= effective_limit {
+                break;
+            }
+            if seen_paths.insert(entry.path.clone()) {
+                let file_path = if root.join(&entry.path).exists() {
+                    root.join(&entry.path)
+                } else {
+                    std::path::PathBuf::from(&entry.path)
+                };
+
+                let (line, snippet) = if entry.kind == "file" {
+                    find_snippet_and_line(&file_path, query)
+                } else {
+                    (None, Some("[directory]".to_string()))
+                };
+
+                matches.push(CliSearchMatch {
+                    path: entry.path.clone(),
+                    line,
+                    snippet,
+                    score: None,
+                    kind: Some(entry.kind.clone()),
+                });
+            }
+        }
+        suggestions = entries;
+    }
+
+    if as_json {
+        let output = CliSearchOutput {
+            query: query.to_string(),
+            count: matches.len(),
+            matches,
+            suggestions,
+            fallback,
+        };
+        match serde_json::to_string_pretty(&output) {
+            Ok(json_str) => {
+                if let Err(e) = writeln!(writer, "{}", json_str) {
+                    eprintln!("[Kernel CLI] Failed to write JSON search output: {e}");
+                    return Some(1);
+                }
+            }
+            Err(e) => {
+                eprintln!("[Kernel CLI] Failed to serialize search results: {e}");
+                return Some(1);
+            }
+        }
+    } else {
+        if matches.is_empty() {
+            let _ = writeln!(writer, "[Kernel CLI] Search query \"{}\" matched 0 documents", query);
+        } else {
+            let _ = writeln!(
+                writer,
+                "[Kernel CLI] Search query \"{}\" matched {} documents{}:",
+                query,
+                matches.len(),
+                if fallback { " (fallback directory suggestions)" } else { "" }
+            );
+            for m in &matches {
+                if let (Some(line), Some(snippet)) = (m.line, &m.snippet) {
+                    let _ = writeln!(writer, "  {}:{} - {}", m.path, line, snippet);
+                } else if let Some(snippet) = &m.snippet {
+                    let _ = writeln!(writer, "  {} - {}", m.path, snippet);
+                } else {
+                    let _ = writeln!(writer, "  {}", m.path);
+                }
+            }
+        }
+    }
+
+    let _ = writer.flush();
+    Some(0)
 }
 
 /// Parses CLI arguments from an arbitrary iterator and dispatches commands.
@@ -232,7 +431,7 @@ pub fn dispatch(args: CliArgs) -> Option<i32> {
             println!("[Kernel CLI] Dry-run dispatch successful (exit 0)");
             Some(0)
         }
-        CliCommand::Search { query } => execute_search(&query),
+        CliCommand::Search { query, json, limit } => execute_search(&query, json, limit),
         CliCommand::Mcp => {
             eprintln!("[Kernel CLI] Starting native Model Context Protocol (MCP) stdio server...");
             let hub = crate::kernel::mcp::McpHub::new();
@@ -284,7 +483,10 @@ pub fn run_mcp_stdio_loop<R: std::io::BufRead, W: std::io::Write>(
                 eprintln!("[MCP] Failed to write response to stdout: {e}");
                 return 1;
             }
-            let _ = writer.flush();
+            if let Err(e) = writer.flush() {
+                eprintln!("[MCP] Failed to flush stdout: {e}");
+                return 1;
+            }
         }
     }
     0
