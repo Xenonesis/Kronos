@@ -26,6 +26,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_embedded_daemon_canonical_hello_and_ping() {
+        let port = 6795;
+        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+        let url = format!("ws://127.0.0.1:{}", port);
+        let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+
+        // 1. Send Canonical Hello Handshake
+        let hello = serde_json::json!({
+            "type": "hello",
+            "clientId": "cid-integration-test",
+            "clientType": "cli",
+            "protocolVersion": 1
+        });
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(hello.to_string())).await.unwrap();
+
+        let response = ws_stream.next().await.unwrap().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+        assert_eq!(parsed["type"], "session");
+        assert_eq!(parsed["message"]["type"], "status");
+        assert_eq!(parsed["message"]["payload"]["status"], "server_info");
+        assert_eq!(parsed["message"]["payload"]["protocolVersion"], 1);
+        assert_eq!(parsed["message"]["payload"]["serverId"], "kronos-embedded-daemon");
+
+        // 2. Send Simple Ping
+        let ping = serde_json::json!({ "type": "ping" });
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(ping.to_string())).await.unwrap();
+
+        let pong_resp = ws_stream.next().await.unwrap().unwrap();
+        let parsed_pong: serde_json::Value = serde_json::from_str(pong_resp.to_text().unwrap()).unwrap();
+        assert_eq!(parsed_pong["type"], "pong");
+
+        // 3. Send Session Telemetry Query
+        let tele_query = serde_json::json!({
+            "type": "session",
+            "message": {
+                "type": "kernel/telemetry",
+                "requestId": "req-tele-test"
+            }
+        });
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(tele_query.to_string())).await.unwrap();
+
+        let tele_resp = ws_stream.next().await.unwrap().unwrap();
+        let parsed_tele: serde_json::Value = serde_json::from_str(tele_resp.to_text().unwrap()).unwrap();
+        assert_eq!(parsed_tele["type"], "session");
+        assert_eq!(parsed_tele["message"]["type"], "kernel/telemetry/response");
+        assert_eq!(parsed_tele["message"]["requestId"], "req-tele-test");
+        assert!(parsed_tele["message"]["payload"]["uptime_secs"].is_number());
+
+        daemon.stop().await;
+    }
+
+    #[tokio::test]
     async fn test_embedded_daemon_unknown_method_dispatch() {
         let daemon = EmbeddedDaemon::start_test(6797).await.expect("Failed to start daemon");
         let url = "ws://127.0.0.1:6797";

@@ -62,3 +62,74 @@ pub type RpcPayload = Value;
 pub type ClientRequest = RpcEnvelope;
 pub type ServerResponse = RpcResponse;
 pub type SessionEvent = RpcEnvelope;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum WSInboundMessage {
+    #[serde(rename = "ping")]
+    Ping,
+    #[serde(rename = "hello")]
+    Hello {
+        #[serde(rename = "clientId", default)]
+        client_id: Option<String>,
+        #[serde(rename = "clientType", default)]
+        client_type: Option<String>,
+        #[serde(rename = "protocolVersion", default)]
+        protocol_version: Option<u32>,
+        #[serde(default)]
+        capabilities: Option<Value>,
+    },
+    #[serde(rename = "session")]
+    Session {
+        message: Value,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum WSOutboundMessage {
+    #[serde(rename = "pong")]
+    Pong,
+    #[serde(rename = "session")]
+    Session {
+        message: Value,
+    },
+    #[serde(rename = "hello.rejected")]
+    HelloRejected {
+        reason: String,
+        accepts: Vec<String>,
+    },
+}
+
+pub fn build_server_info_payload() -> Value {
+    serde_json::json!({
+        "status": "server_info",
+        "protocolVersion": 1,
+        "serverId": "kronos-embedded-daemon",
+        "hostname": "localhost",
+        "version": env!("CARGO_PKG_VERSION"),
+        "desktopManaged": true,
+        "features": {
+            "connectedHosts": true,
+            "hostMultiplexing": true,
+            "terminalChunkedReplay": true,
+            "binaryChunkingV1": true
+        }
+    })
+}
+
+pub fn wrap_session_outbound(message: Value) -> Value {
+    serde_json::json!({
+        "type": "session",
+        "message": message
+    })
+}
+
+pub fn build_server_info_response() -> Value {
+    wrap_session_outbound(serde_json::json!({
+        "type": "status",
+        "payload": build_server_info_payload()
+    }))
+}

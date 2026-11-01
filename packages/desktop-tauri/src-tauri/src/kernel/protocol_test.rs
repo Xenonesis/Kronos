@@ -89,4 +89,46 @@ mod tests {
         let payload: RpcPayload = json!({ "ack": true });
         assert_eq!(payload["ack"], true);
     }
+
+    #[test]
+    fn test_ws_inbound_outbound_envelopes() {
+        use crate::kernel::protocol::{
+            build_server_info_response, WSInboundMessage, WSOutboundMessage,
+        };
+
+        // 1. Hello inbound deserialization
+        let hello_raw = json!({
+            "type": "hello",
+            "clientId": "cid-123",
+            "clientType": "cli",
+            "protocolVersion": 1
+        });
+        let parsed: WSInboundMessage = serde_json::from_value(hello_raw).expect("parse hello");
+        match parsed {
+            WSInboundMessage::Hello { client_id, client_type, protocol_version, .. } => {
+                assert_eq!(client_id.as_deref(), Some("cid-123"));
+                assert_eq!(client_type.as_deref(), Some("cli"));
+                assert_eq!(protocol_version, Some(1));
+            }
+            _ => panic!("Expected Hello variant"),
+        }
+
+        // 2. Ping inbound deserialization
+        let ping_raw = json!({ "type": "ping" });
+        let parsed_ping: WSInboundMessage = serde_json::from_value(ping_raw).expect("parse ping");
+        assert_eq!(parsed_ping, WSInboundMessage::Ping);
+
+        // 3. Pong outbound serialization
+        let pong = WSOutboundMessage::Pong;
+        let pong_val = serde_json::to_value(pong).expect("serialize pong");
+        assert_eq!(pong_val["type"], "pong");
+
+        // 4. Server info outbound response structure
+        let info = build_server_info_response();
+        assert_eq!(info["type"], "session");
+        assert_eq!(info["message"]["type"], "status");
+        assert_eq!(info["message"]["payload"]["status"], "server_info");
+        assert_eq!(info["message"]["payload"]["protocolVersion"], 1);
+        assert_eq!(info["message"]["payload"]["serverId"], "kronos-embedded-daemon");
+    }
 }

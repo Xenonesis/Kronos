@@ -9,10 +9,21 @@ use axum::{
 use tokio::sync::{broadcast, Mutex};
 use crate::kernel::protocol::{RpcEnvelope, RpcResponse};
 
-pub async fn health_check() -> &'static str {
-    "OK"
+pub async fn health_check() -> axum::response::Response {
+    use axum::response::IntoResponse;
+    axum::Json(serde_json::json!({
+        "status": "ok",
+        "engine": "kronos-rust-kernel",
+        "version": env!("CARGO_PKG_VERSION")
+    })).into_response()
 }
 
+pub async fn version_check() -> axum::response::Json<serde_json::Value> {
+    axum::response::Json(serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "engine": "kronos-rust-kernel"
+    }))
+}
 pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
     match envelope.msg_type.as_str() {
         "ping" => RpcResponse {
@@ -46,6 +57,112 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
             format!("Method '{}' not implemented", other),
         ),
     }
+}
+
+pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Value {
+    let msg_type = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let request_id = msg.get("requestId")
+        .or_else(|| msg.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    match msg_type {
+        "kernel/telemetry" => {
+            let tele = crate::kernel::telemetry::get_kernel_telemetry();
+            serde_json::json!({
+                "type": "kernel/telemetry/response",
+                "requestId": request_id,
+                "payload": tele
+            })
+        }
+        "daemon/get_status" | "daemon_get_status" => {
+            serde_json::json!({
+                "type": "daemon/status",
+                "requestId": request_id,
+                "payload": {
+                    "running": true,
+                    "engine": "rust",
+                    "version": env!("CARGO_PKG_VERSION")
+                }
+            })
+        }
+        "file/inspect" => {
+            let path = msg.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let p = std::path::Path::new(path);
+            let exists = p.exists();
+            let is_dir = p.is_dir();
+            let byte_size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+            serde_json::json!({
+                "type": "file/inspect/response",
+                "requestId": request_id,
+                "payload": {
+                    "path": path,
+                    "exists": exists,
+                    "isDir": is_dir,
+                    "byteSize": byte_size
+                }
+            })
+        }
+        "git/status" => {
+            let path = msg.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+            let summary = crate::kernel::git::GitEngine::status_summary(path).ok();
+            serde_json::json!({
+                "type": "git/status/response",
+                "requestId": request_id,
+                "payload": summary
+            })
+        }
+        other => {
+            serde_json::json!({
+                "type": format!("{}/response", other),
+                "requestId": request_id,
+                "success": true,
+                "payload": {}
+            })
+        }
+    }
+}
+
+pub async fn process_incoming_frame(text: &str) -> Option<String> {
+    let val: serde_json::Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(err) => {
+            let err_resp = RpcResponse::err("unknown", "error", format!("Invalid JSON: {}", err));
+            return serde_json::to_string(&err_resp).ok();
+        }
+    };
+
+    // 1. Direct RPC envelope with explicit ID
+    if val.get("id").is_some() && val.get("type").is_some() {
+        if let Ok(envelope) = serde_json::from_value::<RpcEnvelope>(val.clone()) {
+            let resp = dispatch_envelope(envelope).await;
+            return serde_json::to_string(&resp).ok();
+        }
+    }
+
+    // 2. Canonical WebSocket wire envelopes (ping, hello, session)
+    if let Some(msg_type) = val.get("type").and_then(|v| v.as_str()) {
+        match msg_type {
+            "ping" => {
+                return Some(r#"{"type":"pong"}"#.to_string());
+            }
+            "hello" => {
+                let resp = crate::kernel::protocol::build_server_info_response();
+                return serde_json::to_string(&resp).ok();
+            }
+            "session" => {
+                if let Some(inner) = val.get("message") {
+                    let res = dispatch_session_message(inner).await;
+                    let wrapped = crate::kernel::protocol::wrap_session_outbound(res);
+                    return serde_json::to_string(&wrapped).ok();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let err_resp = RpcResponse::err("unknown", "error", "Unsupported message format");
+    serde_json::to_string(&err_resp).ok()
 }
 
 pub struct DaemonHandle {
@@ -84,6 +201,7 @@ impl DaemonHandle {
         let app = Router::new()
             .route("/api/health", get(health_check))
             .route("/health", get(health_check))
+            .route("/api/version", get(version_check))
             .route("/", get({
                 let tx = shutdown_tx.clone();
                 move |ws: WebSocketUpgrade| {
@@ -186,31 +304,17 @@ async fn handle_ws(mut socket: WebSocket, mut shutdown_rx: broadcast::Receiver<(
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        match serde_json::from_str::<RpcEnvelope>(&text) {
-                            Ok(envelope) => {
-                                let resp = dispatch_envelope(envelope).await;
-                                if let Ok(json) = serde_json::to_string(&resp) {
-                                    if socket.send(Message::Text(json.into())).await.is_err() {
-                                        break;
-                                    }
-                                }
-                            }
-                            Err(err) => {
-                                let err_resp = RpcResponse::err("unknown", "error", format!("Invalid RPC envelope: {}", err));
-                                if let Ok(json) = serde_json::to_string(&err_resp) {
-                                    let _ = socket.send(Message::Text(json.into())).await;
-                                }
+                        if let Some(reply) = process_incoming_frame(&text).await {
+                            if socket.send(Message::Text(reply.into())).await.is_err() {
+                                break;
                             }
                         }
                     }
                     Some(Ok(Message::Binary(bytes))) => {
                         if let Ok(text) = std::str::from_utf8(&bytes) {
-                            if let Ok(envelope) = serde_json::from_str::<RpcEnvelope>(text) {
-                                let resp = dispatch_envelope(envelope).await;
-                                if let Ok(json) = serde_json::to_string(&resp) {
-                                    if socket.send(Message::Text(json.into())).await.is_err() {
-                                        break;
-                                    }
+                            if let Some(reply) = process_incoming_frame(text).await {
+                                if socket.send(Message::Text(reply.into())).await.is_err() {
+                                    break;
                                 }
                             }
                         }
@@ -282,13 +386,10 @@ async fn run_named_pipe(pipe_name: String, mut shutdown_rx: broadcast::Receiver<
                                 if trimmed.is_empty() {
                                     continue;
                                 }
-                                if let Ok(envelope) = serde_json::from_str::<RpcEnvelope>(trimmed) {
-                                    let resp = dispatch_envelope(envelope).await;
-                                    if let Ok(mut json) = serde_json::to_string(&resp) {
-                                        json.push('\n');
-                                        if writer.write_all(json.as_bytes()).await.is_err() {
-                                            break;
-                                        }
+                                if let Some(mut reply) = process_incoming_frame(trimmed).await {
+                                    reply.push('\n');
+                                    if writer.write_all(reply.as_bytes()).await.is_err() {
+                                        break;
                                     }
                                 }
                             }

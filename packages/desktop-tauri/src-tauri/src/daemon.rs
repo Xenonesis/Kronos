@@ -505,13 +505,17 @@ pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
     if wait_for_daemon_health(1) {
         return None;
     }
-    let engine = env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "node".to_string());
+    let engine = env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "rust".to_string());
     if engine.eq_ignore_ascii_case("node") {
         stop_embedded();
-        start_node_daemon(server_id)
-    } else {
-        stop_embedded();
-        ensure_port_clean();
+        if let Some(child) = start_node_daemon(server_id) {
+            return Some(child);
+        }
+        eprintln!("[Daemon] Node daemon requested but failed to start; falling back to in-process Rust daemon");
+    }
+
+    stop_embedded();
+    ensure_port_clean();
         let rt = get_or_init_runtime();
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_flag = cancel.clone();
@@ -561,7 +565,6 @@ pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
 
         None
     }
-}
 
 
 pub fn stop_daemon(state: &DaemonState) {
