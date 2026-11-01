@@ -369,6 +369,12 @@ mod tests {
     #[test]
     fn test_native_mcp_terminal_exec_tool() {
         let hub = McpHub::new();
+        let (command, args) = if cfg!(windows) {
+            ("cmd.exe", vec!["/C", "echo KronosKernelReady"])
+        } else {
+            ("sh", vec!["-c", "echo KronosKernelReady"])
+        };
+
         let req = serde_json::json!({
             "jsonrpc": "2.0",
             "id": "req-exec-1",
@@ -376,8 +382,8 @@ mod tests {
             "params": {
                 "name": "terminal_exec",
                 "arguments": {
-                    "command": "cmd.exe",
-                    "args": ["/C", "echo KronosKernelReady"]
+                    "command": command,
+                    "args": args
                 }
             }
         }).to_string();

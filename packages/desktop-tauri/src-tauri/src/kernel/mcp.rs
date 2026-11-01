@@ -653,6 +653,7 @@ impl McpHub {
                 if let Some(cwd) = arguments.get("cwd").and_then(|v| v.as_str()) {
                     cmd.current_dir(cwd);
                 }
+                cmd.stdin(std::process::Stdio::null());
                 cmd.stdout(std::process::Stdio::piped());
                 cmd.stderr(std::process::Stdio::piped());
 
