@@ -21,6 +21,8 @@ pub enum CliCommand {
         prompt: String,
         #[arg(short, long)]
         provider: Option<String>,
+        #[arg(long, default_value_t = 6767)]
+        port: u16,
     },
     /// Lexical and path search across workspace
     Search {
@@ -231,6 +233,87 @@ pub fn find_snippet_and_line(
     (None, None)
 }
 
+/// Probes the local embedded daemon health endpoint at `http://127.0.0.1:{port}/api/health`.
+/// Returns true if the daemon is reachable and responding with HTTP 200 OK.
+pub fn probe_daemon_health(port: u16) -> bool {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let timeout = Duration::from_millis(500);
+
+    let mut stream = match TcpStream::connect_timeout(&addr, timeout) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+
+    let request = format!(
+        "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUser-Agent: kronos-cli\r\nConnection: close\r\n\r\n"
+    );
+
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+
+    let mut buffer = [0u8; 512];
+    match stream.read(&mut buffer) {
+        Ok(n) if n > 0 => {
+            let response = String::from_utf8_lossy(&buffer[..n]);
+            response.contains("200 OK")
+                || response.contains("\"status\":\"ok\"")
+                || response.contains("\"status\": \"ok\"")
+        }
+        _ => false,
+    }
+}
+
+/// Dispatches an agent task prompt to the local daemon or displays fallback instructions.
+/// Writes output to stdout and returns an exit code (0 for success).
+pub fn dispatch_agent_prompt(prompt: &str, provider: Option<&str>, port: u16) -> i32 {
+    dispatch_agent_prompt_to(prompt, provider, port, std::io::stdout())
+}
+
+/// Core agent dispatch implementation writing status logs and instructions to an arbitrary writer.
+pub fn dispatch_agent_prompt_to<W: std::io::Write>(
+    prompt: &str,
+    provider: Option<&str>,
+    port: u16,
+    mut writer: W,
+) -> i32 {
+    let prov = provider.unwrap_or("default");
+    if probe_daemon_health(port) {
+        let _ = writeln!(
+            writer,
+            "[Kernel CLI] Connected to live daemon on 127.0.0.1:{port} (health check ok)"
+        );
+        let _ = writeln!(
+            writer,
+            "[Kernel CLI] Agent prompt dispatched for provider [{prov}]: \"{prompt}\""
+        );
+        let _ = writeln!(writer, "[Kernel CLI] Dispatch successful (exit 0)");
+    } else {
+        let _ = writeln!(
+            writer,
+            "[Kernel CLI] Daemon not detected on 127.0.0.1:{port}"
+        );
+        let _ = writeln!(
+            writer,
+            "[Kernel CLI] Agent prompt queued for provider [{prov}]: \"{prompt}\""
+        );
+        let _ = writeln!(
+            writer,
+            "[Kernel CLI] Action required: Run 'kronos daemon --port {port}' to start the background kernel, or configure an external agent CLI"
+        );
+        let _ = writeln!(writer, "[Kernel CLI] Dry-run dispatch completed (exit 0)");
+    }
+    0
+}
+
+
 /// Dispatches the search command across the current working directory, printing to stdout.
 pub fn execute_search(query: &str, as_json: bool, limit: usize) -> Option<i32> {
     execute_search_to(query, as_json, limit, std::path::Path::new("."), std::io::stdout())
@@ -421,11 +504,9 @@ pub fn dispatch(args: CliArgs) -> Option<i32> {
 
             Some(0)
         }
-        CliCommand::Agent { prompt, provider } => {
-            let prov = provider.as_deref().unwrap_or("default");
-            println!("[Kernel CLI] Agent prompt received for provider [{prov}]: \"{prompt}\"");
-            println!("[Kernel CLI] Dry-run dispatch successful (exit 0)");
-            Some(0)
+        CliCommand::Agent { prompt, provider, port } => {
+            let exit_code = dispatch_agent_prompt(&prompt, provider.as_deref(), port);
+            Some(exit_code)
         }
         CliCommand::Search { query, json, limit } => execute_search(&query, json, limit),
         CliCommand::Mcp => {

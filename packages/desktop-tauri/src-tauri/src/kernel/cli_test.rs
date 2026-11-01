@@ -92,8 +92,123 @@ mod tests {
             Some(CliCommand::Agent {
                 prompt: "Optimize Tantivy lexical queries".to_string(),
                 provider: Some("openai".to_string()),
+                port: 6767,
             })
         );
+    }
+
+    #[test]
+    fn test_cli_agent_options_parsing() {
+        let args = [
+            "paseo",
+            "agent",
+            "Refactor ast.rs",
+            "--provider",
+            "anthropic",
+            "--port",
+            "6767",
+        ];
+
+        let parsed = CliArgs::try_parse_from(args).expect("Failed to parse agent args");
+        assert_eq!(
+            parsed.command,
+            Some(CliCommand::Agent {
+                prompt: "Refactor ast.rs".to_string(),
+                provider: Some("anthropic".to_string()),
+                port: 6767,
+            })
+        );
+    }
+
+    #[test]
+    fn test_cli_dispatch_agent_prompt_without_active_daemon() {
+        use crate::kernel::cli::dispatch_agent_prompt_to;
+
+        let inactive_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
+            listener.local_addr().expect("Failed to get local addr").port()
+        };
+
+        let mut output = Vec::new();
+        let exit_code = dispatch_agent_prompt_to(
+            "Refactor ast.rs",
+            Some("anthropic"),
+            inactive_port,
+            &mut output,
+        );
+        assert_eq!(exit_code, 0);
+
+        let text = String::from_utf8_lossy(&output);
+        assert!(text.contains(&format!("Daemon not detected on 127.0.0.1:{inactive_port}")));
+        assert!(text.contains("Agent prompt queued for provider [anthropic]: \"Refactor ast.rs\""));
+        assert!(text.contains(&format!("Run 'kronos daemon --port {inactive_port}'")));
+        assert!(text.contains("Dry-run dispatch completed (exit 0)"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_cli_dispatch_agent_prompt_with_active_daemon() {
+        use crate::kernel::cli::dispatch_agent_prompt_to;
+        use crate::kernel::server::EmbeddedDaemon;
+
+        let daemon = EmbeddedDaemon::start_test(0).await.expect("Failed to start test daemon");
+        let active_port = daemon.port;
+
+        let mut output = Vec::new();
+        let exit_code = dispatch_agent_prompt_to(
+            "SIMD acceleration for tree-sitter",
+            Some("openai"),
+            active_port,
+            &mut output,
+        );
+        assert_eq!(exit_code, 0);
+
+        let text = String::from_utf8_lossy(&output);
+        assert!(text.contains(&format!("Connected to live daemon on 127.0.0.1:{active_port} (health check ok)")));
+        assert!(text.contains("Agent prompt dispatched for provider [openai]: \"SIMD acceleration for tree-sitter\""));
+        assert!(text.contains("Dispatch successful (exit 0)"));
+
+        daemon.stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_cli_probe_daemon_health() {
+        use crate::kernel::cli::probe_daemon_health;
+        use crate::kernel::server::EmbeddedDaemon;
+
+        // 1. Inactive port should return false
+        let inactive_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
+            listener.local_addr().expect("Failed to get local addr").port()
+        };
+        assert!(!probe_daemon_health(inactive_port));
+
+        // 2. Active daemon port should return true
+        let daemon = EmbeddedDaemon::start_test(0).await.expect("Failed to start test daemon");
+        let active_port = daemon.port;
+        assert!(probe_daemon_health(active_port));
+        daemon.stop().await;
+    }
+
+    #[test]
+    fn test_cli_dispatch_agent_prompt_default_provider() {
+        use crate::kernel::cli::dispatch_agent_prompt_to;
+
+        let inactive_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
+            listener.local_addr().expect("Failed to get local addr").port()
+        };
+
+        let mut output = Vec::new();
+        let exit_code = dispatch_agent_prompt_to(
+            "Default provider test",
+            None,
+            inactive_port,
+            &mut output,
+        );
+        assert_eq!(exit_code, 0);
+
+        let text = String::from_utf8_lossy(&output);
+        assert!(text.contains("Agent prompt queued for provider [default]: \"Default provider test\""));
     }
 
     #[test]
