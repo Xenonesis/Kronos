@@ -103,6 +103,7 @@ export class PluginService {
     { kind: "disable" | "remove"; completion: Promise<void> }
   >();
   private started = false;
+  private deferredPluginsPromise: Promise<void> | null = null;
   private readonly settingsListeners = new Set<(pluginId: string, settingsId: string) => void>();
 
   constructor(
@@ -202,11 +203,17 @@ export class PluginService {
     return [...this.providers.values()].sort((left, right) => left.id.localeCompare(right.id));
   }
 
-  listUsageReports(options?: ListUsageReportsOptions) {
+  async listUsageReports(options?: ListUsageReportsOptions) {
+    if (this.deferredPluginsPromise) {
+      await this.deferredPluginsPromise;
+    }
     return this.usageSources.listReports(options);
   }
 
-  listLegacyUsage() {
+  async listLegacyUsage() {
+    if (this.deferredPluginsPromise) {
+      await this.deferredPluginsPromise;
+    }
     return this.usageSources.listLegacyUsage();
   }
 
@@ -220,7 +227,7 @@ export class PluginService {
     this.started = true;
     const config = this.configStore.get();
     this.globalStartsBlocked = config.pluginsEnabled !== true;
-    await this.builtinPlugins.load(async (plugin) => {
+    const startPlugin = async (plugin: BuiltinPlugin) => {
       try {
         await this.runtime.startBuiltinPlugin?.(plugin);
         await this.publishProviderRegistrations(plugin.id, plugin.directory);
@@ -228,7 +235,10 @@ export class PluginService {
       } catch (error) {
         this.logger.error({ err: error, pluginId: plugin.id }, "Failed to start built-in plugin");
       }
-    });
+    };
+    const { eager, deferred } = this.builtinPlugins.loadPartitioned(startPlugin);
+    this.deferredPluginsPromise = deferred;
+    await eager;
     if (config.pluginsEnabled === true) {
       for (const [pluginId, source] of Object.entries(config.plugins ?? {})) {
         if (source.enabled === false) continue;
@@ -242,6 +252,9 @@ export class PluginService {
   }
 
   async listPlugins(): Promise<PluginListItem[]> {
+    if (this.deferredPluginsPromise) {
+      await this.deferredPluginsPromise;
+    }
     const config = this.configStore.get();
     const running = new Set(this.runtime.catalog().map((plugin) => plugin.id));
     const plugins = await Promise.all(
@@ -624,6 +637,9 @@ export class PluginService {
   }
 
   private async stopAll(): Promise<void> {
+    if (this.deferredPluginsPromise) {
+      await this.deferredPluginsPromise;
+    }
     for (const pluginId of this.providerIdsByPlugin.keys()) {
       this.removeProviderRegistrations(pluginId);
     }

@@ -48,9 +48,30 @@ export class BuiltinPluginLoader {
     this.ids = new Set(list);
   }
 
+  loadPartitioned(start: (plugin: BuiltinPlugin) => Promise<void>): {
+    eager: Promise<void>;
+    deferred: Promise<void>;
+  } {
+    const eagerPlugins: BuiltinPlugin[] = [];
+    const deferredPlugins: BuiltinPlugin[] = [];
+
+    for (const id of this.list) {
+      const plugin: BuiltinPlugin = { id, directory: path.join(this.root, id) };
+      if (id.endsWith("-usage-source") || id === "usage-source") {
+        deferredPlugins.push(plugin);
+      } else {
+        eagerPlugins.push(plugin);
+      }
+    }
+
+    const eager = Promise.all(eagerPlugins.map(start)).then(() => undefined);
+    const deferred = Promise.all(deferredPlugins.map(start)).then(() => undefined);
+
+    return { eager, deferred };
+  }
+
   async load(start: (plugin: BuiltinPlugin) => Promise<void>): Promise<void> {
-    await Promise.all(
-      this.list.map((id) => start({ id, directory: path.join(this.root, id) })),
-    );
+    const { eager, deferred } = this.loadPartitioned(start);
+    await Promise.all([eager, deferred]);
   }
 }
