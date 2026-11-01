@@ -401,4 +401,47 @@ mod tests {
         let exit_code = run_mcp_stdio_loop(reader, writer, &hub);
         assert_eq!(exit_code, 1);
     }
+
+    #[test]
+    fn test_cli_search_snippet_utf8_boundary_no_panic() {
+        use crate::kernel::cli::{find_snippet_and_line, truncate_chars};
+
+        // Construct a string where multi-byte UTF-8 character crosses byte index 120:
+        // 119 ASCII 'a' bytes followed by a 4-byte rocket emoji '🚀'
+        let mut s = "a".repeat(119);
+        s.push_str("🚀 RocketLaunch Kronos");
+        assert!(s.as_bytes().len() > 120);
+
+        // Byte index 120 falls in the middle of the 4-byte rocket emoji.
+        // A naive &s[..120] would panic with: "byte index 120 is not a char boundary".
+        let truncated = truncate_chars(&s, 120);
+        assert!(truncated.ends_with("..."));
+        assert!(truncated.starts_with(&"a".repeat(119)));
+
+        // Test with find_snippet_and_line on a temporary file
+        let temp_dir = std::env::temp_dir().join(format!(
+            "kronos_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("Create temp dir");
+        let test_file = temp_dir.join("unicode_test.rs");
+
+        let unicode_line = format!(
+            "// QueryTarget: {}🚀🦀🔥 SpecialUTF8Identifier\n",
+            "x".repeat(110)
+        );
+        std::fs::write(&test_file, &unicode_line).expect("Write unicode test file");
+
+        let (line, snippet) = find_snippet_and_line(&test_file, "QueryTarget");
+        assert_eq!(line, Some(1));
+        assert!(snippet.is_some());
+        let snip = snippet.unwrap();
+        assert!(snip.contains("QueryTarget"));
+        assert!(snip.ends_with("..."));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 }

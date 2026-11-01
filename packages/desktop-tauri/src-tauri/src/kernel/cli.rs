@@ -176,6 +176,14 @@ pub struct CliSearchOutput {
     pub fallback: bool,
 }
 
+/// Safely truncates a string to at most `max_chars` UTF-8 characters without byte-boundary panics.
+pub fn truncate_chars(s: &str, max_chars: usize) -> String {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => format!("{}...", &s[..idx]),
+        None => s.to_string(),
+    }
+}
+
 /// Locates the 1-based line number and a trimmed snippet containing `query` in `file_path`.
 pub fn find_snippet_and_line(
     file_path: &std::path::Path,
@@ -194,11 +202,7 @@ pub fn find_snippet_and_line(
         let line_lower = line.to_ascii_lowercase();
         if line_lower.contains(&query_lower) {
             let trimmed = line.trim();
-            let snippet = if trimmed.len() > 120 {
-                format!("{}...", &trimmed[..120])
-            } else {
-                trimmed.to_string()
-            };
+            let snippet = truncate_chars(trimmed, 120);
             return (Some(idx + 1), Some(snippet));
         }
 
@@ -207,11 +211,7 @@ pub fn find_snippet_and_line(
             && query_words.iter().all(|w| line_lower.contains(w))
         {
             let trimmed = line.trim();
-            let snippet = if trimmed.len() > 120 {
-                format!("{}...", &trimmed[..120])
-            } else {
-                trimmed.to_string()
-            };
+            let snippet = truncate_chars(trimmed, 120);
             best_line = Some((idx + 1, snippet));
         }
     }
@@ -223,11 +223,7 @@ pub fn find_snippet_and_line(
     for (idx, line) in content.lines().enumerate() {
         let trimmed = line.trim();
         if !trimmed.is_empty() {
-            let snippet = if trimmed.len() > 120 {
-                format!("{}...", &trimmed[..120])
-            } else {
-                trimmed.to_string()
-            };
+            let snippet = truncate_chars(trimmed, 120);
             return (Some(idx + 1), Some(snippet));
         }
     }
