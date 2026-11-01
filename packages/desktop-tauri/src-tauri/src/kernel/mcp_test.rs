@@ -97,7 +97,7 @@ mod tests {
         let hub = McpHub::new();
         let tools = hub.list_tools();
 
-        assert_eq!(tools.len(), 5, "Expected 5 built-in MCP tools");
+        assert_eq!(tools.len(), 7, "Expected 7 built-in MCP tools");
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(tool_names.contains(&"read_file"));
@@ -105,6 +105,8 @@ mod tests {
         assert!(tool_names.contains(&"git_status"));
         assert!(tool_names.contains(&"search_code"));
         assert!(tool_names.contains(&"ast_inspect"));
+        assert!(tool_names.contains(&"suggest_directory"));
+        assert!(tool_names.contains(&"terminal_exec"));
 
         for tool in &tools {
             assert!(!tool.name.is_empty(), "Tool name must not be empty");
@@ -146,8 +148,8 @@ mod tests {
         );
 
         let updated_tools = hub.list_tools();
-        assert_eq!(updated_tools.len(), 6);
-        assert_eq!(updated_tools[5].name, "custom_echo");
+        assert_eq!(updated_tools.len(), 8);
+        assert_eq!(updated_tools[7].name, "custom_echo");
 
         let custom_res = hub
             .call_tool("custom_echo", json!({ "message": "hello world" }))
@@ -168,7 +170,7 @@ mod tests {
         })
         .to_string();
 
-        let list_resp_str = hub.handle_jsonrpc(&list_req);
+        let list_resp_str = hub.handle_jsonrpc(&list_req).expect("Response expected for tools/list");
         let list_resp: serde_json::Value =
             serde_json::from_str(&list_resp_str).expect("Valid JSON response from tools/list");
 
@@ -177,7 +179,7 @@ mod tests {
         let tools_array = list_resp["result"]["tools"]
             .as_array()
             .expect("tools array");
-        assert_eq!(tools_array.len(), 5);
+        assert_eq!(tools_array.len(), 7);
 
         // Verify schema serialized with both inputSchema and input_schema
         assert!(tools_array[0]["inputSchema"].is_object());
@@ -197,7 +199,7 @@ mod tests {
         })
         .to_string();
 
-        let call_resp_str = hub.handle_jsonrpc(&call_req);
+        let call_resp_str = hub.handle_jsonrpc(&call_req).expect("Response expected for tools/call");
         let call_resp: serde_json::Value =
             serde_json::from_str(&call_resp_str).expect("Valid JSON response from tools/call");
 
@@ -233,7 +235,7 @@ mod tests {
         })
         .to_string();
 
-        let write_rpc_resp_str = hub.handle_jsonrpc(&write_rpc_req);
+        let write_rpc_resp_str = hub.handle_jsonrpc(&write_rpc_req).expect("Response expected for tools/call");
         let write_rpc_resp: serde_json::Value =
             serde_json::from_str(&write_rpc_resp_str).expect("Valid JSON response");
         assert_eq!(write_rpc_resp["id"], 101);
@@ -246,7 +248,7 @@ mod tests {
         // 4. JSON-RPC Error Handling Tests
 
         // Parse Error (-32700)
-        let parse_err_resp = hub.handle_jsonrpc("invalid json string {{{");
+        let parse_err_resp = hub.handle_jsonrpc("invalid json string {{{").expect("Error response expected for parse error");
         let parse_err_json: serde_json::Value = serde_json::from_str(&parse_err_resp).unwrap();
         assert_eq!(parse_err_json["jsonrpc"], "2.0");
         assert_eq!(parse_err_json["error"]["code"], -32700);
@@ -259,7 +261,7 @@ mod tests {
         })
         .to_string();
         let bad_version_resp: serde_json::Value =
-            serde_json::from_str(&hub.handle_jsonrpc(&bad_version_req)).unwrap();
+            serde_json::from_str(&hub.handle_jsonrpc(&bad_version_req).expect("Response expected")).unwrap();
         assert_eq!(bad_version_resp["error"]["code"], -32600);
 
         // Method Not Found (-32601)
@@ -270,7 +272,7 @@ mod tests {
         })
         .to_string();
         let unknown_method_resp: serde_json::Value =
-            serde_json::from_str(&hub.handle_jsonrpc(&unknown_method_req)).unwrap();
+            serde_json::from_str(&hub.handle_jsonrpc(&unknown_method_req).expect("Response expected")).unwrap();
         assert_eq!(unknown_method_resp["error"]["code"], -32601);
 
         // Invalid Params (-32602): missing tool name in tools/call
@@ -282,7 +284,7 @@ mod tests {
         })
         .to_string();
         let missing_name_resp: serde_json::Value =
-            serde_json::from_str(&hub.handle_jsonrpc(&missing_name_req)).unwrap();
+            serde_json::from_str(&hub.handle_jsonrpc(&missing_name_req).expect("Response expected")).unwrap();
         assert_eq!(missing_name_resp["error"]["code"], -32602);
 
         // Unknown tool name in tools/call (-32601)
@@ -296,7 +298,7 @@ mod tests {
         })
         .to_string();
         let unknown_tool_resp: serde_json::Value =
-            serde_json::from_str(&hub.handle_jsonrpc(&unknown_tool_req)).unwrap();
+            serde_json::from_str(&hub.handle_jsonrpc(&unknown_tool_req).expect("Response expected")).unwrap();
         assert_eq!(unknown_tool_resp["error"]["code"], -32601);
 
         // Initialize and Ping support
@@ -307,8 +309,9 @@ mod tests {
         })
         .to_string();
         let init_resp: serde_json::Value =
-            serde_json::from_str(&hub.handle_jsonrpc(&init_req)).unwrap();
+            serde_json::from_str(&hub.handle_jsonrpc(&init_req).expect("Response expected")).unwrap();
         assert_eq!(init_resp["result"]["serverInfo"]["name"], "kronos-mcp-hub");
+        assert_eq!(init_resp["result"]["serverInfo"]["version"], "0.15.0-beta.1");
 
         let ping_req = json!({
             "jsonrpc": "2.0",
@@ -317,7 +320,72 @@ mod tests {
         })
         .to_string();
         let ping_resp: serde_json::Value =
-            serde_json::from_str(&hub.handle_jsonrpc(&ping_req)).unwrap();
+            serde_json::from_str(&hub.handle_jsonrpc(&ping_req).expect("Response expected")).unwrap();
         assert!(ping_resp["result"].is_object());
+    }
+
+    #[test]
+    fn test_native_mcp_notification_silencing() {
+        let hub = McpHub::new();
+
+        // Notifications (no 'id' field) MUST NOT yield a response
+        let init_notification = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        }).to_string();
+        assert_eq!(hub.handle_jsonrpc(&init_notification), None);
+
+        let cancel_notification = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": { "requestId": "req-1" }
+        }).to_string();
+        assert_eq!(hub.handle_jsonrpc(&cancel_notification), None);
+    }
+
+    #[test]
+    fn test_native_mcp_suggest_directory_tool() {
+        let hub = McpHub::new();
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "req-dir-1",
+            "method": "tools/call",
+            "params": {
+                "name": "suggest_directory",
+                "arguments": {
+                    "cwd": ".",
+                    "query": "src",
+                    "limit": 10
+                }
+            }
+        }).to_string();
+
+        let res_str = hub.handle_jsonrpc(&req).expect("Response expected for request with id");
+        let res: serde_json::Value = serde_json::from_str(&res_str).unwrap();
+        assert_eq!(res["id"], "req-dir-1");
+        assert_eq!(res["result"]["isError"], false);
+    }
+
+    #[test]
+    fn test_native_mcp_terminal_exec_tool() {
+        let hub = McpHub::new();
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "req-exec-1",
+            "method": "tools/call",
+            "params": {
+                "name": "terminal_exec",
+                "arguments": {
+                    "command": "cmd.exe",
+                    "args": ["/C", "echo KronosKernelReady"]
+                }
+            }
+        }).to_string();
+
+        let res_str = hub.handle_jsonrpc(&req).expect("Response expected for request with id");
+        let res: serde_json::Value = serde_json::from_str(&res_str).unwrap();
+        assert_eq!(res["result"]["isError"], false);
+        let output = res["result"]["text"].as_str().unwrap();
+        assert!(output.contains("KronosKernelReady"));
     }
 }

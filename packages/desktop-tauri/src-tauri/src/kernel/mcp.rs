@@ -194,57 +194,70 @@ impl McpHub {
     }
 
     /// Handles incoming JSON-RPC 2.0 requests, executing methods and formatting responses.
-    pub fn handle_jsonrpc(&self, request_json: &str) -> String {
+    /// Notifications (requests without an 'id') MUST NOT receive any response and return `None`.
+    pub fn handle_jsonrpc(&self, request_json: &str) -> Option<String> {
         let parsed: Value = match serde_json::from_str(request_json) {
             Ok(v) => v,
             Err(e) => {
-                return json_rpc_error(Value::Null, -32700, &format!("Parse error: {e}"));
+                return Some(json_rpc_error(Value::Null, -32700, &format!("Parse error: {e}")));
             }
         };
 
         let obj = match parsed.as_object() {
             Some(o) => o,
             None => {
-                return json_rpc_error(
+                return Some(json_rpc_error(
                     Value::Null,
                     -32600,
                     "Invalid Request: payload must be a JSON object",
-                );
+                ));
             }
         };
 
+        let has_id = obj.contains_key("id") && !obj["id"].is_null();
         let id = obj.get("id").cloned().unwrap_or(Value::Null);
 
         match obj.get("jsonrpc").and_then(|v| v.as_str()) {
             Some("2.0") => {}
             _ => {
-                return json_rpc_error(id, -32600, "Invalid Request: 'jsonrpc' must be '2.0'");
+                if !has_id {
+                    return None;
+                }
+                return Some(json_rpc_error(id, -32600, "Invalid Request: 'jsonrpc' must be '2.0'"));
             }
         }
 
         let method = match obj.get("method").and_then(|v| v.as_str()) {
             Some(m) => m,
             None => {
-                return json_rpc_error(id, -32600, "Invalid Request: missing or invalid 'method'");
+                if !has_id {
+                    return None;
+                }
+                return Some(json_rpc_error(id, -32600, "Invalid Request: missing or invalid 'method'"));
             }
         };
+
+        // Notifications (missing/null 'id' or notifications/*) MUST NOT receive any response
+        if !has_id || method == "notifications/initialized" || method.starts_with("notifications/") {
+            return None;
+        }
 
         match method {
             "tools/list" => {
                 let tools = self.list_tools();
-                json_rpc_result(
+                Some(json_rpc_result(
                     id,
                     serde_json::json!({
                         "tools": tools
                     }),
-                )
+                ))
             }
             "tools/call" => {
                 let params = obj.get("params").cloned().unwrap_or(Value::Null);
                 let tool_name = match params.get("name").and_then(|v| v.as_str()) {
                     Some(n) => n,
                     None => {
-                        return json_rpc_error(id, -32602, "Invalid params: missing tool 'name'");
+                        return Some(json_rpc_error(id, -32602, "Invalid params: missing tool 'name'"));
                     }
                 };
                 let arguments = params
@@ -254,7 +267,7 @@ impl McpHub {
                     .unwrap_or(serde_json::json!({}));
 
                 match self.call_tool(tool_name, arguments) {
-                    Ok(output) => json_rpc_result(
+                    Ok(output) => Some(json_rpc_result(
                         id,
                         serde_json::json!({
                             "content": [
@@ -267,12 +280,12 @@ impl McpHub {
                             "value": output,
                             "isError": false
                         }),
-                    ),
+                    )),
                     Err(e) => {
                         if e.contains("Unknown tool") || e.contains("not found") {
-                            json_rpc_error(id, -32601, &e)
+                            Some(json_rpc_error(id, -32601, &e))
                         } else {
-                            json_rpc_result(
+                            Some(json_rpc_result(
                                 id,
                                 serde_json::json!({
                                     "content": [
@@ -285,28 +298,36 @@ impl McpHub {
                                     "error": e,
                                     "isError": true
                                 }),
-                            )
+                            ))
                         }
                     }
                 }
             }
-            "initialize" => json_rpc_result(
-                id,
-                serde_json::json!({
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {
-                        "tools": {
-                            "listChanged": false
+            "initialize" => {
+                let params = obj.get("params").cloned().unwrap_or(Value::Null);
+                let client_version = params.get("protocolVersion").and_then(|v| v.as_str());
+                let protocol_version = match client_version {
+                    Some(v) if !v.is_empty() => v,
+                    _ => "2024-11-05",
+                };
+                Some(json_rpc_result(
+                    id,
+                    serde_json::json!({
+                        "protocolVersion": protocol_version,
+                        "capabilities": {
+                            "tools": {
+                                "listChanged": false
+                            }
+                        },
+                        "serverInfo": {
+                            "name": "kronos-mcp-hub",
+                            "version": env!("CARGO_PKG_VERSION")
                         }
-                    },
-                    "serverInfo": {
-                        "name": "kronos-mcp-hub",
-                        "version": "0.14.0"
-                    }
-                }),
-            ),
-            "ping" => json_rpc_result(id, serde_json::json!({})),
-            other => json_rpc_error(id, -32601, &format!("Method not found: '{other}'")),
+                    }),
+                ))
+            }
+            "ping" => Some(json_rpc_result(id, serde_json::json!({}))),
+            other => Some(json_rpc_error(id, -32601, &format!("Method not found: '{other}'"))),
         }
     }
 
@@ -495,6 +516,205 @@ impl McpHub {
                     .map_err(|e| format!("AST parse failed: {e}"))?;
                 serde_json::to_string_pretty(&summary)
                     .map_err(|e| format!("Serialization error: {e}"))
+            },
+        );
+
+        // 6. suggest_directory
+        self.register_tool(
+            McpToolDefinition {
+                name: "suggest_directory".to_string(),
+                description: "Suggest files and directories matching a query within a workspace root"
+                    .to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Path to directory root to scan (default: .)"
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "Filter query string for directory and file suggestions"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of entries to return (default: 50)"
+                        },
+                        "include_files": {
+                            "type": "boolean",
+                            "description": "Whether to include matching files (default: true)"
+                        },
+                        "include_directories": {
+                            "type": "boolean",
+                            "description": "Whether to include matching directories (default: true)"
+                        }
+                    }
+                }),
+            },
+            |arguments| {
+                let cwd_str = arguments
+                    .get("cwd")
+                    .or_else(|| arguments.get("path"))
+                    .or_else(|| arguments.get("root"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(".");
+                let query = arguments
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let limit = arguments
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .map(|l| l as usize)
+                    .unwrap_or(50);
+                let include_files = arguments
+                    .get("include_files")
+                    .or_else(|| arguments.get("includeFiles"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let include_directories = arguments
+                    .get("include_directories")
+                    .or_else(|| arguments.get("includeDirectories"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+
+                let root_path = Path::new(cwd_str);
+                let (directories, entries) = crate::kernel::search::suggest_directory_entries(
+                    root_path,
+                    query,
+                    include_files,
+                    include_directories,
+                    limit,
+                );
+
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "directories": directories,
+                    "entries": entries,
+                }))
+                .map_err(|e| format!("Serialization error: {e}"))
+            },
+        );
+
+        // 7. terminal_exec
+        self.register_tool(
+            McpToolDefinition {
+                name: "terminal_exec".to_string(),
+                description: "Execute a command in a child process with a 15-second safety timeout"
+                    .to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Command or executable binary to run"
+                        },
+                        "args": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Arguments to pass to the executable"
+                        },
+                        "cwd": {
+                            "type": "string",
+                            "description": "Working directory to execute command in (optional)"
+                        },
+                        "timeout_secs": {
+                            "type": "integer",
+                            "description": "Execution timeout in seconds (default: 15)"
+                        }
+                    },
+                    "required": ["command"]
+                }),
+            },
+            |arguments| {
+                let cmd_str = arguments
+                    .get("command")
+                    .or_else(|| arguments.get("cmd"))
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "Missing required parameter 'command'".to_string())?;
+
+                let args_vec: Vec<String> = arguments
+                    .get("args")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let timeout_secs = arguments
+                    .get("timeout_secs")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(15);
+                let timeout = std::time::Duration::from_secs(timeout_secs);
+
+                let mut cmd = std::process::Command::new(cmd_str);
+                cmd.args(&args_vec);
+                if let Some(cwd) = arguments.get("cwd").and_then(|v| v.as_str()) {
+                    cmd.current_dir(cwd);
+                }
+                cmd.stdout(std::process::Stdio::piped());
+                cmd.stderr(std::process::Stdio::piped());
+
+                let mut child = cmd
+                    .spawn()
+                    .map_err(|e| format!("Failed to spawn command '{cmd_str}': {e}"))?;
+
+                let mut stdout_handle = child.stdout.take();
+                let mut stderr_handle = child.stderr.take();
+
+                let out_thread = std::thread::spawn(move || {
+                    let mut buf = Vec::new();
+                    if let Some(mut stream) = stdout_handle {
+                        use std::io::Read;
+                        let _ = stream.read_to_end(&mut buf);
+                    }
+                    buf
+                });
+
+                let err_thread = std::thread::spawn(move || {
+                    let mut buf = Vec::new();
+                    if let Some(mut stream) = stderr_handle {
+                        use std::io::Read;
+                        let _ = stream.read_to_end(&mut buf);
+                    }
+                    buf
+                });
+
+                let start = std::time::Instant::now();
+                let status = loop {
+                    match child.try_wait() {
+                        Ok(Some(status)) => break Ok(status),
+                        Ok(None) => {
+                            if start.elapsed() >= timeout {
+                                let _ = child.kill();
+                                break Err(format!(
+                                    "Command execution timed out after {timeout_secs} seconds"
+                                ));
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                        }
+                        Err(e) => break Err(format!("Failed waiting for child process: {e}")),
+                    }
+                }?;
+
+                let stdout_bytes = out_thread.join().unwrap_or_default();
+                let stderr_bytes = err_thread.join().unwrap_or_default();
+                let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
+                let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+
+                if status.success() {
+                    if stdout.is_empty() && !stderr.is_empty() {
+                        Ok(stderr)
+                    } else {
+                        Ok(stdout)
+                    }
+                } else {
+                    Err(format!(
+                        "Command failed with status {}:\nStdout: {}\nStderr: {}",
+                        status, stdout, stderr
+                    ))
+                }
             },
         );
     }
