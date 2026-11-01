@@ -110,8 +110,14 @@ fn matches_pattern(path: &Path, pattern: &str) -> bool {
     if p.is_empty() {
         return false;
     }
-    let clean_pat = p.trim_matches('/').replace('\\', "/");
-
+    let mut clean_pat = p.trim_matches('/').replace('\\', "/");
+    clean_pat = clean_pat
+        .trim_end_matches("/**")
+        .trim_end_matches("/*")
+        .to_string();
+    if clean_pat.is_empty() {
+        return false;
+    }
     // 1. Path component check (case-insensitive for cross-platform robustness)
     for comp in path.components() {
         let comp_str = comp.as_os_str().to_string_lossy();
@@ -323,12 +329,15 @@ impl WatcherEngine {
         let sub_id_cb = sub_id.clone();
 
         let mut watcher = RecommendedWatcher::new(
-            move |res: notify::Result<notify::Event>| {
-                if let Ok(event) = res {
+            move |res: notify::Result<notify::Event>| match res {
+                Ok(event) => {
                     let _ = raw_tx.send(RawWatcherMessage {
                         sub_id: sub_id_cb.clone(),
                         event,
                     });
+                }
+                Err(e) => {
+                    eprintln!("[watcher] OS notification error: {e}");
                 }
             },
             Config::default(),
@@ -528,6 +537,13 @@ impl WatcherEngine {
                     FileChangeKind::Create | FileChangeKind::Modify => {
                         if let Some(index) = &current_index {
                             let path = Path::new(&event.path);
+                            for root in &roots {
+                                let rel = relative_to_root(path, root);
+                                if rel != path {
+                                    let rel_str = normalize_path_str(&rel);
+                                    let _ = index.delete_document(&rel_str);
+                                }
+                            }
                             if let Some(content) = try_read_text_file(path, 3) {
                                 let _ = index.update_document(&event.path, &content);
                             }
@@ -562,6 +578,13 @@ impl WatcherEngine {
                         let path = Path::new(&event.path);
                         if path.exists() {
                             if let Some(index) = &current_index {
+                                for root in &roots {
+                                    let rel = relative_to_root(path, root);
+                                    if rel != path {
+                                        let rel_str = normalize_path_str(&rel);
+                                        let _ = index.delete_document(&rel_str);
+                                    }
+                                }
                                 if let Some(content) = try_read_text_file(path, 3) {
                                     let _ = index.update_document(&event.path, &content);
                                 }

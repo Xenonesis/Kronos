@@ -196,6 +196,99 @@ async fn test_watcher_custom_glob_and_folder_ignore() {
     engine.unwatch(&sub_id).expect("unwatch");
 }
 
+#[tokio::test]
+async fn test_watcher_custom_glob_wildcard_directory_ignores() {
+    let dir = tempdir().expect("tempdir");
+    let engine = WatcherEngine::new(25);
+    let mut rx = engine.subscribe_events();
+
+    let sub_id = engine
+        .watch(
+            dir.path(),
+            &[
+                "build/**".to_string(),
+                "dist/*".to_string(),
+            ],
+        )
+        .expect("watch");
+
+    // Create ignored files inside build/** and dist/*
+    let build_sub_dir = dir.path().join("build").join("nested");
+    fs::create_dir_all(&build_sub_dir).expect("create build nested dir");
+    fs::write(build_sub_dir.join("bundle.js"), "console.log('build')").expect("write build");
+
+    let dist_dir = dir.path().join("dist");
+    fs::create_dir_all(&dist_dir).expect("create dist dir");
+    fs::write(dist_dir.join("output.min.js"), "minified").expect("write dist");
+
+    // Create a normal valid file
+    let valid_file = dir.path().join("src.rs");
+    fs::write(&valid_file, "fn main() {}").expect("write valid");
+
+    let events = tokio::time::timeout(Duration::from_millis(1000), rx.recv())
+        .await
+        .expect("timeout")
+        .expect("recv");
+
+    assert!(!events.is_empty());
+    for e in &events {
+        assert!(
+            !e.path.contains("/build/"),
+            "build/** should be ignored, found: {}",
+            e.path
+        );
+        assert!(
+            !e.path.contains("/dist/"),
+            "dist/* should be ignored, found: {}",
+            e.path
+        );
+    }
+    assert!(events.iter().any(|e| e.path.ends_with("src.rs")));
+
+    engine.unwatch(&sub_id).expect("unwatch");
+}
+
+#[tokio::test]
+async fn test_watcher_deduplicates_relative_search_index_entries() {
+    let dir = tempdir().expect("tempdir");
+    let search_index = Arc::new(WorkspaceSearchIndex::new_in_memory().expect("search index"));
+    let engine = WatcherEngine::new(20);
+    engine.bind_search_index(Arc::clone(&search_index));
+
+    // Pre-populate index with a relative path variant
+    let rel_path = "nested/component.rs";
+    search_index
+        .update_document(rel_path, "pub fn legacy_relative_impl() {}")
+        .expect("populate relative");
+    assert!(!search_index.search("legacy_relative_impl").unwrap().is_empty());
+
+    let _sub_id = engine.watch(dir.path(), &[]).expect("watch");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Now write the file on disk at the corresponding absolute path
+    let file_path = dir.path().join("nested").join("component.rs");
+    fs::create_dir_all(file_path.parent().unwrap()).expect("create dir");
+    fs::write(&file_path, "pub fn upgraded_absolute_impl() {}").expect("write file");
+
+    let deduplicated = wait_for_condition(
+        || {
+            let old_rel_found = search_index
+                .search("legacy_relative_impl")
+                .map(|r| r.iter().any(|doc| doc.path == rel_path))
+                .unwrap_or(false);
+            let new_abs_found = search_index
+                .search("upgraded_absolute_impl")
+                .map(|r| !r.is_empty())
+                .unwrap_or(false);
+            !old_rel_found && new_abs_found
+        },
+        1500,
+    )
+    .await;
+
+    assert!(deduplicated, "Relative entry must be purged when absolute file is updated");
+}
+
 async fn wait_for_condition<F>(mut check: F, timeout_ms: u64) -> bool
 where
     F: FnMut() -> bool,
