@@ -661,8 +661,8 @@ impl McpHub {
                     .spawn()
                     .map_err(|e| format!("Failed to spawn command '{cmd_str}': {e}"))?;
 
-                let mut stdout_handle = child.stdout.take();
-                let mut stderr_handle = child.stderr.take();
+                let stdout_handle = child.stdout.take();
+                let stderr_handle = child.stderr.take();
 
                 let out_thread = std::thread::spawn(move || {
                     let mut buf = Vec::new();

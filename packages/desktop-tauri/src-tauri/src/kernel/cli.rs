@@ -313,7 +313,6 @@ pub fn dispatch_agent_prompt_to<W: std::io::Write>(
     0
 }
 
-
 /// Dispatches the search command across the current working directory, printing to stdout.
 pub fn execute_search(query: &str, as_json: bool, limit: usize) -> Option<i32> {
     execute_search_to(query, as_json, limit, std::path::Path::new("."), std::io::stdout())

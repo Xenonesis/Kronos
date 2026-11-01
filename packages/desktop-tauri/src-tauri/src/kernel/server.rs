@@ -237,6 +237,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             })
         }
         "mcp/request" | "mcp/jsonrpc" | "mcp_request" => {
+            // Provide the response object in both `payload.response` (standard RPC envelope structure)
+            // and top-level `response` to maintain compatibility across legacy WebSocket clients and newer MCP consumers.
             let req_str = extract_jsonrpc_request_str(msg).unwrap_or_default();
             let hub = get_mcp_hub();
             match hub.handle_jsonrpc(&req_str) {
