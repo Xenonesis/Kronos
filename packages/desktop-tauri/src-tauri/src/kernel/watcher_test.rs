@@ -1,6 +1,9 @@
 use std::fs;
 use std::time::Duration;
 use tempfile::tempdir;
+use std::sync::Arc;
+use crate::kernel::search::WorkspaceSearchIndex;
+use crate::kernel::vfs::ShadowVfs;
 use crate::kernel::watcher::{FileChangeKind, WatcherEngine};
 
 #[tokio::test]
@@ -190,4 +193,152 @@ async fn test_watcher_custom_glob_and_folder_ignore() {
     assert!(events.iter().any(|e| e.path.ends_with("valid.txt")));
 
     engine.unwatch(&sub_id).expect("unwatch");
+}
+
+async fn wait_for_condition<F>(mut check: F, timeout_ms: u64) -> bool
+where
+    F: FnMut() -> bool,
+{
+    let start = std::time::Instant::now();
+    let max = Duration::from_millis(timeout_ms);
+    while start.elapsed() < max {
+        if check() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(15)).await;
+    }
+    check()
+}
+
+#[tokio::test]
+async fn test_watcher_bind_search_index_updates_and_deletes() {
+    let dir = tempdir().expect("tempdir");
+    let search_index = Arc::new(WorkspaceSearchIndex::new_in_memory().expect("search index"));
+    let engine = WatcherEngine::new(20);
+    engine.bind_search_index(Arc::clone(&search_index));
+
+    let _sub_id = engine.watch(dir.path(), &[]).expect("watch");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let file_path = dir.path().join("service.rs");
+    fs::write(&file_path, "pub fn start_kronos_microservice() -> bool { true }").expect("write");
+
+    let found = wait_for_condition(
+        || {
+            search_index
+                .search("start_kronos_microservice")
+                .map(|r| !r.is_empty())
+                .unwrap_or(false)
+        },
+        1500,
+    )
+    .await;
+    assert!(found, "Search index should contain updated content for created file");
+
+    // Modify file
+    fs::write(&file_path, "pub fn stop_kronos_microservice() -> bool { false }").expect("modify");
+
+    let found_modified = wait_for_condition(
+        || {
+            let old_empty = search_index
+                .search("start_kronos_microservice")
+                .map(|r| r.is_empty())
+                .unwrap_or(false);
+            let new_found = search_index
+                .search("stop_kronos_microservice")
+                .map(|r| !r.is_empty())
+                .unwrap_or(false);
+            old_empty && new_found
+        },
+        1500,
+    )
+    .await;
+    assert!(found_modified, "Search index should reflect modified content and remove old tokens");
+
+    // Delete file
+    fs::remove_file(&file_path).expect("delete");
+
+    let deleted = wait_for_condition(
+        || {
+            search_index
+                .search("stop_kronos_microservice")
+                .map(|r| r.is_empty())
+                .unwrap_or(false)
+        },
+        1500,
+    )
+    .await;
+    assert!(deleted, "Search index should delete document when file is deleted");
+}
+
+#[tokio::test]
+async fn test_watcher_bind_shadow_vfs_invalidation() {
+    let dir = tempdir().expect("tempdir");
+    let vfs = Arc::new(ShadowVfs::new());
+    let engine = WatcherEngine::new(20);
+    engine.bind_shadow_vfs(Arc::clone(&vfs));
+
+    let _sub_id = engine.watch(dir.path(), &[]).expect("watch");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let file_path = dir.path().join("draft.md");
+    fs::write(&file_path, "initial draft on disk").expect("write");
+
+    // Store virtual overlay in ShadowVfs
+    vfs.write_virtual(&file_path, b"shadow overlay content").expect("write virtual");
+    assert!(vfs.is_virtual(&file_path));
+
+    // When physical file is deleted, shadow VFS overlay for that path is invalidated
+    fs::remove_file(&file_path).expect("remove file");
+
+    let invalidated = wait_for_condition(
+        || !vfs.is_virtual(&file_path),
+        1500,
+    )
+    .await;
+    assert!(invalidated, "Shadow VFS virtual entry should be invalidated on file deletion");
+}
+
+#[tokio::test]
+async fn test_watcher_ignores_files_over_1mb_and_binary() {
+    let dir = tempdir().expect("tempdir");
+    let search_index = Arc::new(WorkspaceSearchIndex::new_in_memory().expect("search index"));
+    let engine = WatcherEngine::new(20);
+    engine.bind_search_index(Arc::clone(&search_index));
+
+    let _sub_id = engine.watch(dir.path(), &[]).expect("watch");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // 1. Binary file with non-UTF-8 bytes
+    let bin_path = dir.path().join("blob.bin");
+    let non_utf8_data = vec![0xFF, 0xFE, 0xFD, 0xFC, 0x00, 0x01];
+    fs::write(&bin_path, &non_utf8_data).expect("write bin");
+
+    // 2. Large file >= 1MB
+    let large_path = dir.path().join("large.txt");
+    let large_data = vec![b'A'; 1_048_576 + 100];
+    fs::write(&large_path, &large_data).expect("write large");
+
+    // 3. Normal file checkpoint
+    let norm_path = dir.path().join("checkpoint.txt");
+    fs::write(&norm_path, "checkpoint_unique_symbol").expect("write checkpoint");
+
+    let checkpoint_indexed = wait_for_condition(
+        || {
+            search_index
+                .search("checkpoint_unique_symbol")
+                .map(|r| !r.is_empty())
+                .unwrap_or(false)
+        },
+        2000,
+    )
+    .await;
+    assert!(checkpoint_indexed, "Checkpoint file must be indexed");
+
+    let norm_large_str = crate::kernel::watcher::normalize_path_str(&large_path);
+    let norm_bin_str = crate::kernel::watcher::normalize_path_str(&bin_path);
+
+    let results = search_index.search("A").unwrap_or_default();
+    assert!(!results.iter().any(|r| r.path == norm_large_str), "File > 1MB must not be indexed");
+    assert!(!results.iter().any(|r| r.path == norm_bin_str), "Binary file must not be indexed");
 }

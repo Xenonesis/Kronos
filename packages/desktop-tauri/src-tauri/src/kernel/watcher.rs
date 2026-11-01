@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use notify::event::{EventKind, ModifyKind, RenameMode};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+
+use crate::kernel::search::WorkspaceSearchIndex;
+use crate::kernel::vfs::ShadowVfs;
 
 static NEXT_SUBSCRIPTION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -162,6 +165,44 @@ fn is_path_ignored(path: &Path, root: &Path, custom_patterns: &[String]) -> bool
     false
 }
 
+/// Attempts to read a file up to 1MB into a UTF-8 String, retrying on transient Windows sharing violations.
+fn try_read_text_file(path: &Path, max_retries: usize) -> Option<String> {
+    for i in 0..=max_retries {
+        match std::fs::metadata(path) {
+            Ok(meta) => {
+                if !meta.is_file() || meta.len() >= 1_048_576 {
+                    return None;
+                }
+                match std::fs::read(path) {
+                    Ok(bytes) => {
+                        if bytes.len() >= 1_048_576 {
+                            return None;
+                        }
+                        return String::from_utf8(bytes).ok();
+                    }
+                    Err(e)
+                        if i < max_retries
+                            && (e.kind() == std::io::ErrorKind::PermissionDenied
+                                || e.kind() == std::io::ErrorKind::WouldBlock) =>
+                    {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => return None,
+                }
+            }
+            Err(e)
+                if i < max_retries
+                    && (e.kind() == std::io::ErrorKind::PermissionDenied
+                        || e.kind() == std::io::ErrorKind::WouldBlock) =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
 /// Internal active subscription record.
 struct ActiveSubscription {
     watcher: RecommendedWatcher,
@@ -183,15 +224,20 @@ pub struct WatcherEngine {
     event_tx: tokio::sync::broadcast::Sender<Vec<FileChangeEvent>>,
     debounce_ms: u64,
     shutdown: Arc<AtomicBool>,
+    search_index: Arc<RwLock<Option<Arc<WorkspaceSearchIndex>>>>,
+    shadow_vfs: Arc<RwLock<Option<Arc<ShadowVfs>>>>,
 }
 
 impl WatcherEngine {
     /// Creates a new `WatcherEngine` with the specified debounce sliding window in milliseconds.
     pub fn new(debounce_ms: u64) -> Self {
         let (raw_tx, raw_rx) = std::sync::mpsc::channel();
+        let (sync_tx, sync_rx) = std::sync::mpsc::channel();
         let (event_tx, _) = tokio::sync::broadcast::channel(1024);
         let subscriptions = Arc::new(Mutex::new(HashMap::new()));
         let shutdown = Arc::new(AtomicBool::new(false));
+        let search_index = Arc::new(RwLock::new(None));
+        let shadow_vfs = Arc::new(RwLock::new(None));
 
         let thread_subs = Arc::clone(&subscriptions);
         let thread_event_tx = event_tx.clone();
@@ -204,11 +250,30 @@ impl WatcherEngine {
                     raw_rx,
                     thread_subs,
                     thread_event_tx,
+                    sync_tx,
                     thread_shutdown,
                     debounce_ms,
                 );
             })
             .expect("Failed to spawn watcher coalescer thread");
+
+        let sync_subs = Arc::clone(&subscriptions);
+        let sync_search_index = Arc::clone(&search_index);
+        let sync_shadow_vfs = Arc::clone(&shadow_vfs);
+        let sync_shutdown = Arc::clone(&shutdown);
+
+        std::thread::Builder::new()
+            .name("kronos-watcher-sync".to_string())
+            .spawn(move || {
+                Self::sync_worker_loop(
+                    sync_rx,
+                    sync_subs,
+                    sync_search_index,
+                    sync_shadow_vfs,
+                    sync_shutdown,
+                );
+            })
+            .expect("Failed to spawn watcher sync worker thread");
 
         Self {
             subscriptions,
@@ -216,6 +281,22 @@ impl WatcherEngine {
             event_tx,
             debounce_ms,
             shutdown,
+            search_index,
+            shadow_vfs,
+        }
+    }
+
+    /// Binds an in-memory Tantivy search index for automatic incremental updates.
+    pub fn bind_search_index(&self, index: Arc<WorkspaceSearchIndex>) {
+        if let Ok(mut lock) = self.search_index.write() {
+            *lock = Some(index);
+        }
+    }
+
+    /// Binds an in-memory Shadow VFS for automatic virtual file invalidation on deletion.
+    pub fn bind_shadow_vfs(&self, vfs: Arc<ShadowVfs>) {
+        if let Ok(mut lock) = self.shadow_vfs.write() {
+            *lock = Some(vfs);
         }
     }
 
@@ -304,6 +385,7 @@ impl WatcherEngine {
         rx: std::sync::mpsc::Receiver<RawWatcherMessage>,
         subscriptions: Arc<Mutex<HashMap<String, ActiveSubscription>>>,
         broadcast_tx: tokio::sync::broadcast::Sender<Vec<FileChangeEvent>>,
+        sync_tx: std::sync::mpsc::Sender<Vec<FileChangeEvent>>,
         shutdown: Arc<AtomicBool>,
         debounce_ms: u64,
     ) {
@@ -403,7 +485,111 @@ impl WatcherEngine {
                     .collect();
 
                 if !events.is_empty() {
-                    let _ = broadcast_tx.send(events);
+                    let _ = broadcast_tx.send(events.clone());
+                    let _ = sync_tx.send(events);
+                }
+            }
+        }
+    }
+
+    /// Background worker loop processing debounced events for search index sync and shadow VFS invalidation.
+    fn sync_worker_loop(
+        rx: std::sync::mpsc::Receiver<Vec<FileChangeEvent>>,
+        subscriptions: Arc<Mutex<HashMap<String, ActiveSubscription>>>,
+        search_index: Arc<RwLock<Option<Arc<WorkspaceSearchIndex>>>>,
+        shadow_vfs: Arc<RwLock<Option<Arc<ShadowVfs>>>>,
+        shutdown: Arc<AtomicBool>,
+    ) {
+        loop {
+            if shutdown.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let events = match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(events) => events,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+
+            let current_index = search_index.read().ok().and_then(|guard| guard.clone());
+            let current_vfs = shadow_vfs.read().ok().and_then(|guard| guard.clone());
+
+            if current_index.is_none() && current_vfs.is_none() {
+                continue;
+            }
+
+            let roots: Vec<PathBuf> = match subscriptions.lock() {
+                Ok(subs) => subs.values().map(|s| s.root.clone()).collect(),
+                Err(_) => Vec::new(),
+            };
+
+            for event in events {
+                match event.kind {
+                    FileChangeKind::Create | FileChangeKind::Modify => {
+                        if let Some(index) = &current_index {
+                            let path = Path::new(&event.path);
+                            if let Some(content) = try_read_text_file(path, 3) {
+                                let _ = index.update_document(&event.path, &content);
+                            }
+                        }
+                    }
+                    FileChangeKind::Delete => {
+                        if let Some(index) = &current_index {
+                            let _ = index.delete_document(&event.path);
+                            let path = Path::new(&event.path);
+                            for root in &roots {
+                                let rel = relative_to_root(path, root);
+                                if rel != path {
+                                    let rel_str = normalize_path_str(&rel);
+                                    let _ = index.delete_document(&rel_str);
+                                }
+                            }
+                        }
+                        if let Some(vfs) = &current_vfs {
+                            let _ = vfs.remove_virtual(&event.path);
+                            let path = Path::new(&event.path);
+                            let _ = vfs.remove_virtual(path);
+                            for root in &roots {
+                                let rel = relative_to_root(path, root);
+                                if rel != path {
+                                    let _ = vfs.remove_virtual(&rel);
+                                    let _ = vfs.remove_virtual(normalize_path_str(&rel));
+                                }
+                            }
+                        }
+                    }
+                    FileChangeKind::Rename => {
+                        let path = Path::new(&event.path);
+                        if path.exists() {
+                            if let Some(index) = &current_index {
+                                if let Some(content) = try_read_text_file(path, 3) {
+                                    let _ = index.update_document(&event.path, &content);
+                                }
+                            }
+                        } else {
+                            if let Some(index) = &current_index {
+                                let _ = index.delete_document(&event.path);
+                                for root in &roots {
+                                    let rel = relative_to_root(path, root);
+                                    if rel != path {
+                                        let rel_str = normalize_path_str(&rel);
+                                        let _ = index.delete_document(&rel_str);
+                                    }
+                                }
+                            }
+                            if let Some(vfs) = &current_vfs {
+                                let _ = vfs.remove_virtual(&event.path);
+                                let _ = vfs.remove_virtual(path);
+                                for root in &roots {
+                                    let rel = relative_to_root(path, root);
+                                    if rel != path {
+                                        let _ = vfs.remove_virtual(&rel);
+                                        let _ = vfs.remove_virtual(normalize_path_str(&rel));
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

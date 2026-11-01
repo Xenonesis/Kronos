@@ -3,7 +3,7 @@ use tantivy::collector::TopDocs;
 use tantivy::directory::RamDirectory;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
-use tantivy::{Index, IndexReader, IndexSettings, IndexWriter, TantivyDocument};
+use tantivy::{Index, IndexReader, IndexSettings, IndexWriter, TantivyDocument, Term};
 
 /// Represents a single search result matching a query.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -24,10 +24,10 @@ pub struct WorkspaceSearchIndex {
 
 impl WorkspaceSearchIndex {
     /// Creates a new in-memory `WorkspaceSearchIndex` using `RamDirectory`.
-    /// Schema consists of `path: TEXT | STORED` and `body: TEXT`.
+    /// Schema consists of `path: STRING | STORED` and `body: TEXT`.
     pub fn new_in_memory() -> Result<Self, String> {
         let mut schema_builder = Schema::builder();
-        let path_field = schema_builder.add_text_field("path", TEXT | STORED);
+        let path_field = schema_builder.add_text_field("path", STRING | STORED);
         let body_field = schema_builder.add_text_field("body", TEXT);
         let schema = schema_builder.build();
 
@@ -78,6 +78,56 @@ impl WorkspaceSearchIndex {
         writer
             .commit()
             .map_err(|e| format!("Failed to commit documents: {e}"))?;
+
+        self.reader
+            .reload()
+            .map_err(|e| format!("Failed to reload search reader: {e}"))?;
+
+        Ok(())
+    }
+
+    /// Deletes any documents matching the given path from the index.
+    pub fn delete_document(&self, path: &str) -> Result<(), String> {
+        let term = Term::from_field_text(self.path_field, path);
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|e| format!("Lock poisoned: {e}"))?;
+
+        writer.delete_term(term);
+
+        writer
+            .commit()
+            .map_err(|e| format!("Failed to commit delete: {e}"))?;
+
+        self.reader
+            .reload()
+            .map_err(|e| format!("Failed to reload search reader: {e}"))?;
+
+        Ok(())
+    }
+
+    /// Updates a document at the given path with new text content.
+    /// Deletes any existing document matching the path and adds the new document atomically.
+    pub fn update_document(&self, path: &str, text: &str) -> Result<(), String> {
+        let term = Term::from_field_text(self.path_field, path);
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|e| format!("Lock poisoned: {e}"))?;
+
+        writer.delete_term(term);
+
+        let mut doc = TantivyDocument::default();
+        doc.add_text(self.path_field, path);
+        doc.add_text(self.body_field, text);
+        writer
+            .add_document(doc)
+            .map_err(|e| format!("Failed to add document: {e}"))?;
+
+        writer
+            .commit()
+            .map_err(|e| format!("Failed to commit update: {e}"))?;
 
         self.reader
             .reload()

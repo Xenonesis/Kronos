@@ -46,6 +46,65 @@ mod tests {
     }
 
     #[test]
+    fn test_tantivy_incremental_document_deletion_and_update() {
+        let index = WorkspaceSearchIndex::new_in_memory().expect("create index");
+        index
+            .index_document("src/main.rs", "fn main() { println!(\"hello\"); }")
+            .expect("index");
+
+        let res = index.search("println").expect("search");
+        assert_eq!(res.len(), 1);
+
+        // Delete document
+        index.delete_document("src/main.rs").expect("delete");
+        let res_after = index.search("println").expect("search");
+        assert_eq!(res_after.len(), 0);
+
+        // Update document
+        index
+            .update_document("src/main.rs", "fn main() { eprintln!(\"error\"); }")
+            .expect("update");
+        let res_new = index.search("eprintln").expect("search");
+        assert_eq!(res_new.len(), 1);
+    }
+
+    #[test]
+    fn test_tantivy_delete_nonexistent_and_multiple_updates() {
+        let index = WorkspaceSearchIndex::new_in_memory().expect("create index");
+        index
+            .index_document("src/a.rs", "fn alpha() { let x = 42; }")
+            .expect("index a");
+        index
+            .index_document("src/b.rs", "fn beta() { let y = 99; }")
+            .expect("index b");
+
+        // Deleting non-existent doc succeeds and does not affect existing docs
+        index.delete_document("src/nonexistent.rs").expect("delete non-existent");
+        assert_eq!(index.search("alpha").expect("search").len(), 1);
+        assert_eq!(index.search("beta").expect("search").len(), 1);
+
+        // Updating non-existent doc creates it
+        index
+            .update_document("src/c.rs", "fn gamma() { let z = 100; }")
+            .expect("update new");
+        assert_eq!(index.search("gamma").expect("search").len(), 1);
+
+        // Repeated updates overwrite and do not produce duplicate hits
+        index
+            .update_document("src/a.rs", "fn second() { let x = 43; }")
+            .expect("update a second");
+        index
+            .update_document("src/a.rs", "fn third() { let x = 44; }")
+            .expect("update a third");
+
+        assert_eq!(index.search("alpha").expect("search").len(), 0);
+        assert_eq!(index.search("second").expect("search").len(), 0);
+        let v3_results = index.search("third").expect("search");
+        assert_eq!(v3_results.len(), 1);
+        assert_eq!(v3_results[0].path, "src/a.rs");
+    }
+
+    #[test]
     fn test_ast_engine_typescript_parsing() {
         let engine = AstEngine::new();
 
