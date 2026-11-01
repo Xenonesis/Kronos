@@ -51,6 +51,29 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
             })),
             error: None,
         },
+        "directory_suggestions_request" | "workspace/suggest_directory" => {
+            let query = envelope.payload.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            let cwd_str = envelope.payload.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
+            let include_files = envelope.payload.get("includeFiles").and_then(|v| v.as_bool()).unwrap_or(true);
+            let include_dirs = envelope.payload.get("includeDirectories").and_then(|v| v.as_bool()).unwrap_or(false);
+            let limit = envelope.payload.get("limit").and_then(|v| v.as_u64()).map(|l| l as usize).unwrap_or(50).min(100);
+
+            let root_path = std::path::Path::new(cwd_str);
+            let (directories, entries) = crate::kernel::search::suggest_directory_entries(
+                root_path,
+                query,
+                include_files,
+                include_dirs,
+                limit,
+            );
+
+            RpcResponse::ok(&envelope.id, "directory_suggestions_response", Some(serde_json::json!({
+                "directories": directories,
+                "entries": entries,
+                "error": null,
+                "requestId": envelope.id
+            })))
+        }
         other => RpcResponse::err(
             envelope.id,
             other,
@@ -110,6 +133,50 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "type": "git/status/response",
                 "requestId": request_id,
                 "payload": summary
+            })
+        }
+        "directory_suggestions_request" => {
+            let payload = msg.get("payload");
+            let query = msg.get("query")
+                .or_else(|| payload.and_then(|p| p.get("query")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let cwd_str = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let include_files = msg.get("includeFiles")
+                .or_else(|| payload.and_then(|p| p.get("includeFiles")))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let include_dirs = msg.get("includeDirectories")
+                .or_else(|| payload.and_then(|p| p.get("includeDirectories")))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let limit = msg.get("limit")
+                .or_else(|| payload.and_then(|p| p.get("limit")))
+                .and_then(|v| v.as_u64())
+                .map(|l| l as usize)
+                .unwrap_or(50)
+                .min(100);
+
+            let root_path = std::path::Path::new(cwd_str);
+            let (directories, entries) = crate::kernel::search::suggest_directory_entries(
+                root_path,
+                query,
+                include_files,
+                include_dirs,
+                limit,
+            );
+
+            serde_json::json!({
+                "type": "directory_suggestions_response",
+                "payload": {
+                    "directories": directories,
+                    "entries": entries,
+                    "error": null,
+                    "requestId": request_id
+                }
             })
         }
         other => {

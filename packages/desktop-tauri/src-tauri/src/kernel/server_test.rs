@@ -98,6 +98,72 @@ mod tests {
         daemon.stop().await;
     }
 
+    #[tokio::test]
+    async fn test_embedded_daemon_directory_suggestions_dispatch() {
+        let port = 6794;
+        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+        let url = format!("ws://127.0.0.1:{}", port);
+        let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+
+        let dir_query = serde_json::json!({
+            "type": "session",
+            "message": {
+                "type": "directory_suggestions_request",
+                "cwd": ".",
+                "query": "search.rs",
+                "includeFiles": true,
+                "includeDirectories": false,
+                "limit": 10,
+                "requestId": "req-dir-sugg-test"
+            }
+        });
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(dir_query.to_string())).await.unwrap();
+
+        let dir_resp = ws_stream.next().await.unwrap().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(dir_resp.to_text().unwrap()).unwrap();
+        assert_eq!(parsed["type"], "session");
+        assert_eq!(parsed["message"]["type"], "directory_suggestions_response");
+        assert_eq!(parsed["message"]["payload"]["requestId"], "req-dir-sugg-test");
+        assert!(parsed["message"]["payload"]["error"].is_null());
+
+        let entries = parsed["message"]["payload"]["entries"].as_array().expect("entries array");
+        assert!(!entries.is_empty(), "Should return matching search.rs entry");
+        let matched = entries.iter().any(|e| {
+            e["path"].as_str().map(|p| p.ends_with("search.rs")).unwrap_or(false)
+        });
+        assert!(matched, "Expected search.rs in returned suggestions payload");
+
+        daemon.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_directory_suggestions_envelope_dispatch() {
+        let envelope = crate::kernel::protocol::RpcEnvelope {
+            id: "envelope-sugg-1".to_string(),
+            msg_type: "directory_suggestions_request".to_string(),
+            payload: serde_json::json!({
+                "cwd": ".",
+                "query": "search.rs",
+                "includeFiles": true,
+                "includeDirectories": false,
+                "limit": 10
+            }),
+        };
+        let resp = crate::kernel::server::dispatch_envelope(envelope).await;
+        assert_eq!(resp.id, "envelope-sugg-1");
+        assert_eq!(resp.msg_type, "directory_suggestions_response");
+        assert!(resp.success);
+        let data = resp.data.expect("response data");
+        assert_eq!(data["requestId"], "envelope-sugg-1");
+        assert!(data["error"].is_null());
+        let entries = data["entries"].as_array().expect("entries array");
+        assert!(!entries.is_empty());
+        let matched = entries.iter().any(|e| {
+            e["path"].as_str().map(|p| p.ends_with("search.rs")).unwrap_or(false)
+        });
+        assert!(matched, "Expected search.rs in returned suggestions payload");
+    }
+
     #[cfg(windows)]
     #[tokio::test]
     async fn test_embedded_daemon_named_pipe_ipc() {
