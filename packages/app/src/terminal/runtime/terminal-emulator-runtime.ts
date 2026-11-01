@@ -800,7 +800,10 @@ export class TerminalEmulatorRuntime {
       webglAddonRaf = null;
       try {
         disposeWebglRenderer();
-        webglAddon = new WebglAddon();
+        webglAddon = new WebglAddon({
+          customGlyphs: true,
+          preserveDrawingBuffer: false,
+        });
         webglAddon.onContextLoss(() => {
           disposeWebglRenderer();
         });

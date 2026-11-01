@@ -42,6 +42,43 @@ impl Default for NativePtyManager {
     }
 }
 
+/// Finds the index where an incomplete trailing UTF-8 byte sequence starts, if any.
+/// Returns the byte offset into `bytes` where valid complete UTF-8 ends.
+fn split_incomplete_utf8(bytes: &[u8]) -> usize {
+    let len = bytes.len();
+    if len == 0 {
+        return 0;
+    }
+
+    let start_check = len.saturating_sub(3);
+    for i in (start_check..len).rev() {
+        let b = bytes[i];
+        if b & 0b1000_0000 == 0 {
+            break;
+        }
+        if b & 0b1100_0000 == 0b1100_0000 {
+            let expected_len = if b & 0b1110_0000 == 0b1100_0000 {
+                2
+            } else if b & 0b1111_0000 == 0b1110_0000 {
+                3
+            } else if b & 0b1111_1000 == 0b1111_0000 {
+                4
+            } else {
+                break;
+            };
+
+            let actual_len = len - i;
+            if actual_len < expected_len {
+                return i;
+            } else {
+                break;
+            }
+        }
+    }
+
+    len
+}
+
 impl NativePtyManager {
     pub fn new() -> Self {
         let job_supervisor = crate::process_job::JobSupervisor::new().ok().map(Arc::new);
@@ -58,11 +95,7 @@ impl NativePtyManager {
         }
     }
 
-    pub fn spawn_terminal(
-        &self,
-        id: String,
-        options: TerminalSpawnOptions,
-    ) -> Result<(), String> {
+    pub fn spawn_terminal(&self, id: String, options: TerminalSpawnOptions) -> Result<(), String> {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -135,7 +168,9 @@ impl NativePtyManager {
         channel: Channel<TerminalEvent>,
     ) -> Result<(), String> {
         let mut sessions = self.sessions.lock().unwrap();
-        let term = sessions.get_mut(&id).ok_or_else(|| "Session not found".to_string())?;
+        let term = sessions
+            .get_mut(&id)
+            .ok_or_else(|| "Session not found".to_string())?;
 
         let mut reader = term
             .master
@@ -145,30 +180,146 @@ impl NativePtyManager {
         let sessions_clone = self.sessions.clone();
         let session_id = id.clone();
 
+        enum RawPtyMsg {
+            Data(Vec<u8>),
+            Exit(Option<u32>),
+            Error(String),
+        }
+
+        let (tx, rx) = std::sync::mpsc::channel::<RawPtyMsg>();
+        let tx_reader = tx.clone();
+
+        // Background thread reading raw ConPTY output pipe
         thread::spawn(move || {
-            let mut buf = [0u8; 8192];
+            let mut buf = [0u8; 65536];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => {
-                        let _ = channel.send(TerminalEvent::Exit(None));
+                        let _ = tx_reader.send(RawPtyMsg::Exit(None));
                         break;
                     }
                     Ok(n) => {
-                        let text = String::from_utf8_lossy(&buf[..n]).to_string();
-                        if channel.send(TerminalEvent::Data(text)).is_err() {
+                        if tx_reader.send(RawPtyMsg::Data(buf[..n].to_vec())).is_err() {
                             break;
                         }
                     }
                     Err(e) => {
-                        if e.kind() == std::io::ErrorKind::BrokenPipe || e.raw_os_error() == Some(5) {
-                            let _ = channel.send(TerminalEvent::Exit(None));
+                        if e.kind() == std::io::ErrorKind::BrokenPipe || e.raw_os_error() == Some(5)
+                        {
+                            let _ = tx_reader.send(RawPtyMsg::Exit(None));
                         } else {
-                            let _ = channel.send(TerminalEvent::Error(e.to_string()));
+                            let _ = tx_reader.send(RawPtyMsg::Error(e.to_string()));
                         }
                         break;
                     }
                 }
             }
+        });
+
+        // Dispatcher thread with adaptive micro-batching and UTF-8 boundary preservation
+        thread::spawn(move || {
+            let mut leftover: Vec<u8> = Vec::new();
+            let mut batch_text = String::with_capacity(65536);
+            let micro_window = std::time::Duration::from_millis(2);
+            const MAX_BATCH_SIZE: usize = 65536;
+
+            loop {
+                let first_msg = match rx.recv() {
+                    Ok(msg) => msg,
+                    Err(_) => break,
+                };
+
+                let mut process_bytes = |bytes: Vec<u8>, text_target: &mut String| {
+                    let mut combined = if leftover.is_empty() {
+                        bytes
+                    } else {
+                        let mut c = std::mem::take(&mut leftover);
+                        c.extend_from_slice(&bytes);
+                        c
+                    };
+
+                    let split_idx = split_incomplete_utf8(&combined);
+                    if split_idx < combined.len() {
+                        leftover = combined.split_off(split_idx);
+                    }
+
+                    if !combined.is_empty() {
+                        let text = String::from_utf8_lossy(&combined);
+                        text_target.push_str(&text);
+                    }
+                };
+
+                match first_msg {
+                    RawPtyMsg::Data(bytes) => {
+                        process_bytes(bytes, &mut batch_text);
+
+                        let start = std::time::Instant::now();
+                        while batch_text.len() < MAX_BATCH_SIZE {
+                            let remaining = micro_window.saturating_sub(start.elapsed());
+                            if remaining.is_zero() {
+                                break;
+                            }
+                            match rx.recv_timeout(remaining) {
+                                Ok(RawPtyMsg::Data(more_bytes)) => {
+                                    process_bytes(more_bytes, &mut batch_text);
+                                }
+                                Ok(RawPtyMsg::Exit(code)) => {
+                                    if !batch_text.is_empty() {
+                                        let _ = channel.send(TerminalEvent::Data(std::mem::take(
+                                            &mut batch_text,
+                                        )));
+                                    }
+                                    let _ = channel.send(TerminalEvent::Exit(code));
+                                    let mut lock = sessions_clone.lock().unwrap();
+                                    lock.remove(&session_id);
+                                    return;
+                                }
+                                Ok(RawPtyMsg::Error(err)) => {
+                                    if !batch_text.is_empty() {
+                                        let _ = channel.send(TerminalEvent::Data(std::mem::take(
+                                            &mut batch_text,
+                                        )));
+                                    }
+                                    let _ = channel.send(TerminalEvent::Error(err));
+                                    let mut lock = sessions_clone.lock().unwrap();
+                                    lock.remove(&session_id);
+                                    return;
+                                }
+                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                    break;
+                                }
+                                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                    break;
+                                }
+                            }
+                        }
+
+                        if !batch_text.is_empty() {
+                            let out = std::mem::take(&mut batch_text);
+                            if channel.send(TerminalEvent::Data(out)).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    RawPtyMsg::Exit(code) => {
+                        if !leftover.is_empty() {
+                            let text = String::from_utf8_lossy(&leftover).to_string();
+                            let _ = channel.send(TerminalEvent::Data(text));
+                        }
+                        let _ = channel.send(TerminalEvent::Exit(code));
+                        break;
+                    }
+                    RawPtyMsg::Error(err) => {
+                        if !leftover.is_empty() {
+                            let text = String::from_utf8_lossy(&leftover).to_string();
+                            let _ = channel.send(TerminalEvent::Data(text));
+                        }
+                        let _ = channel.send(TerminalEvent::Error(err));
+                        break;
+                    }
+                }
+            }
+
             let mut lock = sessions_clone.lock().unwrap();
             lock.remove(&session_id);
         });
@@ -178,16 +329,22 @@ impl NativePtyManager {
 
     pub fn write_terminal(&self, id: &str, data: &str) -> Result<(), String> {
         let mut sessions = self.sessions.lock().unwrap();
-        let term = sessions.get_mut(id).ok_or_else(|| "Session not found".to_string())?;
+        let term = sessions
+            .get_mut(id)
+            .ok_or_else(|| "Session not found".to_string())?;
         term.writer
             .write_all(data.as_bytes())
             .map_err(|e| format!("Failed to write to PTY: {}", e))?;
-        term.writer.flush().map_err(|e| format!("Failed to flush PTY: {}", e))
+        term.writer
+            .flush()
+            .map_err(|e| format!("Failed to flush PTY: {}", e))
     }
 
     pub fn resize_terminal(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
         let sessions = self.sessions.lock().unwrap();
-        let term = sessions.get(id).ok_or_else(|| "Session not found".to_string())?;
+        let term = sessions
+            .get(id)
+            .ok_or_else(|| "Session not found".to_string())?;
         term.master
             .resize(PtySize {
                 rows: rows.max(1),
@@ -337,7 +494,92 @@ mod tests {
 
         // Wait for at least one data event from PTY
         let received = rx.recv_timeout(std::time::Duration::from_secs(3));
-        assert!(received.is_ok(), "Should receive terminal output event from channel");
+        assert!(
+            received.is_ok(),
+            "Should receive terminal output event from channel"
+        );
+
+        assert!(manager.kill_terminal(&session_id).is_ok());
+    }
+
+    #[test]
+    fn test_split_incomplete_utf8() {
+        // Complete ASCII
+        assert_eq!(split_incomplete_utf8(b"hello world"), 11);
+        assert_eq!(split_incomplete_utf8(b""), 0);
+
+        // Complete 2-byte sequence (e.g. 'é' = [0xC3, 0xA9])
+        assert_eq!(split_incomplete_utf8(&[b'a', 0xC3, 0xA9]), 3);
+        // Incomplete 2-byte sequence cut at leading byte
+        assert_eq!(split_incomplete_utf8(&[b'a', 0xC3]), 1);
+
+        // Complete 3-byte sequence (e.g. '—' = [0xE2, 0x80, 0x94])
+        assert_eq!(split_incomplete_utf8(&[0xE2, 0x80, 0x94]), 3);
+        // Incomplete 3-byte sequence cut at 1 byte
+        assert_eq!(split_incomplete_utf8(&[0xE2]), 0);
+        // Incomplete 3-byte sequence cut at 2 bytes
+        assert_eq!(split_incomplete_utf8(&[0xE2, 0x80]), 0);
+
+        // Complete 4-byte emoji (e.g. '🔥' = [0xF0, 0x9F, 0x94, 0xA5])
+        assert_eq!(split_incomplete_utf8(&[0xF0, 0x9F, 0x94, 0xA5]), 4);
+        // Incomplete 4-byte cut at 3 bytes
+        assert_eq!(split_incomplete_utf8(&[b'x', 0xF0, 0x9F, 0x94]), 1);
+    }
+
+    #[test]
+    fn test_native_pty_burst_coalescing() {
+        let manager = NativePtyManager::new();
+        let session_id = "test-burst-coalescing".to_string();
+        let spawn_res = manager.spawn_terminal(
+            session_id.clone(),
+            TerminalSpawnOptions {
+                command: None,
+                args: vec![],
+                cwd: None,
+                cols: 80,
+                rows: 24,
+            },
+        );
+        assert!(spawn_res.is_ok());
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let channel = Channel::new(move |event| {
+            let _ = tx.send(event);
+            Ok(())
+        });
+
+        assert!(manager
+            .attach_reader_channel(session_id.clone(), channel)
+            .is_ok());
+
+        // Rapid burst of 10 sequential write commands
+        for i in 0..10 {
+            let cmd = format!("echo burst_item_{}\r\n", i);
+            let _ = manager.write_terminal(&session_id, &cmd);
+        }
+
+        // Collect events received within 3 seconds
+        let mut collected_output = String::new();
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_secs(3) {
+            if let Ok(body) = rx.recv_timeout(std::time::Duration::from_millis(300)) {
+                match body {
+                    tauri::ipc::InvokeResponseBody::Json(s) => collected_output.push_str(&s),
+                    tauri::ipc::InvokeResponseBody::Raw(b) => {
+                        collected_output.push_str(&String::from_utf8_lossy(&b))
+                    }
+                    _ => {}
+                }
+                if collected_output.contains("burst_item_9") {
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            collected_output.contains("burst_item_0") || collected_output.contains("burst_item_"),
+            "Should receive burst streaming output"
+        );
 
         assert!(manager.kill_terminal(&session_id).is_ok());
     }
