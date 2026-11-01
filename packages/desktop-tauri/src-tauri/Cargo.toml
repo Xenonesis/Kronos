@@ -53,6 +53,7 @@ features = [
   "Win32_System_LibraryLoader",
   "Win32_Storage_FileSystem",
   "Win32_Graphics_Dwm",
+  "Win32_System_ProcessStatus",
 ]
 
 [profile.release]

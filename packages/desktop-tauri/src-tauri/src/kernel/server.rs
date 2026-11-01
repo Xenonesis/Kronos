@@ -31,7 +31,7 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                 "protocolVersion": 1,
                 "serverId": "kronos-embedded-daemon",
                 "hostname": "localhost",
-                "version": "0.14.0",
+                "version": env!("CARGO_PKG_VERSION"),
                 "desktopManaged": true,
                 "features": {
                     "connectedHosts": true,

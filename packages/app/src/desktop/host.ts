@@ -253,6 +253,21 @@ export interface DesktopHostBridge {
   browser?: DesktopBrowserBridge;
   nativeTerminal?: NativeTerminalBridge;
   nativeDiff?: NativeDiffBridge;
+  getKernelTelemetry?: () => Promise<KernelTelemetry | null>;
+}
+
+export interface KernelTelemetry {
+  version: string;
+  os: string;
+  arch: string;
+  pid: number;
+  memory_working_set_bytes: number;
+  memory_peak_working_set_bytes: number;
+  memory_private_bytes: number;
+  uptime_secs: number;
+  shm_available: boolean;
+  mica_enabled: boolean;
+  pty_enabled: boolean;
 }
 
 declare global {

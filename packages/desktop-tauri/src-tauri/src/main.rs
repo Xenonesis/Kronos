@@ -278,6 +278,11 @@ async fn install_app_update(
     })
 }
 
+#[tauri::command]
+fn get_kernel_telemetry() -> crate::kernel::telemetry::KernelTelemetry {
+    crate::kernel::telemetry::get_kernel_telemetry()
+}
+
 
 fn detect_and_configure_portable_mode() -> Option<PathBuf> {
     // Check KRONOS_PORTABLE=1 env var
@@ -1049,6 +1054,16 @@ try {{
       }}
       return null;
     }}
+    getKernelTelemetry: async function() {{
+      try {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          return await window.__TAURI_INTERNALS__.invoke('get_kernel_telemetry');
+        }}
+      }} catch (e) {{
+        console.error('[TauriBridge] getKernelTelemetry failed:', e);
+      }}
+      return null;
+    }}
   }};
 
   // Seed/reconcile valid StoredHostProfile matching StoredHostProfileSchema
@@ -1203,7 +1218,8 @@ try {{
             kill_native_terminal,
             compute_file_diff,
             check_app_update,
-            install_app_update
+            install_app_update,
+            get_kernel_telemetry
         ])
         .setup(move |app| {
             let _ = setup_tray(app.handle());

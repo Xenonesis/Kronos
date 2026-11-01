@@ -13,6 +13,7 @@ pub mod ioring;
 pub mod mcp;
 pub mod speech;
 pub mod rkyv_shm;
+pub mod telemetry;
 
 #[cfg(test)]
 mod protocol_test;
