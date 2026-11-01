@@ -117,8 +117,10 @@ async function main() {
     "bundle",
     "nsis",
   );
+  const appVersion = getAppVersion();
+  const currentVersionExe = path.join(nsisDir, `Kronos_${appVersion}_x64-setup.exe`);
+  const hasCurrentVersionExe = existsSync(currentVersionExe);
   const existingExe = getLatestExe(nsisDir);
-
   // Step 1: Check Git Repository & Pull
   console.log("\n\x1b[33m[1/5] Checking git repository status & pulling updates...\x1b[0m");
   let oldHead = "";
@@ -148,9 +150,12 @@ async function main() {
   const appDistExists = existsSync(path.join(rootDir, "packages/app/dist"));
   const isUpToDate = oldHead && newHead && oldHead === newHead;
 
-  if (isUpToDate && !force && existingExe && existsSync(existingExe)) {
+  const distInstallerPath = path.join(rootDir, "dist", `Kronos_${appVersion}_x64-setup.exe`);
+  const hasDistInstaller = existsSync(distInstallerPath);
+
+  if (isUpToDate && !force && !publish && hasCurrentVersionExe && hasDistInstaller) {
     console.log("\n\x1b[32m✔ Repository already up to date! Existing installer found:\x1b[0m");
-    console.log(`  \x1b[37mPath:\x1b[0m ${existingExe}`);
+    console.log(`  \x1b[37mPath:\x1b[0m ${currentVersionExe}`);
     console.log(
       "\x1b[90m(Run with '--force' to rebuild anyway: update-desktop-exe.bat --force)\x1b[0m",
     );
@@ -189,10 +194,17 @@ async function main() {
   run("node prepare-dist.mjs", path.join(rootDir, "packages", "desktop-tauri"));
 
   // Step 5: Compile Tauri Executable / Installer
-  const builtQuick = compileTauriBundle(quick, nsisDir);
-  if (builtQuick && !isRelease) return;
+  let builtQuick = false;
+  if (force || !hasCurrentVersionExe) {
+    builtQuick = compileTauriBundle(quick, nsisDir);
+    if (builtQuick && !isRelease) return;
+  } else {
+    console.log(
+      `\x1b[32m⏩ [SKIP] Installer for v${appVersion} already exists. Reusing binary.\x1b[0m`,
+    );
+  }
   // Verification & Packaging
-  const exePath = getLatestExe(nsisDir);
+  const exePath = hasCurrentVersionExe ? currentVersionExe : getLatestExe(nsisDir);
   if (exePath && existsSync(exePath)) {
     const stats = statSync(exePath);
     const sizeMb = (stats.size / (1024 * 1024)).toFixed(2);
@@ -207,7 +219,6 @@ async function main() {
       console.log(`  \x1b[37mPersistent Latest Asset:\x1b[0m ${persistentPath}`);
     }
 
-    const appVersion = getAppVersion();
     const releaseTag = `v${appVersion}`;
 
     // Create root dist/ directory and deploy release artifacts
