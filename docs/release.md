@@ -281,9 +281,11 @@ For a published Windows release, `Desktop Release` generates Winget-compatible
 version, installer, and locale manifests plus a Scoop manifest from the exact
 nonempty NSIS installer bytes. It computes the SHA-256 during that workflow and
 uploads the manifests as versioned GitHub Release assets beside the installer.
-The step is skipped when publishing is disabled or for smoke tags; it does not
-submit to `winget-pkgs` or an external Scoop bucket.
-
+The step is skipped when publishing is disabled or for smoke tags. When `WINGET_TOKEN`
+is configured in GitHub Actions secrets, the workflow executes `scripts/submit-winget-package.mjs`
+to automatically open a Pull Request to `microsoft/winget-pkgs` on the standard path
+`manifests/x/Xenonesis/Kronos/<version>/`. If no token is configured, the script validates
+all manifests against the Winget schema in dry-run mode.
 These assets are not an official Winget source or a maintained Scoop bucket.
 To install with Winget before upstream catalog submission, download all three
 `Xenonesis.Kronos*.yaml` assets for one version into the same local directory,

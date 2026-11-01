@@ -500,6 +500,17 @@ jobs:
             "$output/scoop/Kronos.json" \
             --clobber --repo "${{ github.repository }}"
 
+      - name: Submit package manifests to Windows Package Manager (Winget)
+        if: env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true'
+        shell: bash
+        env:
+          WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          node scripts/submit-winget-package.mjs \
+            --version "$DESKTOP_VERSION" \
+            --manifests-dir "$RUNNER_TEMP/kronos-package-manifests/winget"
+
       - name: Upload package-manager manifests to workflow run
         if: env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true'
         uses: actions/upload-artifact@v4
