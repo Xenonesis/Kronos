@@ -4,7 +4,6 @@ import type {
 } from "../terminal/runtime/terminal-emulator-runtime";
 import type { Ref } from "react";
 import type { ITheme } from "@xterm/xterm";
-import type { TerminalState } from "@getpaseo/protocol/messages";
 import type { TerminalInputModeState } from "@getpaseo/protocol/terminal-input-mode";
 import type { TerminalOutputData } from "../terminal/runtime/terminal-emulator-runtime";
 import type {
@@ -13,6 +12,7 @@ import type {
 } from "../terminal/local-links/terminal-local-link-provider";
 import type { TerminalClipboardWriter } from "../terminal/native-renderer/terminal-selection";
 import type { TerminalFile } from "../terminal/file-paste";
+import type { TerminalCharacterWidths } from "../terminal/character-widths";
 import type { PendingTerminalModifiers } from "../utils/terminal-keys";
 import type { TerminalRendererReadyChange } from "../utils/terminal-renderer-readiness";
 import type { NativeTerminalBridge } from "@/desktop/host";
@@ -20,8 +20,7 @@ import type { NativeTerminalBridge } from "@/desktop/host";
 export interface TerminalEmulatorHandle {
   find?: TerminalFindHandle;
   writeOutput: (data: TerminalOutputData) => void;
-  restoreOutput: (data: TerminalOutputData) => void;
-  renderSnapshot: (state: TerminalState | null) => void;
+  replay: (event: import("@getpaseo/client").TerminalReplayEvent) => void;
   paste: (text: string) => void;
   copySelection: (clipboard: TerminalClipboardWriter) => Promise<string>;
   clear: () => void;
@@ -42,6 +41,7 @@ export interface TerminalEmulatorProps {
   command?: string;
   args?: string[];
   nativeTerminal?: NativeTerminalBridge;
+  characterWidths: TerminalCharacterWidths;
   testId?: string;
   xtermTheme?: ITheme;
   scrollbackLines: number;
@@ -52,7 +52,6 @@ export interface TerminalEmulatorProps {
   swipeGesturesEnabled?: boolean;
   onSwipeLeft?: () => void;
   onSwipeRight?: () => void;
-  initialSnapshot?: TerminalState | null;
   onFindRequest?: () => void;
   onFindResult?: (result: TerminalFindResult) => void;
   onInput?: (data: string) => Promise<void> | void;
