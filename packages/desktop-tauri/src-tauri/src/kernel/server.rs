@@ -47,6 +47,17 @@ pub fn get_speech_engine() -> std::sync::Arc<tokio::sync::RwLock<crate::kernel::
     SPEECH_ENGINE.clone()
 }
 
+static SHM_RING: std::sync::LazyLock<std::sync::Arc<tokio::sync::Mutex<crate::kernel::shm::ShmRingBuffer>>> =
+    std::sync::LazyLock::new(|| {
+        let ring = crate::kernel::shm::ShmRingBuffer::new("kronos_daemon_shm", 2 * 1024 * 1024)
+            .unwrap_or_else(|e| panic!("Failed to initialize SHM ring buffer: {e}"));
+        std::sync::Arc::new(tokio::sync::Mutex::new(ring))
+    });
+
+pub fn get_shm_ring() -> std::sync::Arc<tokio::sync::Mutex<crate::kernel::shm::ShmRingBuffer>> {
+    SHM_RING.clone()
+}
+
 fn extract_jsonrpc_request_str(val: &serde_json::Value) -> Option<String> {
     if let Some(req) = val.get("request") {
         if let Some(s) = req.as_str() {
@@ -645,6 +656,89 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                 None => RpcResponse::err(&envelope.id, "speech/load_model/response", "Missing 'modelPath' parameter"),
             }
         }
+        "shm/status" => {
+            let ring_lock = get_shm_ring();
+            let ring = ring_lock.lock().await;
+            let cap = ring.capacity();
+            let head = ring.write_head();
+            let seq = ring.sequence();
+            RpcResponse::ok(
+                &envelope.id,
+                "shm/status/response",
+                Some(serde_json::json!({
+                    "capacity": cap,
+                    "headOffset": head,
+                    "sequence": seq,
+                })),
+            )
+        }
+        "shm/push" => {
+            let stream_id = envelope.payload.get("streamId")
+                .or_else(|| envelope.payload.get("stream_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("telemetry-default");
+            let payload_b64 = envelope.payload.get("payloadBase64")
+                .or_else(|| envelope.payload.get("payload_base64"))
+                .or_else(|| envelope.payload.get("payload"))
+                .and_then(|v| v.as_str());
+
+            match payload_b64 {
+                Some(b64) => {
+                    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64)
+                        .unwrap_or_else(|_| b64.as_bytes().to_vec());
+                    let ring_lock = get_shm_ring();
+                    let ring = ring_lock.lock().await;
+                    let next_seq = ring.sequence() + 1;
+                    match crate::kernel::rkyv_shm::write_rkyv_chunk_to_shm(&ring, next_seq, stream_id, bytes) {
+                        Ok(seq) => RpcResponse::ok(
+                            &envelope.id,
+                            "shm/push/response",
+                            Some(serde_json::json!({
+                                "sequence": seq,
+                                "streamId": stream_id,
+                                "success": true,
+                            })),
+                        ),
+                        Err(e) => RpcResponse::err(&envelope.id, "shm/push/response", e),
+                    }
+                }
+                None => RpcResponse::err(&envelope.id, "shm/push/response", "Missing 'payloadBase64' parameter"),
+            }
+        }
+        "shm/poll" => {
+            let since_seq = envelope.payload.get("sinceSeq")
+                .or_else(|| envelope.payload.get("since_seq"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            let ring_lock = get_shm_ring();
+            let ring = ring_lock.lock().await;
+            match crate::kernel::rkyv_shm::read_rkyv_chunks_since(&ring, since_seq) {
+                Ok(chunks) => {
+                    let records: Vec<serde_json::Value> = chunks
+                        .into_iter()
+                        .map(|(seq, chunk)| {
+                            let b64 = base64::Engine::encode(
+                                &base64::engine::general_purpose::STANDARD,
+                                &chunk.payload,
+                            );
+                            serde_json::json!({
+                                "sequence": seq,
+                                "streamId": chunk.stream_id,
+                                "bytesLen": chunk.bytes_len,
+                                "payloadBase64": b64,
+                            })
+                        })
+                        .collect();
+                    RpcResponse::ok(
+                        &envelope.id,
+                        "shm/poll/response",
+                        Some(serde_json::json!({ "records": records })),
+                    )
+                }
+                Err(e) => RpcResponse::err(&envelope.id, "shm/poll/response", e),
+            }
+        }
         other => RpcResponse::err(
             envelope.id,
             other,
@@ -1050,7 +1144,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }
             }
         }
-        msg_type if msg_type.starts_with("crdt/") || msg_type.starts_with("ioring/") || msg_type.starts_with("speech/") => {
+        msg_type if msg_type.starts_with("crdt/") || msg_type.starts_with("ioring/") || msg_type.starts_with("speech/") || msg_type.starts_with("shm/") => {
             let env = RpcEnvelope::new(
                 request_id,
                 msg_type,
@@ -1116,7 +1210,7 @@ pub async fn process_incoming_frame(text: &str) -> Option<String> {
                 let res = dispatch_session_message(&val).await;
                 return serde_json::to_string(&res).ok();
             }
-            "vfs/watch" | "vfs/watch_subscribe" | "vfs/unwatch" | "vfs/watch_unsubscribe" | "ast/analyze" | "ast/parse" | "ast/symbols" | "crdt/join" | "crdt/update" | "crdt/sync" | "crdt/state" | "crdt/edit" | "ioring/status" | "ioring/read_batch" | "speech/status" | "speech/transcribe" | "speech/load_model" => {
+            "vfs/watch" | "vfs/watch_subscribe" | "vfs/unwatch" | "vfs/watch_unsubscribe" | "ast/analyze" | "ast/parse" | "ast/symbols" | "crdt/join" | "crdt/update" | "crdt/sync" | "crdt/state" | "crdt/edit" | "ioring/status" | "ioring/read_batch" | "speech/status" | "speech/transcribe" | "speech/load_model" | "shm/status" | "shm/push" | "shm/poll" => {
                 let res = dispatch_session_message(&val).await;
                 return serde_json::to_string(&res).ok();
             }

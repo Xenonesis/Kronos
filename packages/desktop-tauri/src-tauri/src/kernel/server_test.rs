@@ -842,4 +842,63 @@ mod tests {
 
         daemon.stop().await;
     }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_shm_envelopes() {
+        let port = 6786;
+        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+        let url = format!("ws://127.0.0.1:{}", port);
+        let (mut ws_stream, _) = connect_async(&url).await.expect("connect");
+
+        // 1. Test shm/status
+        let status_msg = serde_json::json!({
+            "id": "shm-status-1",
+            "type": "shm/status",
+            "payload": {}
+        });
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(status_msg.to_string())).await.unwrap();
+        let parsed_status = wait_for_rpc_response(&mut ws_stream, "shm-status-1").await;
+        assert_eq!(parsed_status["success"], true);
+        let status_data = parsed_status.get("data").or_else(|| parsed_status.get("payload")).unwrap();
+        assert!(status_data["capacity"].as_u64().unwrap() > 0);
+
+        // 2. Test shm/push
+        let raw_payload = b"rkyv high speed terminal chunk";
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, raw_payload);
+        let push_msg = serde_json::json!({
+            "id": "shm-push-1",
+            "type": "shm/push",
+            "payload": {
+                "streamId": "terminal-stream-1",
+                "payloadBase64": b64
+            }
+        });
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(push_msg.to_string())).await.unwrap();
+        let parsed_push = wait_for_rpc_response(&mut ws_stream, "shm-push-1").await;
+        assert_eq!(parsed_push["success"], true);
+        let push_data = parsed_push.get("data").or_else(|| parsed_push.get("payload")).unwrap();
+        let seq = push_data["sequence"].as_u64().unwrap();
+        assert!(seq > 0);
+
+        // 3. Test shm/poll
+        let poll_msg = serde_json::json!({
+            "id": "shm-poll-1",
+            "type": "shm/poll",
+            "payload": {
+                "sinceSeq": seq - 1
+            }
+        });
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(poll_msg.to_string())).await.unwrap();
+        let parsed_poll = wait_for_rpc_response(&mut ws_stream, "shm-poll-1").await;
+        assert_eq!(parsed_poll["success"], true);
+        let records = parsed_poll.get("data")
+            .or_else(|| parsed_poll.get("payload"))
+            .and_then(|v| v.get("records"))
+            .and_then(|v| v.as_array())
+            .expect("records array");
+        assert!(!records.is_empty());
+        assert_eq!(records.last().unwrap()["streamId"], "terminal-stream-1");
+
+        daemon.stop().await;
+    }
 }

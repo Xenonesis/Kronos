@@ -85,3 +85,35 @@ impl DiffHunkChunk {
             .map_err(|e| format!("{:?}", e))
     }
 }
+
+use crate::kernel::shm::ShmRingBuffer;
+
+/// Writes an rkyv-serialized `TelemetryChunk` into an SMRB ring buffer.
+pub fn write_rkyv_chunk_to_shm(
+    ring: &ShmRingBuffer,
+    sequence: u64,
+    stream_id: &str,
+    payload: Vec<u8>,
+) -> Result<u64, String> {
+    let chunk = TelemetryChunk::new(sequence, stream_id, payload);
+    let bytes = chunk.serialize_to_aligned_bytes()?;
+    ring.write(&bytes).map_err(|e| format!("Failed to write rkyv chunk to SHM: {e}"))
+}
+
+/// Reads all rkyv-serialized `TelemetryChunk` records written to the SMRB ring buffer since `since_seq`.
+pub fn read_rkyv_chunks_since(
+    ring: &ShmRingBuffer,
+    since_seq: u64,
+) -> Result<Vec<(u64, TelemetryChunk)>, String> {
+    let raw_records = ring.read_since(since_seq)
+        .map_err(|e| format!("Failed to read SHM records: {e}"))?;
+
+    let mut chunks = Vec::with_capacity(raw_records.len());
+    for (seq, bytes) in raw_records {
+        let archived = TelemetryChunk::access_archived(&bytes)
+            .map_err(|e| format!("Corrupt rkyv chunk in SHM: {e}"))?;
+        let chunk = TelemetryChunk::deserialize_archived(archived)?;
+        chunks.push((seq, chunk));
+    }
+    Ok(chunks)
+}

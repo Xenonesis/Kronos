@@ -129,3 +129,31 @@ fn test_rkyv_deserialize_back() {
         .expect("direct deserialize hunk");
     assert_eq!(direct_deserialized_hunk, original_hunk);
 }
+
+#[test]
+fn test_rkyv_shm_high_throughput_burst() {
+    use crate::kernel::shm::ShmRingBuffer;
+    use super::rkyv_shm::{write_rkyv_chunk_to_shm, read_rkyv_chunks_since};
+
+    let name = format!("kronos_rkyv_burst_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+    let ring = ShmRingBuffer::new(&name, 1024 * 1024).expect("ring init");
+
+    let burst_count = 50;
+    for i in 1..=burst_count {
+        let payload = format!("high_frequency_frame_{i}").into_bytes();
+        let seq = write_rkyv_chunk_to_shm(&ring, i as u64, "terminal-stream-burst", payload)
+            .expect("write chunk");
+        assert_eq!(seq, i as u64);
+    }
+
+    let chunks = read_rkyv_chunks_since(&ring, 0).expect("read chunks since 0");
+    assert_eq!(chunks.len(), burst_count);
+    for (idx, (seq, chunk)) in chunks.iter().enumerate() {
+        let expected_i = idx + 1;
+        assert_eq!(*seq, expected_i as u64);
+        assert_eq!(chunk.sequence, expected_i as u64);
+        assert_eq!(chunk.stream_id, "terminal-stream-burst");
+        let expected_payload = format!("high_frequency_frame_{expected_i}").into_bytes();
+        assert_eq!(chunk.payload, expected_payload);
+    }
+}

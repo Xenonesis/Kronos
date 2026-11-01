@@ -455,6 +455,28 @@ async fn get_speech_engine_status() -> Result<serde_json::Value, String> {
     }))
 }
 
+#[tauri::command]
+async fn get_shm_status() -> Result<serde_json::Value, String> {
+    let ring_lock = crate::kernel::server::get_shm_ring();
+    let ring = ring_lock.lock().await;
+    let cap = ring.capacity();
+    let head = ring.write_head();
+    let seq = ring.sequence();
+    Ok(serde_json::json!({
+        "capacity": cap,
+        "head_offset": head,
+        "sequence": seq,
+    }))
+}
+
+#[tauri::command]
+async fn push_shm_chunk(stream_id: String, payload: String) -> Result<u64, String> {
+    let ring_lock = crate::kernel::server::get_shm_ring();
+    let ring = ring_lock.lock().await;
+    let next_seq = ring.sequence() + 1;
+    crate::kernel::rkyv_shm::write_rkyv_chunk_to_shm(&ring, next_seq, &stream_id, payload.into_bytes())
+}
+
 
 fn detect_and_configure_portable_mode() -> Option<PathBuf> {
     // Check KRONOS_PORTABLE=1 env var
@@ -1353,7 +1375,7 @@ try {{
         }}
         return null;
       }}
-      if (command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast' || command === 'crdt_doc_action' || command === 'get_ioring_status' || command === 'transcribe_audio_chunk' || command === 'get_speech_engine_status') {{
+      if (command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast' || command === 'crdt_doc_action' || command === 'get_ioring_status' || command === 'transcribe_audio_chunk' || command === 'get_speech_engine_status' || command === 'get_shm_status' || command === 'push_shm_chunk') {{
         try {{
           if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
             return await window.__TAURI_INTERNALS__.invoke(command, args || {{}});
@@ -1566,6 +1588,8 @@ try {{
             get_ioring_status,
             transcribe_audio_chunk,
             get_speech_engine_status,
+            get_shm_status,
+            push_shm_chunk,
             desktop_window_minimize,
             desktop_window_toggle_maximize,
             desktop_window_close,
@@ -1952,5 +1976,17 @@ mod tests {
         assert!(status.is_ok());
         let sval = status.unwrap();
         assert_eq!(sval["target_sample_rate"], 16000);
+    }
+
+    #[tokio::test]
+    async fn test_shm_commands() {
+        let status = get_shm_status().await;
+        assert!(status.is_ok(), "get_shm_status should succeed");
+        let sval = status.unwrap();
+        assert!(sval["capacity"].as_u64().unwrap() > 0);
+
+        let push_res = push_shm_chunk("stream-unit-test".to_string(), "telemetry payload data".to_string()).await;
+        assert!(push_res.is_ok(), "push_shm_chunk should succeed: {:?}", push_res.err());
+        assert!(push_res.unwrap() > 0);
     }
 }
