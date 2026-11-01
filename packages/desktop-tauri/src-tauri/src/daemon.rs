@@ -203,19 +203,25 @@ fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
                 parent.join("resources").join("server-dist"),
             ];
             for res_dir in &candidates {
-                let res_node = res_dir.join("node.exe");
-                let res_script = res_dir
-                    .join("dist")
-                    .join("server")
-                    .join("server")
-                    .join("daemon-worker.js");
-                if res_script.exists() {
-                    let node = if is_valid_node_executable(&res_node) {
-                        res_node
-                    } else {
-                        find_system_node()
-                    };
-                    return Some((res_dir.clone(), node, res_script));
+                let res_node = if cfg!(windows) {
+                    res_dir.join("node.exe")
+                } else {
+                    res_dir.join("node")
+                };
+                let script_candidates = [
+                    res_dir.join("dist").join("server").join("server").join("daemon-worker.js"),
+                    res_dir.join("dist").join("server").join("daemon-worker.js"),
+                    res_dir.join("server").join("server").join("daemon-worker.js"),
+                ];
+                for res_script in &script_candidates {
+                    if res_script.exists() {
+                        let node = if is_valid_node_executable(&res_node) {
+                            res_node
+                        } else {
+                            find_system_node()
+                        };
+                        return Some((res_dir.clone(), node, res_script.clone()));
+                    }
                 }
             }
         }
@@ -365,9 +371,11 @@ fn ensure_port_clean() {
     }
 }
 #[cfg(windows)]
-fn sanitize_windows_path() -> Option<String> {
-    let path_var = env::var("PATH").ok()?;
-    let system_root = env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+fn sanitize_windows_path(extra_dirs: &[PathBuf]) -> Option<String> {
+    let path_var = env::var("PATH").unwrap_or_default();
+    let system_root = env::var("SystemRoot")
+        .or_else(|_| env::var("windir"))
+        .unwrap_or_else(|_| "C:\\Windows".to_string());
     let sys32 = format!("{}\\System32", system_root);
     let wbem = format!("{}\\System32\\Wbem", system_root);
     let powershell = format!("{}\\System32\\WindowsPowerShell\\v1.0", system_root);
@@ -380,11 +388,49 @@ fn sanitize_windows_path() -> Option<String> {
         .collect();
 
     let mut deduplicated: Vec<String> = Vec::new();
+
+    // 1. Extra bundled dirs (e.g. bundled node.exe and node_modules/.bin)
+    for extra in extra_dirs {
+        if extra.exists() {
+            let s = extra.to_string_lossy().to_string();
+            if !deduplicated.iter().any(|d| d.eq_ignore_ascii_case(&s)) {
+                deduplicated.push(s);
+            }
+        }
+    }
+
+    // 2. Core Windows system directories
     for sys_dir in [&sys32, &system_root, &wbem, &powershell] {
         if !deduplicated.iter().any(|d| d.eq_ignore_ascii_case(sys_dir)) {
             deduplicated.push(sys_dir.to_string());
         }
     }
+
+    // 3. Known Git directories (supports PCs where Git was installed without adding to system PATH)
+    let mut git_candidates = Vec::new();
+    if let Ok(pf) = env::var("ProgramFiles") {
+        git_candidates.push(format!("{}\\Git\\cmd", pf));
+        git_candidates.push(format!("{}\\Git\\bin", pf));
+        git_candidates.push(format!("{}\\Git\\usr\\bin", pf));
+    }
+    if let Ok(pf86) = env::var("ProgramFiles(x86)") {
+        git_candidates.push(format!("{}\\Git\\cmd", pf86));
+        git_candidates.push(format!("{}\\Git\\bin", pf86));
+        git_candidates.push(format!("{}\\Git\\usr\\bin", pf86));
+    }
+    if let Ok(local_app) = env::var("LOCALAPPDATA") {
+        git_candidates.push(format!("{}\\Programs\\Git\\cmd", local_app));
+        git_candidates.push(format!("{}\\GitHubDesktop\\bin", local_app));
+    }
+    for git_dir in git_candidates {
+        if std::path::Path::new(&git_dir).exists()
+            && !deduplicated.iter().any(|d| d.eq_ignore_ascii_case(&git_dir))
+        {
+            deduplicated.push(git_dir);
+        }
+    }
+
+    // 4. Existing environment PATH entries
     for p in parts {
         if !deduplicated.iter().any(|d| d.eq_ignore_ascii_case(p)) {
             deduplicated.push(p.to_string());
@@ -446,7 +492,7 @@ pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
         cmd.env("NODE_PATH", node_paths.join(":"));
     }
     #[cfg(windows)]
-    if let Some(clean_path) = sanitize_windows_path() {
+    if let Some(clean_path) = sanitize_windows_path(&[work_dir.clone(), local_nm.join(".bin")]) {
         cmd.env("PATH", &clean_path);
     }
     cmd.current_dir(&work_dir).stdin(Stdio::null());
@@ -499,7 +545,7 @@ pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
                     fallback_cmd.env("NODE_PATH", node_paths.join(":"));
                 }
                 #[cfg(windows)]
-                if let Some(clean_path) = sanitize_windows_path() {
+                if let Some(clean_path) = sanitize_windows_path(&[work_dir.clone(), local_nm.join(".bin")]) {
                     fallback_cmd.env("PATH", &clean_path);
                 }
                 fallback_cmd.current_dir(&work_dir).stdin(Stdio::null());
