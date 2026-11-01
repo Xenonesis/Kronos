@@ -568,7 +568,6 @@ mod tests {
                     tauri::ipc::InvokeResponseBody::Raw(b) => {
                         collected_output.push_str(&String::from_utf8_lossy(&b))
                     }
-                    _ => {}
                 }
                 if collected_output.contains("burst_item_9") {
                     break;

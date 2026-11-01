@@ -1,7 +1,8 @@
+use std::collections::HashSet;
 use std::fs;
-use std::time::Duration;
-use tempfile::tempdir;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tempfile::tempdir;
 use crate::kernel::search::WorkspaceSearchIndex;
 use crate::kernel::vfs::ShadowVfs;
 use crate::kernel::watcher::{FileChangeKind, WatcherEngine};
@@ -71,7 +72,7 @@ async fn test_watcher_detects_delete() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Drain any leftover events from setup if any
-    while let Ok(_) = rx.try_recv() {}
+    while rx.try_recv().is_ok() {}
 
     fs::remove_file(&file_path).expect("remove");
 
@@ -341,4 +342,73 @@ async fn test_watcher_ignores_files_over_1mb_and_binary() {
     let results = search_index.search("A").unwrap_or_default();
     assert!(!results.iter().any(|r| r.path == norm_large_str), "File > 1MB must not be indexed");
     assert!(!results.iter().any(|r| r.path == norm_bin_str), "Binary file must not be indexed");
+}
+
+#[tokio::test]
+async fn test_watcher_burst_write_performance_benchmark() {
+    let dir = tempdir().expect("tempdir");
+    let engine = WatcherEngine::new(20);
+    let mut rx = engine.subscribe_events();
+
+    let sub_id = engine.watch(dir.path(), &[]).expect("watch");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    while rx.try_recv().is_ok() {}
+
+    let write_start = Instant::now();
+    let count = 100;
+    let mut handles = Vec::with_capacity(count);
+    for i in 0..count {
+        let file_path = dir.path().join(format!("burst_bench_{i:03}.txt"));
+        handles.push(tokio::spawn(async move {
+            tokio::fs::write(&file_path, format!("benchmark payload content #{i}"))
+                .await
+                .expect("write burst file");
+        }));
+    }
+    for h in handles {
+        h.await.expect("join burst write task");
+    }
+    let write_elapsed = write_start.elapsed();
+
+    let recv_start = Instant::now();
+    let mut observed_files = HashSet::new();
+    let mut batch_count = 0;
+    let timeout = Duration::from_millis(2000);
+
+    while observed_files.len() < count {
+        let batch = tokio::time::timeout(timeout, rx.recv())
+            .await
+            .expect("timeout waiting for debounced batch")
+            .expect("receive debounced events");
+        batch_count += 1;
+        for event in batch {
+            if let Some(name) = std::path::Path::new(&event.path).file_name() {
+                let name_str = name.to_string_lossy().to_string();
+                if name_str.starts_with("burst_bench_") {
+                    observed_files.insert(name_str);
+                }
+            }
+        }
+    }
+    let debounce_and_process_elapsed = recv_start.elapsed();
+
+    println!(
+        "[BENCH] 100 concurrent writes took: {:?}, debounce & event delivery: {:?} across {} batch(es)",
+        write_elapsed, debounce_and_process_elapsed, batch_count
+    );
+
+    assert_eq!(
+        observed_files.len(),
+        count,
+        "All 100 burst writes must be detected without dropping events"
+    );
+
+    // Reasonable test threshold (<1500ms) ensuring non-blocking debounced delivery
+    assert!(
+        debounce_and_process_elapsed < Duration::from_millis(1500),
+        "Debounce and process latency exceeded threshold: {:?}",
+        debounce_and_process_elapsed
+    );
+
+    engine.unwatch(&sub_id).expect("unwatch");
 }
