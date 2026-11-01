@@ -13,7 +13,11 @@ type BrowserAutomationExecuteResponse = Extract<
 >;
 
 export type DesktopNotificationPermission = "granted" | "denied" | "default";
-export type DesktopWindowChromeMode = "native-mac" | "custom-windows" | "custom-linux";
+export type DesktopWindowChromeMode =
+  | "native-mac"
+  | "native-windows"
+  | "custom-windows"
+  | "custom-linux";
 
 export interface DesktopDialogAskOptions {
   title?: string;
@@ -306,7 +310,12 @@ export function getDesktopWindowChromeMode(): DesktopWindowChromeMode | null {
   const host = getDesktopHost();
   if (!host) return null;
   const mode = host.windowChromeMode;
-  if (mode === "native-mac" || mode === "custom-windows" || mode === "custom-linux") {
+  if (
+    mode === "native-mac" ||
+    mode === "native-windows" ||
+    mode === "custom-windows" ||
+    mode === "custom-linux"
+  ) {
     return mode;
   }
   // COMPAT(windowChromeMode): added in v0.5.3; remove after 2026-11-25.

@@ -96,7 +96,8 @@ export function resolveWindowChromeObstruction(input: {
   mode: DesktopWindowChromeMode | null;
   isFullscreen: boolean;
 }): WindowChromeObstruction {
-  if (!input.mode || input.isFullscreen) return EMPTY_OBSTRUCTION;
+  if (!input.mode || input.isFullscreen || input.mode === "native-windows")
+    return EMPTY_OBSTRUCTION;
   if (input.mode === "native-mac") {
     return {
       topLeft: { width: DESKTOP_TRAFFIC_LIGHT_WIDTH, height: DESKTOP_TRAFFIC_LIGHT_HEIGHT },

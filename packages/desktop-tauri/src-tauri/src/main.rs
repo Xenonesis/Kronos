@@ -673,6 +673,40 @@ fn fast_inspect_path(path: String) -> PathInspectResult {
     }
 }
 
+#[tauri::command]
+fn desktop_window_minimize(window: WebviewWindow) -> Result<(), String> {
+    window.minimize().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn desktop_window_toggle_maximize(window: WebviewWindow) -> Result<(), String> {
+    if window.is_maximized().unwrap_or(false) {
+        window.unmaximize().map_err(|e| e.to_string())
+    } else {
+        window.maximize().map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+fn desktop_window_close(window: WebviewWindow) -> Result<(), String> {
+    window.close().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn desktop_window_is_maximized(window: WebviewWindow) -> bool {
+    window.is_maximized().unwrap_or(false)
+}
+
+#[tauri::command]
+fn desktop_window_is_fullscreen(window: WebviewWindow) -> bool {
+    window.is_fullscreen().unwrap_or(false)
+}
+
+#[tauri::command]
+fn desktop_window_set_fullscreen(window: WebviewWindow, fullscreen: bool) -> Result<(), String> {
+    window.set_fullscreen(fullscreen).map_err(|e| e.to_string())
+}
+
 fn setup_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let home = get_data_dir();
@@ -798,7 +832,91 @@ try {{
 
   window.paseoDesktop = {{
     platform: 'win32',
-    windowChromeMode: 'custom-windows',
+    windowChromeMode: 'native-windows',
+    window: {{
+      getCurrentWindow: function() {{
+        return {{
+          minimize: async function() {{
+            try {{
+              if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+                await window.__TAURI_INTERNALS__.invoke('desktop_window_minimize');
+              }}
+            }} catch (e) {{
+              console.error('[TauriBridge] minimize failed:', e);
+            }}
+          }},
+          toggleMaximize: async function() {{
+            try {{
+              if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+                await window.__TAURI_INTERNALS__.invoke('desktop_window_toggle_maximize');
+              }}
+            }} catch (e) {{
+              console.error('[TauriBridge] toggleMaximize failed:', e);
+            }}
+          }},
+          close: async function() {{
+            try {{
+              if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+                await window.__TAURI_INTERNALS__.invoke('desktop_window_close');
+              }}
+            }} catch (e) {{
+              console.error('[TauriBridge] close failed:', e);
+            }}
+          }},
+          isMaximized: async function() {{
+            try {{
+              if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+                return await window.__TAURI_INTERNALS__.invoke('desktop_window_is_maximized');
+              }}
+            }} catch (e) {{
+              console.error('[TauriBridge] isMaximized failed:', e);
+            }}
+            return false;
+          }},
+          isFullscreen: async function() {{
+            try {{
+              if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+                return await window.__TAURI_INTERNALS__.invoke('desktop_window_is_fullscreen');
+              }}
+            }} catch (e) {{
+              console.error('[TauriBridge] isFullscreen failed:', e);
+            }}
+            return false;
+          }},
+          setFullscreen: async function(fullscreen) {{
+            try {{
+              if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+                await window.__TAURI_INTERNALS__.invoke('desktop_window_set_fullscreen', {{ fullscreen: fullscreen }});
+              }}
+            }} catch (e) {{
+              console.error('[TauriBridge] setFullscreen failed:', e);
+            }}
+          }},
+          onResized: function(callback) {{
+            try {{
+              if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.listen) {{
+                let unlistenPromise = window.__TAURI_INTERNALS__.listen('tauri://resize', function(ev) {{
+                  try {{
+                    callback(ev && ev.payload !== undefined ? ev.payload : ev);
+                  }} catch (err) {{
+                    console.error('[TauriBridge] Resize callback failed:', err);
+                  }}
+                }});
+                return async function() {{
+                  try {{
+                    let unlisten = await unlistenPromise;
+                    if (typeof unlisten === 'function') unlisten();
+                  }} catch (_) {{}}
+                }};
+              }}
+            }} catch (e) {{
+              console.error('[TauriBridge] onResized failed:', e);
+            }}
+            return function() {{}};
+          }}
+        }};
+      }}
+    }},
     validateDirectory: async function(path) {{
       try {{
         if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
@@ -1173,9 +1291,35 @@ try {{
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
+                if win.is_minimized().unwrap_or(false) {
+                    let _ = win.unminimize();
+                }
                 let _ = win.show();
                 let _ = win.set_focus();
-                let _ = win.emit("single-instance-deep-link", argv);
+
+                #[cfg(target_os = "windows")]
+                {
+                    use windows_sys::Win32::UI::WindowsAndMessaging::{
+                        BringWindowToTop, SetForegroundWindow, ShowWindow, SW_RESTORE,
+                    };
+                    if let Ok(hwnd) = win.hwnd() {
+                        unsafe {
+                            let raw_hwnd = hwnd.0 as windows_sys::Win32::Foundation::HWND;
+                            ShowWindow(raw_hwnd, SW_RESTORE);
+                            BringWindowToTop(raw_hwnd);
+                            SetForegroundWindow(raw_hwnd);
+                        }
+                    }
+                }
+
+                let _ = win.emit("single-instance-deep-link", argv.clone());
+                if argv.len() > 1 {
+                    for arg in &argv[1..] {
+                        if !arg.starts_with('-') {
+                            let _ = win.emit("kronos://cli-open", arg);
+                        }
+                    }
+                }
             }
         }))
         .plugin(tauri_plugin_deep_link::init())
@@ -1219,11 +1363,24 @@ try {{
             compute_file_diff,
             check_app_update,
             install_app_update,
-            get_kernel_telemetry
+            get_kernel_telemetry,
+            desktop_window_minimize,
+            desktop_window_toggle_maximize,
+            desktop_window_close,
+            desktop_window_is_maximized,
+            desktop_window_is_fullscreen,
+            desktop_window_set_fullscreen
         ])
         .setup(move |app| {
             let _ = setup_tray(app.handle());
             setup_notification_listeners(app.handle());
+            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                if let Err(err) = app.deep_link().register_all() {
+                    eprintln!("[deep-link] Failed to register schemes: {err}");
+                }
+            }
             let win_builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
                 .title("Kronos")
                 .inner_size(1280.0, 800.0)

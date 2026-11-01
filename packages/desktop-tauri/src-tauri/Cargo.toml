@@ -54,6 +54,7 @@ features = [
   "Win32_Storage_FileSystem",
   "Win32_Graphics_Dwm",
   "Win32_System_ProcessStatus",
+  "Win32_UI_WindowsAndMessaging",
 ]
 
 [profile.release]

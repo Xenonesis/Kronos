@@ -7,6 +7,11 @@
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
+  ; Register Windows App Execution Alias (App Paths) for kronos.exe and paseo.exe
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\App Paths\kronos.exe" "" "$INSTDIR\Kronos.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\App Paths\kronos.exe" "Path" "$INSTDIR"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\App Paths\paseo.exe" "" "$INSTDIR\Kronos.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\App Paths\paseo.exe" "Path" "$INSTDIR"
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
@@ -18,6 +23,9 @@
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
+  ; Clean up App Paths registry entries
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\App Paths\kronos.exe"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\App Paths\paseo.exe"
   ; Delete application data on uninstallation
   RMDir /r "$LOCALAPPDATA\sh.paseo.desktop.tauri"
   RMDir /r "$PROFILE\.paseo"
