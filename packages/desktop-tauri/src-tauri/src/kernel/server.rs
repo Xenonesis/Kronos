@@ -484,6 +484,61 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                 Err(e) => RpcResponse::err(&envelope.id, "crdt/edit/response", e),
             }
         }
+        "ioring/status" => {
+            let reader = crate::kernel::ioring::IoRingBatchReader::new(1024).ok();
+            let is_active = reader.as_ref().map(|r| r.is_kernel_ioring_active()).unwrap_or(false);
+            let queue = reader.as_ref().map(|r| r.queue_size()).unwrap_or(0);
+
+            RpcResponse::ok(
+                &envelope.id,
+                "ioring/status/response",
+                Some(serde_json::json!({
+                    "isKernelActive": is_active,
+                    "queueSize": queue,
+                    "platform": std::env::consts::OS,
+                })),
+            )
+        }
+        "ioring/read_batch" => {
+            let paths_opt = envelope.payload.get("paths")
+                .and_then(|v| v.as_array());
+
+            match paths_opt {
+                Some(arr) => {
+                    let path_bufs: Vec<std::path::PathBuf> = arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(std::path::PathBuf::from))
+                        .collect();
+
+                    match crate::kernel::ioring::IoRingBatchReader::new(1024) {
+                        Ok(reader) => match reader.read_files_batched(&path_bufs) {
+                            Ok(contents) => {
+                                let mut results = Vec::with_capacity(path_bufs.len());
+                                for (p, bytes) in path_bufs.iter().zip(contents.into_iter()) {
+                                    let b64 = base64::Engine::encode(
+                                        &base64::engine::general_purpose::STANDARD,
+                                        &bytes,
+                                    );
+                                    results.push(serde_json::json!({
+                                        "path": p.to_string_lossy(),
+                                        "size": bytes.len(),
+                                        "contentBase64": b64,
+                                    }));
+                                }
+                                RpcResponse::ok(
+                                    &envelope.id,
+                                    "ioring/read_batch/response",
+                                    Some(serde_json::json!({ "files": results })),
+                                )
+                            }
+                            Err(e) => RpcResponse::err(&envelope.id, "ioring/read_batch/response", e.to_string()),
+                        },
+                        Err(e) => RpcResponse::err(&envelope.id, "ioring/read_batch/response", e.to_string()),
+                    }
+                }
+                None => RpcResponse::err(&envelope.id, "ioring/read_batch/response", "Missing 'paths' array"),
+            }
+        }
         other => RpcResponse::err(
             envelope.id,
             other,
@@ -889,7 +944,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }
             }
         }
-        msg_type if msg_type.starts_with("crdt/") => {
+        msg_type if msg_type.starts_with("crdt/") || msg_type.starts_with("ioring/") => {
             let env = RpcEnvelope::new(
                 request_id,
                 msg_type,
@@ -955,7 +1010,7 @@ pub async fn process_incoming_frame(text: &str) -> Option<String> {
                 let res = dispatch_session_message(&val).await;
                 return serde_json::to_string(&res).ok();
             }
-            "vfs/watch" | "vfs/watch_subscribe" | "vfs/unwatch" | "vfs/watch_unsubscribe" | "ast/analyze" | "ast/parse" | "ast/symbols" | "crdt/join" | "crdt/update" | "crdt/sync" | "crdt/state" | "crdt/edit" => {
+            "vfs/watch" | "vfs/watch_subscribe" | "vfs/unwatch" | "vfs/watch_unsubscribe" | "ast/analyze" | "ast/parse" | "ast/symbols" | "crdt/join" | "crdt/update" | "crdt/sync" | "crdt/state" | "crdt/edit" | "ioring/status" | "ioring/read_batch" => {
                 let res = dispatch_session_message(&val).await;
                 return serde_json::to_string(&res).ok();
             }

@@ -410,6 +410,17 @@ async fn crdt_doc_action(
     }
 }
 
+#[tauri::command]
+async fn get_ioring_status() -> Result<serde_json::Value, String> {
+    let reader = crate::kernel::ioring::IoRingBatchReader::new(1024)
+        .map_err(|e| format!("Failed to initialize IoRing: {e}"))?;
+    Ok(serde_json::json!({
+        "is_kernel_active": reader.is_kernel_ioring_active(),
+        "queue_size": reader.queue_size(),
+        "platform": std::env::consts::OS,
+    }))
+}
+
 
 fn detect_and_configure_portable_mode() -> Option<PathBuf> {
     // Check KRONOS_PORTABLE=1 env var
@@ -1308,7 +1319,7 @@ try {{
         }}
         return null;
       }}
-      if (command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast' || command === 'crdt_doc_action') {{
+      if (command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast' || command === 'crdt_doc_action' || command === 'get_ioring_status') {{
         try {{
           if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
             return await window.__TAURI_INTERNALS__.invoke(command, args || {{}});
@@ -1518,6 +1529,7 @@ try {{
             unwatch_directory,
             analyze_ast,
             crdt_doc_action,
+            get_ioring_status,
             desktop_window_minimize,
             desktop_window_toggle_maximize,
             desktop_window_close,
@@ -1875,5 +1887,15 @@ mod tests {
         let json3 = res3.unwrap();
         assert_eq!(json3["text"], "Initial CRDT");
         assert_eq!(json3["length"], 12);
+    }
+
+    #[tokio::test]
+    async fn test_get_ioring_status_command() {
+        let res = get_ioring_status().await;
+        assert!(res.is_ok(), "get_ioring_status should succeed: {:?}", res.err());
+        let val = res.unwrap();
+        assert!(val["is_kernel_active"].is_boolean());
+        assert!(val["queue_size"].as_u64().unwrap() >= 16);
+        assert!(val["platform"].is_string());
     }
 }

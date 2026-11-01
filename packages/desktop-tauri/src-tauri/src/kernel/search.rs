@@ -86,6 +86,41 @@ impl WorkspaceSearchIndex {
         Ok(())
     }
 
+    /// Scans a batch of file paths using the high-performance Windows IoRing engine
+    /// and bulk-indexes all valid UTF-8 text files into the Tantivy index in a single atomic commit.
+    pub fn index_files_with_ioring(
+        &self,
+        paths: &[std::path::PathBuf],
+        reader: &crate::kernel::ioring::IoRingBatchReader,
+    ) -> Result<usize, String> {
+        if paths.is_empty() {
+            return Ok(0);
+        }
+
+        let contents = reader
+            .read_files_batched(paths)
+            .map_err(|e| format!("IoRing batch read failed: {e}"))?;
+
+        let mut strings = Vec::with_capacity(paths.len());
+        for (path, byte_vec) in paths.iter().zip(contents.into_iter()) {
+            if let Ok(text) = String::from_utf8(byte_vec) {
+                let path_str = path.to_string_lossy().to_string();
+                strings.push((path_str, text));
+            }
+        }
+
+        let mut docs = Vec::with_capacity(strings.len());
+        for (path_str, text) in &strings {
+            docs.push((path_str.as_str(), text.as_str()));
+        }
+
+        let count = docs.len();
+        if count > 0 {
+            self.index_documents_batch(&docs)?;
+        }
+        Ok(count)
+    }
+
     /// Deletes any documents matching the given path from the index.
     pub fn delete_document(&self, path: &str) -> Result<(), String> {
         let term = Term::from_field_text(self.path_field, path);

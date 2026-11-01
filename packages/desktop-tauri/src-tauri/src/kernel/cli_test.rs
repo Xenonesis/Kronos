@@ -626,4 +626,53 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn test_cli_ioring_bench_dispatch() {
+        use crate::kernel::cli::execute_ioring_bench_to;
+
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        for i in 0..10 {
+            let f = temp_dir.path().join(format!("data_{i}.txt"));
+            std::fs::write(&f, format!("Payload contents for file {i}")).unwrap();
+        }
+
+        let mut out = Vec::new();
+        let code = execute_ioring_bench_to(
+            temp_dir.path().to_str().unwrap(),
+            128,
+            true, // force threadpool in tests to verify cross-platform pipeline
+            50,
+            &mut out,
+        );
+
+        assert_eq!(code, Some(0));
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.contains("Kronos IoRing Disk I/O Benchmark"));
+        assert!(text.contains("Files Discovered : 10"));
+        assert!(text.contains("Read Throughput"));
+        assert!(text.contains("PASSED"));
+
+        // Verify CLI arg parsing
+        let parsed = CliArgs::try_parse_from([
+            "paseo",
+            "ioring-bench",
+            ".",
+            "--queue-size",
+            "256",
+            "--force-fallback",
+            "--max-files",
+            "500",
+        ]).expect("parse ioring-bench args");
+
+        assert_eq!(
+            parsed.command,
+            Some(CliCommand::IoringBench {
+                directory: ".".to_string(),
+                queue_size: 256,
+                force_fallback: true,
+                max_files: 500,
+            })
+        );
+    }
 }

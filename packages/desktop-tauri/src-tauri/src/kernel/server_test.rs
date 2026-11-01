@@ -736,4 +736,54 @@ mod tests {
 
         daemon.stop().await;
     }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_ioring_envelopes() {
+        let port = 6788;
+        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+        let url = format!("ws://127.0.0.1:{}", port);
+        let (mut ws_stream, _) = connect_async(&url).await.expect("connect");
+
+        // 1. Test ioring/status
+        let status_msg = serde_json::json!({
+            "id": "ioring-status-1",
+            "type": "ioring/status",
+            "payload": {}
+        });
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(status_msg.to_string())).await.unwrap();
+        let status_reply = ws_stream.next().await.unwrap().unwrap();
+        let parsed_status: serde_json::Value = serde_json::from_str(status_reply.to_text().unwrap()).unwrap();
+        assert_eq!(parsed_status["id"], "ioring-status-1");
+        assert_eq!(parsed_status["success"], true);
+        let status_data = parsed_status.get("data").or_else(|| parsed_status.get("payload")).unwrap();
+        assert!(status_data["isKernelActive"].is_boolean());
+        assert!(status_data["queueSize"].as_u64().unwrap() >= 16);
+
+        // 2. Test ioring/read_batch
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let test_file = temp_dir.path().join("batch_read_sample.txt");
+        std::fs::write(&test_file, b"sample ioring batch content").unwrap();
+
+        let read_batch_msg = serde_json::json!({
+            "id": "ioring-read-1",
+            "type": "ioring/read_batch",
+            "payload": {
+                "paths": [test_file.to_str().unwrap()]
+            }
+        });
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(read_batch_msg.to_string())).await.unwrap();
+        let read_reply = ws_stream.next().await.unwrap().unwrap();
+        let parsed_read: serde_json::Value = serde_json::from_str(read_reply.to_text().unwrap()).unwrap();
+        assert_eq!(parsed_read["id"], "ioring-read-1");
+        assert_eq!(parsed_read["success"], true);
+        let files = parsed_read.get("data")
+            .or_else(|| parsed_read.get("payload"))
+            .and_then(|v| v.get("files"))
+            .and_then(|v| v.as_array())
+            .expect("files array");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["size"], 27);
+
+        daemon.stop().await;
+    }
 }

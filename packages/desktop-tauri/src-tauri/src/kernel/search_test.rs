@@ -368,4 +368,31 @@ mod tests {
         println!("Directory suggestion benchmark executed in: {:?}", duration);
         assert!(!entries.is_empty());
     }
+
+    #[test]
+    fn test_index_files_with_ioring() {
+        use crate::kernel::ioring::IoRingBatchReader;
+
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let file1 = temp_dir.path().join("service_auth.ts");
+        let file2 = temp_dir.path().join("service_billing.ts");
+
+        std::fs::write(&file1, "export function verifyAuthToken() { return true; }").unwrap();
+        std::fs::write(&file2, "export function calculateInvoiceTotal() { return 100; }").unwrap();
+
+        let reader = IoRingBatchReader::new(128).expect("IoRing reader init");
+        let index = WorkspaceSearchIndex::new_in_memory().expect("search index init");
+
+        let paths = vec![file1.clone(), file2.clone()];
+        let indexed_count = index.index_files_with_ioring(&paths, &reader).expect("ioring index");
+        assert_eq!(indexed_count, 2);
+
+        let auth_res = index.search("verifyAuthToken").expect("search auth");
+        assert_eq!(auth_res.len(), 1);
+        assert!(auth_res[0].path.contains("service_auth.ts"));
+
+        let billing_res = index.search("calculateInvoiceTotal").expect("search billing");
+        assert_eq!(billing_res.len(), 1);
+        assert!(billing_res[0].path.contains("service_billing.ts"));
+    }
 }
