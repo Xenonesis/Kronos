@@ -14,6 +14,7 @@ pub mod mcp;
 pub mod speech;
 pub mod rkyv_shm;
 pub mod telemetry;
+pub mod watcher;
 
 #[cfg(test)]
 mod protocol_test;
@@ -37,3 +38,5 @@ pub mod mcp_test;
 pub mod speech_test;
 #[cfg(test)]
 pub mod rkyv_test;
+#[cfg(test)]
+pub mod watcher_test;
