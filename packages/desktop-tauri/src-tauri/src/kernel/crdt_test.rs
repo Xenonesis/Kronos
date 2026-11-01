@@ -75,3 +75,62 @@ fn test_crdt_insert_delete_operations() {
     assert_eq!(doc.len(), 0);
     assert_eq!(doc.to_string(), "");
 }
+
+#[test]
+fn test_crdt_differential_state_vector_sync() {
+    let doc_server = CrdtDoc::new();
+    let doc_client = CrdtDoc::new();
+
+    // Client starts with base document
+    doc_server.apply_edit(0, "Base Document");
+    let initial_update = doc_server.export_update();
+    doc_client.apply_update(&initial_update).unwrap();
+
+    // Server receives more edits
+    doc_server.apply_edit(13, " with server changes");
+
+    // Client requests diff using its state vector
+    let client_sv = doc_client.export_state_vector();
+    let diff = doc_server.encode_diff(&client_sv).unwrap();
+
+    // Apply diff only
+    doc_client.apply_update(&diff).unwrap();
+
+    assert_eq!(doc_client.to_string(), doc_server.to_string());
+    assert_eq!(doc_client.to_string(), "Base Document with server changes");
+}
+
+#[tokio::test]
+async fn test_crdt_engine_multi_room_and_broadcast() {
+    use crate::kernel::crdt::CrdtEngine;
+
+    let engine = CrdtEngine::new();
+    let mut rx = engine.subscribe();
+
+    // Room 1: file-a.ts
+    let update_b64 = engine
+        .apply_text_edit("room-1", "insert", 0, Some("export const a = 1;"), None, Some("agent-1".into()))
+        .expect("text edit should succeed");
+
+    assert!(!update_b64.is_empty());
+    assert_eq!(engine.get_text("room-1"), "export const a = 1;");
+
+    // Event broadcast should be received
+    let event = rx.recv().await.expect("should receive broadcast event");
+    assert_eq!(event.room, "room-1");
+    assert_eq!(event.source_id, Some("agent-1".to_string()));
+    assert_eq!(event.update_base64, update_b64);
+
+    // Room 2: file-b.ts
+    engine
+        .apply_text_edit("room-2", "insert", 0, Some("export const b = 2;"), None, None)
+        .expect("room-2 edit");
+    assert_eq!(engine.get_text("room-2"), "export const b = 2;");
+
+    let rooms = engine.list_rooms();
+    assert_eq!(rooms, vec!["room-1".to_string(), "room-2".to_string()]);
+
+    // Clean up
+    assert!(engine.remove_room("room-1"));
+    assert_eq!(engine.list_rooms(), vec!["room-2".to_string()]);
+}

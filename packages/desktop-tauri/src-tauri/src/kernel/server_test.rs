@@ -642,4 +642,98 @@ mod tests {
 
         daemon.stop().await;
     }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_crdt_realtime_collaboration() {
+        let port = 6789;
+        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+        let url = format!("ws://127.0.0.1:{}", port);
+
+        // 1. Connect Client 1 (Human Editor)
+        let (mut client1, _) = connect_async(&url).await.expect("Client 1 connect");
+
+        // 2. Connect Client 2 (Agent A)
+        let (mut client2, _) = connect_async(&url).await.expect("Client 2 connect");
+
+        let room_id = "test-collab-room";
+
+        // Client 1 joins the room
+        let join_msg = serde_json::json!({
+            "id": "crdt-join-1",
+            "type": "crdt/join",
+            "payload": {
+                "room": room_id
+            }
+        });
+        client1.send(tokio_tungstenite::tungstenite::Message::Text(join_msg.to_string())).await.unwrap();
+        let join_reply = client1.next().await.unwrap().unwrap();
+        let parsed_join: serde_json::Value = serde_json::from_str(join_reply.to_text().unwrap()).unwrap();
+        assert_eq!(parsed_join["id"], "crdt-join-1");
+        assert_eq!(parsed_join["success"], true);
+
+        // Client 2 performs an edit via crdt/edit
+        let edit_msg = serde_json::json!({
+            "id": "crdt-edit-agent",
+            "type": "crdt/edit",
+            "payload": {
+                "room": room_id,
+                "action": "insert",
+                "index": 0,
+                "text": "const kernelStatus = 'READY';",
+                "sourceId": "agent-alpha"
+            }
+        });
+        client2.send(tokio_tungstenite::tungstenite::Message::Text(edit_msg.to_string())).await.unwrap();
+        let edit_reply = client2.next().await.unwrap().unwrap();
+        let parsed_edit: serde_json::Value = serde_json::from_str(edit_reply.to_text().unwrap()).unwrap();
+        assert_eq!(parsed_edit["id"], "crdt-edit-agent");
+        assert_eq!(parsed_edit["success"], true);
+
+        // Client 1 should receive the broadcasted crdt/update_event frame
+        let mut received_crdt_event = false;
+        let timeout = tokio::time::sleep(std::time::Duration::from_secs(3));
+        tokio::pin!(timeout);
+
+        loop {
+            tokio::select! {
+                _ = &mut timeout => {
+                    break;
+                }
+                maybe_frame = client1.next() => {
+                    if let Some(Ok(frame)) = maybe_frame {
+                        if let Ok(text) = frame.to_text() {
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(text) {
+                                if json.get("type").and_then(|v| v.as_str()) == Some("crdt/update_event") {
+                                    assert_eq!(json["payload"]["room"], room_id);
+                                    assert_eq!(json["payload"]["sourceId"], "agent-alpha");
+                                    assert!(!json["payload"]["update"].as_str().unwrap().is_empty());
+                                    received_crdt_event = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(received_crdt_event, "Client 1 should receive real-time CRDT update event from Agent A");
+
+        // Client 1 queries room state
+        let state_msg = serde_json::json!({
+            "id": "crdt-state-1",
+            "type": "crdt/state",
+            "payload": {
+                "room": room_id
+            }
+        });
+        client1.send(tokio_tungstenite::tungstenite::Message::Text(state_msg.to_string())).await.unwrap();
+        let state_reply = client1.next().await.unwrap().unwrap();
+        let parsed_state: serde_json::Value = serde_json::from_str(state_reply.to_text().unwrap()).unwrap();
+        assert_eq!(parsed_state["id"], "crdt-state-1");
+        assert_eq!(parsed_state["success"], true);
+        let state_data = parsed_state.get("data").or_else(|| parsed_state.get("payload")).unwrap();
+        assert_eq!(state_data["text"], "const kernelStatus = 'READY';");
+
+        daemon.stop().await;
+    }
 }

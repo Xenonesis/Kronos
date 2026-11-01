@@ -29,6 +29,13 @@ pub fn get_watcher_engine() -> &'static crate::kernel::watcher::WatcherEngine {
     &WATCHER_ENGINE
 }
 
+static CRDT_ENGINE: std::sync::LazyLock<crate::kernel::crdt::CrdtEngine> =
+    std::sync::LazyLock::new(crate::kernel::crdt::CrdtEngine::new);
+
+pub fn get_crdt_engine() -> &'static crate::kernel::crdt::CrdtEngine {
+    &CRDT_ENGINE
+}
+
 fn extract_jsonrpc_request_str(val: &serde_json::Value) -> Option<String> {
     if let Some(req) = val.get("request") {
         if let Some(s) = req.as_str() {
@@ -323,6 +330,158 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                     "ast/symbols/response",
                     err,
                 ),
+            }
+        }
+        "crdt/join" => {
+            let room = envelope.payload.get("room")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default");
+            let engine = get_crdt_engine();
+            let doc = engine.get_or_create_room(room);
+            let text = doc.to_string();
+            let len = doc.len();
+            let sv = doc.export_state_vector();
+            let update = doc.export_update();
+            let sv_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &sv);
+            let update_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &update);
+
+            RpcResponse::ok(
+                &envelope.id,
+                "crdt/join/response",
+                Some(serde_json::json!({
+                    "room": room,
+                    "text": text,
+                    "length": len,
+                    "stateVector": sv_b64,
+                    "update": update_b64,
+                })),
+            )
+        }
+        "crdt/update" => {
+            let room = envelope.payload.get("room")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default");
+            let source_id = envelope.payload.get("sourceId")
+                .or_else(|| envelope.payload.get("source_id"))
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let update_b64_opt = envelope.payload.get("update")
+                .and_then(|v| v.as_str());
+
+            if let Some(b64) = update_b64_opt {
+                match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64) {
+                    Ok(bytes) => {
+                        let engine = get_crdt_engine();
+                        match engine.apply_update(room, &bytes, source_id) {
+                            Ok(broadcasted_b64) => RpcResponse::ok(
+                                &envelope.id,
+                                "crdt/update/response",
+                                Some(serde_json::json!({
+                                    "room": room,
+                                    "success": true,
+                                    "update": broadcasted_b64,
+                                })),
+                            ),
+                            Err(e) => RpcResponse::err(&envelope.id, "crdt/update/response", e),
+                        }
+                    }
+                    Err(e) => RpcResponse::err(&envelope.id, "crdt/update/response", format!("Invalid base64 update: {e}")),
+                }
+            } else {
+                RpcResponse::err(&envelope.id, "crdt/update/response", "Missing 'update' base64 payload")
+            }
+        }
+        "crdt/sync" => {
+            let room = envelope.payload.get("room")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default");
+            let sv_b64_opt = envelope.payload.get("stateVector")
+                .or_else(|| envelope.payload.get("state_vector"))
+                .and_then(|v| v.as_str());
+
+            if let Some(b64) = sv_b64_opt {
+                match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64) {
+                    Ok(sv_bytes) => {
+                        let engine = get_crdt_engine();
+                        match engine.sync_room(room, &sv_bytes) {
+                            Ok(diff_bytes) => {
+                                let diff_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &diff_bytes);
+                                RpcResponse::ok(
+                                    &envelope.id,
+                                    "crdt/sync/response",
+                                    Some(serde_json::json!({
+                                        "room": room,
+                                        "diff": diff_b64,
+                                    })),
+                                )
+                            }
+                            Err(e) => RpcResponse::err(&envelope.id, "crdt/sync/response", e),
+                        }
+                    }
+                    Err(e) => RpcResponse::err(&envelope.id, "crdt/sync/response", format!("Invalid base64 stateVector: {e}")),
+                }
+            } else {
+                RpcResponse::err(&envelope.id, "crdt/sync/response", "Missing 'stateVector' parameter")
+            }
+        }
+        "crdt/state" => {
+            let room = envelope.payload.get("room")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default");
+            let engine = get_crdt_engine();
+            let doc = engine.get_or_create_room(room);
+            let text = doc.to_string();
+            let len = doc.len();
+            let sv = doc.export_state_vector();
+            let sv_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &sv);
+
+            RpcResponse::ok(
+                &envelope.id,
+                "crdt/state/response",
+                Some(serde_json::json!({
+                    "room": room,
+                    "text": text,
+                    "length": len,
+                    "stateVector": sv_b64,
+                })),
+            )
+        }
+        "crdt/edit" => {
+            let room = envelope.payload.get("room")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default");
+            let action = envelope.payload.get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("insert");
+            let index = envelope.payload.get("index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let text = envelope.payload.get("text")
+                .and_then(|v| v.as_str());
+            let length = envelope.payload.get("length")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+            let source_id = envelope.payload.get("sourceId")
+                .or_else(|| envelope.payload.get("source_id"))
+                .and_then(|v| v.as_str())
+                .map(String::from);
+
+            let engine = get_crdt_engine();
+            match engine.apply_text_edit(room, action, index, text, length, source_id) {
+                Ok(update_b64) => {
+                    let doc = engine.get_or_create_room(room);
+                    RpcResponse::ok(
+                        &envelope.id,
+                        "crdt/edit/response",
+                        Some(serde_json::json!({
+                            "room": room,
+                            "text": doc.to_string(),
+                            "length": doc.len(),
+                            "update": update_b64,
+                        })),
+                    )
+                }
+                Err(e) => RpcResponse::err(&envelope.id, "crdt/edit/response", e),
             }
         }
         other => RpcResponse::err(
@@ -730,6 +889,23 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }
             }
         }
+        msg_type if msg_type.starts_with("crdt/") => {
+            let env = RpcEnvelope::new(
+                request_id,
+                msg_type,
+                msg.get("payload").cloned().unwrap_or_else(|| msg.clone()),
+            );
+            let resp = dispatch_envelope(env).await;
+            serde_json::json!({
+                "type": resp.msg_type,
+                "requestId": resp.id,
+                "id": resp.id,
+                "success": resp.success,
+                "payload": resp.data,
+                "data": resp.data,
+                "error": resp.error,
+            })
+        }
         other => {
             serde_json::json!({
                 "type": format!("{}/response", other),
@@ -779,7 +955,7 @@ pub async fn process_incoming_frame(text: &str) -> Option<String> {
                 let res = dispatch_session_message(&val).await;
                 return serde_json::to_string(&res).ok();
             }
-            "vfs/watch" | "vfs/watch_subscribe" | "vfs/unwatch" | "vfs/watch_unsubscribe" | "ast/analyze" | "ast/parse" | "ast/symbols" => {
+            "vfs/watch" | "vfs/watch_subscribe" | "vfs/unwatch" | "vfs/watch_unsubscribe" | "ast/analyze" | "ast/parse" | "ast/symbols" | "crdt/join" | "crdt/update" | "crdt/sync" | "crdt/state" | "crdt/edit" => {
                 let res = dispatch_session_message(&val).await;
                 return serde_json::to_string(&res).ok();
             }
@@ -922,7 +1098,9 @@ impl DaemonHandle {
 
 async fn handle_ws(mut socket: WebSocket, mut shutdown_rx: broadcast::Receiver<()>) {
     let mut watcher_rx = get_watcher_engine().subscribe_events();
+    let mut crdt_rx = get_crdt_engine().subscribe();
     let mut watcher_active = true;
+    let mut crdt_active = true;
     loop {
         tokio::select! {
             _ = shutdown_rx.recv() => {
@@ -947,6 +1125,31 @@ async fn handle_ws(mut socket: WebSocket, mut shutdown_rx: broadcast::Receiver<(
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         watcher_active = false;
+                    }
+                }
+            }
+            crdt_res = crdt_rx.recv(), if crdt_active => {
+                match crdt_res {
+                    Ok(event) => {
+                        let frame = serde_json::json!({
+                            "type": "crdt/update_event",
+                            "payload": {
+                                "room": event.room,
+                                "update": event.update_base64,
+                                "sourceId": event.source_id,
+                            }
+                        });
+                        if let Ok(text) = serde_json::to_string(&frame) {
+                            if socket.send(Message::Text(text.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        crdt_active = false;
                     }
                 }
             }

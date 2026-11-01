@@ -335,6 +335,81 @@ async fn analyze_ast(
     engine.analyze(&src, &file_ext)
 }
 
+#[tauri::command]
+async fn crdt_doc_action(
+    room: String,
+    action: String,
+    index: Option<u32>,
+    text: Option<String>,
+    length: Option<u32>,
+    update_base64: Option<String>,
+    source_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let engine = crate::kernel::server::get_crdt_engine();
+    match action.as_str() {
+        "get_text" | "state" => {
+            let doc = engine.get_or_create_room(&room);
+            let content = doc.to_string();
+            let len = doc.len();
+            let sv = doc.export_state_vector();
+            let sv_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &sv);
+            Ok(serde_json::json!({
+                "room": room,
+                "text": content,
+                "length": len,
+                "stateVector": sv_b64,
+            }))
+        }
+        "insert" | "delete" => {
+            let idx = index.unwrap_or(0);
+            let b64 = engine.apply_text_edit(
+                &room,
+                &action,
+                idx,
+                text.as_deref(),
+                length,
+                source_id,
+            )?;
+            let doc = engine.get_or_create_room(&room);
+            Ok(serde_json::json!({
+                "room": room,
+                "text": doc.to_string(),
+                "length": doc.len(),
+                "update": b64,
+            }))
+        }
+        "apply_update" => {
+            let b64 = update_base64.ok_or_else(|| "Missing 'update_base64' parameter".to_string())?;
+            let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64)
+                .map_err(|e| format!("Invalid base64: {e}"))?;
+            let broadcasted_b64 = engine.apply_update(&room, &bytes, source_id)?;
+            let doc = engine.get_or_create_room(&room);
+            Ok(serde_json::json!({
+                "room": room,
+                "text": doc.to_string(),
+                "length": doc.len(),
+                "update": broadcasted_b64,
+            }))
+        }
+        "export_update" => {
+            let doc = engine.get_or_create_room(&room);
+            let bytes = doc.export_update();
+            let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
+            Ok(serde_json::json!({
+                "room": room,
+                "update": b64,
+            }))
+        }
+        "list_rooms" => {
+            let rooms = engine.list_rooms();
+            Ok(serde_json::json!({
+                "rooms": rooms
+            }))
+        }
+        other => Err(format!("Unsupported CRDT action: '{other}'")),
+    }
+}
+
 
 fn detect_and_configure_portable_mode() -> Option<PathBuf> {
     // Check KRONOS_PORTABLE=1 env var
@@ -1233,7 +1308,7 @@ try {{
         }}
         return null;
       }}
-      if (command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast') {{
+      if (command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast' || command === 'crdt_doc_action') {{
         try {{
           if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
             return await window.__TAURI_INTERNALS__.invoke(command, args || {{}});
@@ -1442,6 +1517,7 @@ try {{
             watch_directory,
             unwatch_directory,
             analyze_ast,
+            crdt_doc_action,
             desktop_window_minimize,
             desktop_window_toggle_maximize,
             desktop_window_close,
@@ -1745,5 +1821,59 @@ mod tests {
         assert_eq!(analysis.root_kind, "program");
         assert!(analysis.symbols.iter().any(|s| s.name == "IConfig"));
         assert!(analysis.symbols.iter().any(|s| s.name == "initConfig"));
+    }
+
+    #[tokio::test]
+    async fn test_crdt_doc_action_command() {
+        let room = format!("test_room_{}", std::process::id());
+
+        // 1. Insert text
+        let res1 = crdt_doc_action(
+            room.clone(),
+            "insert".to_string(),
+            Some(0),
+            Some("Initial CRDT Buffer".to_string()),
+            None,
+            None,
+            Some("test-peer".to_string()),
+        )
+        .await;
+        assert!(res1.is_ok(), "insert should succeed: {:?}", res1.err());
+        let json1 = res1.unwrap();
+        assert_eq!(json1["text"], "Initial CRDT Buffer");
+        assert_eq!(json1["length"], 19);
+        assert!(!json1["update"].as_str().unwrap().is_empty());
+
+        // 2. Query state
+        let res2 = crdt_doc_action(
+            room.clone(),
+            "state".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(res2.is_ok());
+        let json2 = res2.unwrap();
+        assert_eq!(json2["text"], "Initial CRDT Buffer");
+        assert!(json2["stateVector"].is_string());
+
+        // 3. Delete text: remove " Buffer" (length 7 starting at 12)
+        let res3 = crdt_doc_action(
+            room.clone(),
+            "delete".to_string(),
+            Some(12),
+            None,
+            Some(7),
+            None,
+            None,
+        )
+        .await;
+        assert!(res3.is_ok());
+        let json3 = res3.unwrap();
+        assert_eq!(json3["text"], "Initial CRDT");
+        assert_eq!(json3["length"], 12);
     }
 }
