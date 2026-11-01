@@ -34,6 +34,16 @@ pub enum CliCommand {
     },
     /// Model Context Protocol stdio server
     Mcp,
+    /// Parse and analyze syntax tree / symbols using Tree-Sitter
+    Ast {
+        file: String,
+        #[arg(long, default_value_t = false)]
+        symbols: bool,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        #[arg(long, default_value_t = false)]
+        errors: bool,
+    },
 }
 
 /// Parses CLI arguments from `std::env::args_os()` and dispatches commands if any.
@@ -445,6 +455,77 @@ pub fn execute_search_to<W: std::io::Write>(
     Some(0)
 }
 
+/// Parses and analyzes syntax tree / symbols using Tree-Sitter and writes output to an arbitrary writer.
+pub fn execute_ast_to<W: std::io::Write>(
+    file_path: &str,
+    show_symbols: bool,
+    as_json: bool,
+    show_errors: bool,
+    mut writer: W,
+) -> Option<i32> {
+    let engine = crate::kernel::ast::AstEngine::new();
+    match engine.analyze_file(file_path) {
+        Ok(analysis) => {
+            if as_json {
+                let _ = writeln!(
+                    writer,
+                    "{}",
+                    serde_json::to_string_pretty(&analysis).unwrap_or_default()
+                );
+            } else if show_errors {
+                if analysis.errors.is_empty() {
+                    let _ = writeln!(writer, "No syntax errors found in '{file_path}'.");
+                } else {
+                    let _ = writeln!(writer, "Found {} syntax error(s) in '{file_path}':", analysis.errors.len());
+                    for err in &analysis.errors {
+                        let _ = writeln!(
+                            writer,
+                            "  [line {}:{}] {}",
+                            err.range.start_line, err.range.start_col, err.message
+                        );
+                    }
+                }
+            } else if show_symbols {
+                let _ = writeln!(writer, "Symbols in '{file_path}':");
+                for sym in &analysis.symbols {
+                    let exp = if sym.exported { "export " } else { "" };
+                    let sig = sym.signature.as_deref().unwrap_or(&sym.name);
+                    let _ = writeln!(
+                        writer,
+                        "  [{:?}] {}{} (line {}-{})",
+                        sym.kind, exp, sig, sym.range.start_line, sym.range.end_line
+                    );
+                    for child in &sym.children {
+                        let csig = child.signature.as_deref().unwrap_or(&child.name);
+                        let _ = writeln!(
+                            writer,
+                            "    [{:?}] {} (line {}-{})",
+                            child.kind, csig, child.range.start_line, child.range.end_line
+                        );
+                    }
+                }
+            } else {
+                let _ = writeln!(writer, "AST Analysis for '{file_path}':");
+                let _ = writeln!(writer, "  Root Kind: {}", analysis.root_kind);
+                let _ = writeln!(writer, "  Total Nodes: {}", analysis.node_count);
+                let _ = writeln!(writer, "  Symbols: {}", analysis.symbols.len());
+                let _ = writeln!(writer, "  Imports: {}", analysis.imports.len());
+                let _ = writeln!(writer, "  Errors: {}", analysis.errors.len());
+                if !analysis.declarations.is_empty() {
+                    let _ = writeln!(writer, "  Declarations: {}", analysis.declarations.join(", "));
+                }
+            }
+            let _ = writer.flush();
+            Some(0)
+        }
+        Err(err) => {
+            let _ = writeln!(writer, "Error analyzing '{file_path}': {err}");
+            let _ = writer.flush();
+            Some(1)
+        }
+    }
+}
+
 /// Parses CLI arguments from an arbitrary iterator and dispatches commands.
 pub fn parse_and_dispatch_from<I, T>(itr: I) -> Option<i32>
 where
@@ -516,6 +597,12 @@ pub fn dispatch(args: CliArgs) -> Option<i32> {
             let code = run_mcp_stdio_loop(stdin.lock(), stdout.lock(), &hub);
             Some(code)
         }
+        CliCommand::Ast {
+            file,
+            symbols,
+            json,
+            errors,
+        } => execute_ast_to(&file, symbols, json, errors, std::io::stdout()),
     }
 }
 

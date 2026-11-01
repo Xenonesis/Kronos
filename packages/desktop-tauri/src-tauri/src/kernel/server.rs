@@ -223,6 +223,108 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                 ),
             }
         }
+        "ast/analyze" | "ast/parse" => {
+            let path_opt = envelope.payload.get("path")
+                .and_then(|v| v.as_str());
+            let source_opt = envelope.payload.get("source")
+                .and_then(|v| v.as_str());
+            let ext_opt = envelope.payload.get("ext")
+                .and_then(|v| v.as_str());
+
+            let (source, ext) = if let Some(src) = source_opt {
+                let ext = ext_opt
+                    .or_else(|| path_opt.and_then(|p| std::path::Path::new(p).extension().and_then(|e| e.to_str())))
+                    .unwrap_or("ts");
+                (src.to_string(), ext.to_string())
+            } else if let Some(path) = path_opt {
+                match std::fs::read_to_string(path) {
+                    Ok(content) => {
+                        let ext = ext_opt
+                            .or_else(|| std::path::Path::new(path).extension().and_then(|e| e.to_str()))
+                            .unwrap_or("ts");
+                        (content, ext.to_string())
+                    }
+                    Err(e) => {
+                        return RpcResponse::err(
+                            &envelope.id,
+                            "ast/analyze/response",
+                            format!("Failed to read file '{path}': {e}"),
+                        );
+                    }
+                }
+            } else {
+                return RpcResponse::err(
+                    &envelope.id,
+                    "ast/analyze/response",
+                    "Missing 'source' or 'path' parameter for ast/analyze",
+                );
+            };
+
+            let engine = crate::kernel::ast::AstEngine::new();
+            match engine.analyze(&source, &ext) {
+                Ok(result) => RpcResponse::ok(
+                    &envelope.id,
+                    "ast/analyze/response",
+                    serde_json::to_value(&result).ok(),
+                ),
+                Err(err) => RpcResponse::err(
+                    &envelope.id,
+                    "ast/analyze/response",
+                    err,
+                ),
+            }
+        }
+        "ast/symbols" => {
+            let path_opt = envelope.payload.get("path")
+                .and_then(|v| v.as_str());
+            let source_opt = envelope.payload.get("source")
+                .and_then(|v| v.as_str());
+            let ext_opt = envelope.payload.get("ext")
+                .and_then(|v| v.as_str());
+
+            let (source, ext) = if let Some(src) = source_opt {
+                let ext = ext_opt
+                    .or_else(|| path_opt.and_then(|p| std::path::Path::new(p).extension().and_then(|e| e.to_str())))
+                    .unwrap_or("ts");
+                (src.to_string(), ext.to_string())
+            } else if let Some(path) = path_opt {
+                match std::fs::read_to_string(path) {
+                    Ok(content) => {
+                        let ext = ext_opt
+                            .or_else(|| std::path::Path::new(path).extension().and_then(|e| e.to_str()))
+                            .unwrap_or("ts");
+                        (content, ext.to_string())
+                    }
+                    Err(e) => {
+                        return RpcResponse::err(
+                            &envelope.id,
+                            "ast/symbols/response",
+                            format!("Failed to read file '{path}': {e}"),
+                        );
+                    }
+                }
+            } else {
+                return RpcResponse::err(
+                    &envelope.id,
+                    "ast/symbols/response",
+                    "Missing 'source' or 'path' parameter for ast/symbols",
+                );
+            };
+
+            let engine = crate::kernel::ast::AstEngine::new();
+            match engine.extract_symbols(&source, &ext) {
+                Ok(symbols) => RpcResponse::ok(
+                    &envelope.id,
+                    "ast/symbols/response",
+                    serde_json::to_value(&symbols).ok(),
+                ),
+                Err(err) => RpcResponse::err(
+                    &envelope.id,
+                    "ast/symbols/response",
+                    err,
+                ),
+            }
+        }
         other => RpcResponse::err(
             envelope.id,
             other,
@@ -472,6 +574,162 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }
             }
         }
+        "ast/analyze" | "ast/parse" => {
+            let payload = msg.get("payload");
+            let path_opt = msg.get("path")
+                .or_else(|| payload.and_then(|p| p.get("path")))
+                .and_then(|v| v.as_str());
+            let source_opt = msg.get("source")
+                .or_else(|| payload.and_then(|p| p.get("source")))
+                .and_then(|v| v.as_str());
+            let ext_opt = msg.get("ext")
+                .or_else(|| payload.and_then(|p| p.get("ext")))
+                .and_then(|v| v.as_str());
+
+            let (source, ext) = if let Some(src) = source_opt {
+                let ext = ext_opt
+                    .or_else(|| path_opt.and_then(|p| std::path::Path::new(p).extension().and_then(|e| e.to_str())))
+                    .unwrap_or("ts");
+                (src.to_string(), ext.to_string())
+            } else if let Some(path) = path_opt {
+                match std::fs::read_to_string(path) {
+                    Ok(content) => {
+                        let ext = ext_opt
+                            .or_else(|| std::path::Path::new(path).extension().and_then(|e| e.to_str()))
+                            .unwrap_or("ts");
+                        (content, ext.to_string())
+                    }
+                    Err(e) => {
+                        return serde_json::json!({
+                            "type": "ast/analyze/response",
+                            "requestId": request_id,
+                            "id": request_id,
+                            "success": false,
+                            "error": format!("Failed to read file '{path}': {e}"),
+                            "payload": {
+                                "error": format!("Failed to read file '{path}': {e}")
+                            }
+                        });
+                    }
+                }
+            } else {
+                return serde_json::json!({
+                    "type": "ast/analyze/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": false,
+                    "error": "Missing 'source' or 'path' parameter",
+                    "payload": {
+                        "error": "Missing 'source' or 'path' parameter"
+                    }
+                });
+            };
+
+            let engine = crate::kernel::ast::AstEngine::new();
+            match engine.analyze(&source, &ext) {
+                Ok(result) => {
+                    let val = serde_json::to_value(&result).unwrap_or(serde_json::Value::Null);
+                    serde_json::json!({
+                        "type": "ast/analyze/response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": true,
+                        "payload": val,
+                        "result": val,
+                    })
+                }
+                Err(err) => {
+                    serde_json::json!({
+                        "type": "ast/analyze/response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": false,
+                        "error": err,
+                        "payload": {
+                            "error": err
+                        }
+                    })
+                }
+            }
+        }
+        "ast/symbols" => {
+            let payload = msg.get("payload");
+            let path_opt = msg.get("path")
+                .or_else(|| payload.and_then(|p| p.get("path")))
+                .and_then(|v| v.as_str());
+            let source_opt = msg.get("source")
+                .or_else(|| payload.and_then(|p| p.get("source")))
+                .and_then(|v| v.as_str());
+            let ext_opt = msg.get("ext")
+                .or_else(|| payload.and_then(|p| p.get("ext")))
+                .and_then(|v| v.as_str());
+
+            let (source, ext) = if let Some(src) = source_opt {
+                let ext = ext_opt
+                    .or_else(|| path_opt.and_then(|p| std::path::Path::new(p).extension().and_then(|e| e.to_str())))
+                    .unwrap_or("ts");
+                (src.to_string(), ext.to_string())
+            } else if let Some(path) = path_opt {
+                match std::fs::read_to_string(path) {
+                    Ok(content) => {
+                        let ext = ext_opt
+                            .or_else(|| std::path::Path::new(path).extension().and_then(|e| e.to_str()))
+                            .unwrap_or("ts");
+                        (content, ext.to_string())
+                    }
+                    Err(e) => {
+                        return serde_json::json!({
+                            "type": "ast/symbols/response",
+                            "requestId": request_id,
+                            "id": request_id,
+                            "success": false,
+                            "error": format!("Failed to read file '{path}': {e}"),
+                            "payload": {
+                                "error": format!("Failed to read file '{path}': {e}")
+                            }
+                        });
+                    }
+                }
+            } else {
+                return serde_json::json!({
+                    "type": "ast/symbols/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": false,
+                    "error": "Missing 'source' or 'path' parameter",
+                    "payload": {
+                        "error": "Missing 'source' or 'path' parameter"
+                    }
+                });
+            };
+
+            let engine = crate::kernel::ast::AstEngine::new();
+            match engine.extract_symbols(&source, &ext) {
+                Ok(symbols) => {
+                    let val = serde_json::to_value(&symbols).unwrap_or(serde_json::Value::Null);
+                    serde_json::json!({
+                        "type": "ast/symbols/response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": true,
+                        "payload": val,
+                        "symbols": val,
+                    })
+                }
+                Err(err) => {
+                    serde_json::json!({
+                        "type": "ast/symbols/response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": false,
+                        "error": err,
+                        "payload": {
+                            "error": err
+                        }
+                    })
+                }
+            }
+        }
         other => {
             serde_json::json!({
                 "type": format!("{}/response", other),
@@ -521,7 +779,7 @@ pub async fn process_incoming_frame(text: &str) -> Option<String> {
                 let res = dispatch_session_message(&val).await;
                 return serde_json::to_string(&res).ok();
             }
-            "vfs/watch" | "vfs/watch_subscribe" | "vfs/unwatch" | "vfs/watch_unsubscribe" => {
+            "vfs/watch" | "vfs/watch_subscribe" | "vfs/unwatch" | "vfs/watch_unsubscribe" | "ast/analyze" | "ast/parse" | "ast/symbols" => {
                 let res = dispatch_session_message(&val).await;
                 return serde_json::to_string(&res).ok();
             }

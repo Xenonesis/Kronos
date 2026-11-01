@@ -40,3 +40,5 @@ pub mod speech_test;
 pub mod rkyv_test;
 #[cfg(test)]
 pub mod watcher_test;
+#[cfg(test)]
+pub mod ast_test;

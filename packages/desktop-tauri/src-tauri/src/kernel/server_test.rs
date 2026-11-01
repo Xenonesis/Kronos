@@ -577,4 +577,69 @@ mod tests {
 
         daemon.stop().await;
     }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_ast_analyze_and_symbols_envelopes() {
+        let port = 6791;
+        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+        let url = format!("ws://127.0.0.1:{}", port);
+        let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+
+        let source_code = r#"
+            export interface AppConfig {
+                env: string;
+                port: number;
+            }
+
+            export async function startApp(config: AppConfig): Promise<boolean> {
+                return true;
+            }
+        "#;
+
+        // 1. Test ast/analyze RPC envelope
+        let analyze_envelope = serde_json::json!({
+            "id": "ast-analyze-1",
+            "type": "ast/analyze",
+            "payload": {
+                "source": source_code,
+                "ext": "ts"
+            }
+        });
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(analyze_envelope.to_string())).await.unwrap();
+
+        let analyze_resp = ws_stream.next().await.unwrap().unwrap();
+        let parsed_analyze: serde_json::Value = serde_json::from_str(analyze_resp.to_text().unwrap()).unwrap();
+        assert_eq!(parsed_analyze["id"], "ast-analyze-1");
+        assert_eq!(parsed_analyze["success"], true);
+        let symbols = parsed_analyze.get("data")
+            .or_else(|| parsed_analyze.get("payload"))
+            .and_then(|v| v.get("symbols"))
+            .and_then(|v| v.as_array())
+            .expect("symbols array");
+        assert!(symbols.iter().any(|s| s["name"] == "AppConfig"));
+        assert!(symbols.iter().any(|s| s["name"] == "startApp"));
+
+        // 2. Test ast/symbols RPC envelope
+        let symbols_envelope = serde_json::json!({
+            "id": "ast-symbols-1",
+            "type": "ast/symbols",
+            "payload": {
+                "source": source_code,
+                "ext": "ts"
+            }
+        });
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(symbols_envelope.to_string())).await.unwrap();
+
+        let symbols_resp = ws_stream.next().await.unwrap().unwrap();
+        let parsed_symbols: serde_json::Value = serde_json::from_str(symbols_resp.to_text().unwrap()).unwrap();
+        assert_eq!(parsed_symbols["id"], "ast-symbols-1");
+        assert_eq!(parsed_symbols["success"], true);
+        let symbols_list = parsed_symbols.get("data")
+            .or_else(|| parsed_symbols.get("payload"))
+            .and_then(|v| v.as_array())
+            .expect("symbols payload array");
+        assert_eq!(symbols_list.len(), 2);
+
+        daemon.stop().await;
+    }
 }

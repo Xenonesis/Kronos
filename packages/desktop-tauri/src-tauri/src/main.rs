@@ -309,6 +309,32 @@ async fn unwatch_directory(subscription_id: String) -> Result<bool, String> {
     engine.unwatch(&subscription_id)
 }
 
+#[tauri::command]
+async fn analyze_ast(
+    path: Option<String>,
+    source: Option<String>,
+    ext: Option<String>,
+) -> Result<crate::kernel::ast::AstAnalysisResult, String> {
+    let (src, file_ext) = if let Some(s) = source {
+        let e = ext
+            .or_else(|| path.as_ref().and_then(|p| std::path::Path::new(p).extension().and_then(|e| e.to_str()).map(String::from)))
+            .unwrap_or_else(|| "ts".to_string());
+        (s, e)
+    } else if let Some(p) = path {
+        let content = std::fs::read_to_string(&p)
+            .map_err(|e| format!("Failed to read file '{p}': {e}"))?;
+        let e = ext
+            .or_else(|| std::path::Path::new(&p).extension().and_then(|e| e.to_str()).map(String::from))
+            .unwrap_or_else(|| "ts".to_string());
+        (content, e)
+    } else {
+        return Err("Missing 'source' or 'path' argument for analyze_ast".to_string());
+    };
+
+    let engine = crate::kernel::ast::AstEngine::new();
+    engine.analyze(&src, &file_ext)
+}
+
 
 fn detect_and_configure_portable_mode() -> Option<PathBuf> {
     // Check KRONOS_PORTABLE=1 env var
@@ -1207,7 +1233,7 @@ try {{
         }}
         return null;
       }}
-      if (command === 'watch_directory' || command === 'unwatch_directory') {{
+      if (command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast') {{
         try {{
           if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
             return await window.__TAURI_INTERNALS__.invoke(command, args || {{}});
@@ -1415,6 +1441,7 @@ try {{
             workspace_search,
             watch_directory,
             unwatch_directory,
+            analyze_ast,
             desktop_window_minimize,
             desktop_window_toggle_maximize,
             desktop_window_close,
@@ -1698,5 +1725,25 @@ mod tests {
             .to_string();
         let res = watch_directory(invalid_path, None).await;
         assert!(res.is_err(), "watch_directory should fail on non-existent path");
+    }
+
+    #[tokio::test]
+    async fn test_analyze_ast_command() {
+        let source = r#"
+            export interface IConfig {
+                timeoutMs: number;
+            }
+
+            export function initConfig(): IConfig {
+                return { timeoutMs: 5000 };
+            }
+        "#;
+
+        let res = analyze_ast(None, Some(source.to_string()), Some("ts".to_string())).await;
+        assert!(res.is_ok(), "analyze_ast should succeed: {:?}", res.err());
+        let analysis = res.unwrap();
+        assert_eq!(analysis.root_kind, "program");
+        assert!(analysis.symbols.iter().any(|s| s.name == "IConfig"));
+        assert!(analysis.symbols.iter().any(|s| s.name == "initConfig"));
     }
 }

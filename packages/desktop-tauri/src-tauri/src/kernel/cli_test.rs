@@ -559,4 +559,71 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_cli_ast_subcommand_dispatch() {
+        use crate::kernel::cli::execute_ast_to;
+
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let code_path = temp_dir.path().join("service.ts");
+        let ts_code = r#"
+            export interface IService {
+                id: string;
+                execute(): boolean;
+            }
+
+            export class ServiceImpl implements IService {
+                public id = "srv-1";
+                public execute(): boolean {
+                    return true;
+                }
+            }
+        "#;
+        std::fs::write(&code_path, ts_code).expect("write ts file");
+
+        let path_str = code_path.to_str().unwrap();
+
+        // 1. Test CLI summary output
+        let mut summary_out = Vec::new();
+        let code1 = execute_ast_to(path_str, false, false, false, &mut summary_out);
+        assert_eq!(code1, Some(0));
+        let summary_text = String::from_utf8_lossy(&summary_out);
+        assert!(summary_text.contains("AST Analysis for"));
+        assert!(summary_text.contains("IService"));
+
+        // 2. Test CLI symbols output
+        let mut symbols_out = Vec::new();
+        let code2 = execute_ast_to(path_str, true, false, false, &mut symbols_out);
+        assert_eq!(code2, Some(0));
+        let symbols_text = String::from_utf8_lossy(&symbols_out);
+        assert!(symbols_text.contains("Symbols in"));
+        assert!(symbols_text.contains("ServiceImpl"));
+
+        // 3. Test CLI json output
+        let mut json_out = Vec::new();
+        let code3 = execute_ast_to(path_str, false, true, false, &mut json_out);
+        assert_eq!(code3, Some(0));
+        let parsed_json: serde_json::Value = serde_json::from_slice(&json_out).expect("valid json");
+        assert_eq!(parsed_json["root_kind"], "program");
+        assert!(parsed_json["symbols"].as_array().unwrap().len() >= 2);
+
+        // 4. Test parsing CLI args via parse_and_dispatch_from
+        let parsed_args = CliArgs::try_parse_from([
+            "paseo",
+            "ast",
+            path_str,
+            "--symbols",
+            "--json",
+        ]).expect("parse ast args");
+
+        assert_eq!(
+            parsed_args.command,
+            Some(CliCommand::Ast {
+                file: path_str.to_string(),
+                symbols: true,
+                json: true,
+                errors: false,
+            })
+        );
+    }
 }

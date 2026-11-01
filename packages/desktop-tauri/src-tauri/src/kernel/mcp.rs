@@ -481,6 +481,10 @@ impl McpHub {
                         "source": {
                             "type": "string",
                             "description": "Optional inline source code string to inspect directly"
+                        },
+                        "detailed": {
+                            "type": "boolean",
+                            "description": "Return full semantic symbols, imports, and syntax errors"
                         }
                     },
                     "required": ["path"]
@@ -511,11 +515,20 @@ impl McpHub {
                         (content, ext)
                     };
 
-                let summary = ast_engine_clone
-                    .parse_syntax(&source, &ext)
-                    .map_err(|e| format!("AST parse failed: {e}"))?;
-                serde_json::to_string_pretty(&summary)
-                    .map_err(|e| format!("Serialization error: {e}"))
+                let detailed = arguments.get("detailed").and_then(|v| v.as_bool()).unwrap_or(true);
+                if detailed {
+                    let result = ast_engine_clone
+                        .analyze(&source, &ext)
+                        .map_err(|e| format!("AST parse failed: {e}"))?;
+                    serde_json::to_string_pretty(&result)
+                        .map_err(|e| format!("Serialization error: {e}"))
+                } else {
+                    let summary = ast_engine_clone
+                        .parse_syntax(&source, &ext)
+                        .map_err(|e| format!("AST parse failed: {e}"))?;
+                    serde_json::to_string_pretty(&summary)
+                        .map_err(|e| format!("Serialization error: {e}"))
+                }
             },
         );
 
