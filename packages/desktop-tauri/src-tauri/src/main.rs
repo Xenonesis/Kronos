@@ -296,6 +296,19 @@ async fn workspace_search(
     Ok(results.into_iter().take(max_limit).collect())
 }
 
+#[tauri::command]
+async fn watch_directory(path: String, ignore: Option<Vec<String>>) -> Result<String, String> {
+    let engine = crate::kernel::server::get_watcher_engine();
+    let ignore_patterns = ignore.unwrap_or_default();
+    engine.watch(&path, &ignore_patterns)
+}
+
+#[tauri::command]
+async fn unwatch_directory(subscription_id: String) -> Result<bool, String> {
+    let engine = crate::kernel::server::get_watcher_engine();
+    engine.unwatch(&subscription_id)
+}
+
 
 fn detect_and_configure_portable_mode() -> Option<PathBuf> {
     // Check KRONOS_PORTABLE=1 env var
@@ -1194,6 +1207,17 @@ try {{
         }}
         return null;
       }}
+      if (command === 'watch_directory' || command === 'unwatch_directory') {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            return await window.__TAURI_INTERNALS__.invoke(command, args || {{}});
+          }}
+        }} catch (e) {{
+          console.error('[TauriBridge] ' + command + ' failed:', e);
+          throw e;
+        }}
+        return null;
+      }}
       return null;
     }}
     getKernelTelemetry: async function() {{
@@ -1389,6 +1413,8 @@ try {{
             install_app_update,
             get_kernel_telemetry,
             workspace_search,
+            watch_directory,
+            unwatch_directory,
             desktop_window_minimize,
             desktop_window_toggle_maximize,
             desktop_window_close,
@@ -1493,6 +1519,26 @@ try {{
                     }
                     Err(e) => {
                         eprintln!("[updater] Failed to initialize updater: {e}");
+                    }
+                }
+            });
+
+            let handle_for_watcher = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut watcher_rx = crate::kernel::server::get_watcher_engine().subscribe_events();
+                loop {
+                    match watcher_rx.recv().await {
+                        Ok(events) => {
+                            if let Err(e) = handle_for_watcher.emit("vfs-file-change", events) {
+                                eprintln!("[watcher] Failed to emit vfs-file-change event: {e}");
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            eprintln!("[watcher] Event stream lagged by {skipped} messages");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            break;
+                        }
                     }
                 }
             });
@@ -1616,5 +1662,41 @@ mod tests {
         let matches = res.unwrap();
         assert!(!matches.is_empty());
         assert!(matches.iter().any(|m| m.path.contains("search.rs")));
+    }
+
+    #[tokio::test]
+    async fn test_watch_directory_and_unwatch_commands() {
+        let temp_dir = std::env::temp_dir().join(format!("kronos_watch_cmd_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let watch_res = watch_directory(
+            temp_dir.to_string_lossy().to_string(),
+            Some(vec!["target/**".to_string()]),
+        )
+        .await;
+        assert!(watch_res.is_ok(), "watch_directory should succeed: {:?}", watch_res.err());
+        let sub_id = watch_res.unwrap();
+        assert!(!sub_id.is_empty(), "subscription id should not be empty");
+
+        let unwatch_res = unwatch_directory(sub_id.clone()).await;
+        assert!(unwatch_res.is_ok(), "unwatch_directory should succeed: {:?}", unwatch_res.err());
+        assert!(unwatch_res.unwrap(), "unwatch_directory should return true for active subscription");
+
+        // Unwatching an already removed subscription should return Ok(false)
+        let unwatch_again = unwatch_directory(sub_id).await;
+        assert!(unwatch_again.is_ok());
+        assert!(!unwatch_again.unwrap(), "unwatch_directory should return false when subscription does not exist");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_watch_directory_nonexistent_path() {
+        let invalid_path = std::env::temp_dir()
+            .join(format!("kronos_nonexistent_dir_{}", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        let res = watch_directory(invalid_path, None).await;
+        assert!(res.is_err(), "watch_directory should fail on non-existent path");
     }
 }
