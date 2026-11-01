@@ -144,4 +144,106 @@ mod tests {
 
         assert_eq!(parsed.command, Some(CliCommand::Mcp));
     }
+
+    #[test]
+    fn test_cli_mcp_stdio_stream_roundtrip() {
+        use std::io::Cursor;
+        use crate::kernel::cli::run_mcp_stdio_loop;
+        use crate::kernel::mcp::McpHub;
+
+        let hub = McpHub::new();
+        let input = concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"initialize\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"2\",\"method\":\"tools/list\"}\n",
+            "exit\n"
+        );
+
+        let reader = Cursor::new(input.as_bytes());
+        let mut writer = Vec::new();
+
+        let exit_code = run_mcp_stdio_loop(reader, &mut writer, &hub);
+        assert_eq!(exit_code, 0);
+
+        let output = String::from_utf8(writer).expect("Valid UTF-8 output");
+        let lines: Vec<&str> = output.lines().collect();
+
+        // Exactly 2 responses expected (initialize, tools/list).
+        // The notification MUST NOT generate a response line.
+        assert_eq!(lines.len(), 2, "Expected exactly 2 JSON-RPC lines, got: {:?}", lines);
+
+        let init_res: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(init_res["id"], "1");
+        assert_eq!(init_res["result"]["serverInfo"]["name"], "kronos-mcp-hub");
+
+        let tools_res: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(tools_res["id"], "2");
+        assert!(tools_res["result"]["tools"].as_array().unwrap().len() >= 5);
+    }
+
+    #[test]
+    fn test_cli_mcp_stdio_notifications_only_produce_no_output() {
+        use std::io::Cursor;
+        use crate::kernel::cli::run_mcp_stdio_loop;
+        use crate::kernel::mcp::McpHub;
+
+        let hub = McpHub::new();
+        let input = concat!(
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"$/cancelRequest\",\"params\":{\"requestId\":1}}\n",
+            "quit\n"
+        );
+
+        let reader = Cursor::new(input.as_bytes());
+        let mut writer = Vec::new();
+
+        let exit_code = run_mcp_stdio_loop(reader, &mut writer, &hub);
+        assert_eq!(exit_code, 0);
+
+        let output = String::from_utf8(writer).expect("Valid UTF-8 output");
+        assert!(output.is_empty(), "Notifications must not produce any output on stdout");
+    }
+
+    #[test]
+    fn test_cli_mcp_stdio_blank_lines_and_quit() {
+        use std::io::Cursor;
+        use crate::kernel::cli::run_mcp_stdio_loop;
+        use crate::kernel::mcp::McpHub;
+
+        let hub = McpHub::new();
+        let input = "   \n\n\t  \nquit\n";
+
+        let reader = Cursor::new(input.as_bytes());
+        let mut writer = Vec::new();
+
+        let exit_code = run_mcp_stdio_loop(reader, &mut writer, &hub);
+        assert_eq!(exit_code, 0);
+        assert!(writer.is_empty());
+    }
+
+    #[test]
+    fn test_cli_mcp_stdio_writer_error_returns_nonzero() {
+        use std::io::{Cursor, Error, ErrorKind, Write};
+        use crate::kernel::cli::run_mcp_stdio_loop;
+        use crate::kernel::mcp::McpHub;
+
+        struct FailingWriter;
+        impl Write for FailingWriter {
+            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(Error::new(ErrorKind::BrokenPipe, "simulated broken pipe"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(Error::new(ErrorKind::BrokenPipe, "simulated broken pipe"))
+            }
+        }
+
+        let hub = McpHub::new();
+        let input = "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"initialize\"}\n";
+        let reader = Cursor::new(input.as_bytes());
+        let writer = FailingWriter;
+
+        let exit_code = run_mcp_stdio_loop(reader, writer, &hub);
+        assert_eq!(exit_code, 1);
+    }
 }

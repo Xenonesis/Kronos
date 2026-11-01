@@ -234,29 +234,12 @@ pub fn dispatch(args: CliArgs) -> Option<i32> {
         }
         CliCommand::Search { query } => execute_search(&query),
         CliCommand::Mcp => {
-            println!("[Kernel CLI] Entering Model Context Protocol (MCP) stdio loop...");
-            #[cfg(not(test))]
-            {
-                use std::io::BufRead;
-                let stdin = std::io::stdin();
-                for line in stdin.lock().lines() {
-                    match line {
-                        Ok(l) => {
-                            let trimmed = l.trim();
-                            if trimmed == "exit" || trimmed == "quit" {
-                                break;
-                            }
-                            eprintln!("[MCP] Received stdio line: {trimmed}");
-                        }
-                        Err(_) => break,
-                    }
-                }
-            }
-            #[cfg(test)]
-            {
-                println!("[Kernel CLI] MCP stdio loop ready");
-            }
-            Some(0)
+            eprintln!("[Kernel CLI] Starting native Model Context Protocol (MCP) stdio server...");
+            let hub = crate::kernel::mcp::McpHub::new();
+            let stdin = std::io::stdin();
+            let stdout = std::io::stdout();
+            let code = run_mcp_stdio_loop(stdin.lock(), stdout.lock(), &hub);
+            Some(code)
         }
     }
 }
@@ -276,4 +259,33 @@ async fn wait_for_daemon_shutdown() {
     {
         let _ = tokio::signal::ctrl_c().await;
     }
+}
+
+pub fn run_mcp_stdio_loop<R: std::io::BufRead, W: std::io::Write>(
+    reader: R,
+    mut writer: W,
+    hub: &crate::kernel::mcp::McpHub,
+) -> i32 {
+    for line in reader.lines() {
+        let l = match line {
+            Ok(val) => val,
+            Err(_) => break,
+        };
+        let trimmed = l.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed == "exit" || trimmed == "quit" {
+            break;
+        }
+
+        if let Some(response_json) = hub.handle_jsonrpc(trimmed) {
+            if let Err(e) = writeln!(writer, "{}", response_json) {
+                eprintln!("[MCP] Failed to write response to stdout: {e}");
+                return 1;
+            }
+            let _ = writer.flush();
+        }
+    }
+    0
 }
