@@ -421,6 +421,40 @@ async fn get_ioring_status() -> Result<serde_json::Value, String> {
     }))
 }
 
+#[tauri::command]
+async fn transcribe_audio_chunk(
+    samples: Vec<f32>,
+    sample_rate: Option<u32>,
+    channels: Option<u16>,
+) -> Result<serde_json::Value, String> {
+    let rate = sample_rate.unwrap_or(16000);
+    let ch = channels.unwrap_or(1);
+    let config = crate::kernel::speech::SpeechAudioConfig::new(rate, ch);
+
+    let engine_lock = crate::kernel::server::get_speech_engine();
+    let engine = engine_lock.read().await;
+
+    let transcript = engine.transcribe_with_config(&samples, config)?;
+    let duration_secs = samples.len() as f32 / (rate as f32 * ch as f32);
+
+    Ok(serde_json::json!({
+        "transcript": transcript,
+        "samples_count": samples.len(),
+        "duration_secs": duration_secs,
+    }))
+}
+
+#[tauri::command]
+async fn get_speech_engine_status() -> Result<serde_json::Value, String> {
+    let engine_lock = crate::kernel::server::get_speech_engine();
+    let engine = engine_lock.read().await;
+    Ok(serde_json::json!({
+        "is_model_loaded": engine.is_model_loaded(),
+        "target_sample_rate": 16000,
+        "target_channels": 1,
+    }))
+}
+
 
 fn detect_and_configure_portable_mode() -> Option<PathBuf> {
     // Check KRONOS_PORTABLE=1 env var
@@ -1319,7 +1353,7 @@ try {{
         }}
         return null;
       }}
-      if (command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast' || command === 'crdt_doc_action' || command === 'get_ioring_status') {{
+      if (command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast' || command === 'crdt_doc_action' || command === 'get_ioring_status' || command === 'transcribe_audio_chunk' || command === 'get_speech_engine_status') {{
         try {{
           if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
             return await window.__TAURI_INTERNALS__.invoke(command, args || {{}});
@@ -1530,6 +1564,8 @@ try {{
             analyze_ast,
             crdt_doc_action,
             get_ioring_status,
+            transcribe_audio_chunk,
+            get_speech_engine_status,
             desktop_window_minimize,
             desktop_window_toggle_maximize,
             desktop_window_close,
@@ -1897,5 +1933,24 @@ mod tests {
         assert!(val["is_kernel_active"].is_boolean());
         assert!(val["queue_size"].as_u64().unwrap() >= 16);
         assert!(val["platform"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_transcribe_audio_chunk_command() {
+        let synthetic_samples: Vec<f32> = (0..16000)
+            .map(|i| (i as f32 * 0.05).sin() * 0.75)
+            .collect();
+
+        let res = transcribe_audio_chunk(synthetic_samples, Some(16000), Some(1)).await;
+        assert!(res.is_ok(), "transcribe_audio_chunk should succeed: {:?}", res.err());
+        let val = res.unwrap();
+        assert!(val["transcript"].is_string());
+        assert!(!val["transcript"].as_str().unwrap().is_empty());
+        assert_eq!(val["samples_count"], 16000);
+
+        let status = get_speech_engine_status().await;
+        assert!(status.is_ok());
+        let sval = status.unwrap();
+        assert_eq!(sval["target_sample_rate"], 16000);
     }
 }

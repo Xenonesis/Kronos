@@ -578,6 +578,22 @@ mod tests {
         daemon.stop().await;
     }
 
+    async fn wait_for_rpc_response<S>(ws_stream: &mut S, expected_id: &str) -> serde_json::Value
+    where
+        S: futures_util::StreamExt<Item = Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+    {
+        while let Some(Ok(frame)) = ws_stream.next().await {
+            if let Ok(text) = frame.to_text() {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(text) {
+                    if json.get("id").and_then(|v| v.as_str()) == Some(expected_id) {
+                        return json;
+                    }
+                }
+            }
+        }
+        panic!("Did not receive response for ID: {}", expected_id);
+    }
+
     #[tokio::test]
     async fn test_embedded_daemon_ast_analyze_and_symbols_envelopes() {
         let port = 6791;
@@ -751,9 +767,7 @@ mod tests {
             "payload": {}
         });
         ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(status_msg.to_string())).await.unwrap();
-        let status_reply = ws_stream.next().await.unwrap().unwrap();
-        let parsed_status: serde_json::Value = serde_json::from_str(status_reply.to_text().unwrap()).unwrap();
-        assert_eq!(parsed_status["id"], "ioring-status-1");
+        let parsed_status = wait_for_rpc_response(&mut ws_stream, "ioring-status-1").await;
         assert_eq!(parsed_status["success"], true);
         let status_data = parsed_status.get("data").or_else(|| parsed_status.get("payload")).unwrap();
         assert!(status_data["isKernelActive"].is_boolean());
@@ -772,9 +786,7 @@ mod tests {
             }
         });
         ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(read_batch_msg.to_string())).await.unwrap();
-        let read_reply = ws_stream.next().await.unwrap().unwrap();
-        let parsed_read: serde_json::Value = serde_json::from_str(read_reply.to_text().unwrap()).unwrap();
-        assert_eq!(parsed_read["id"], "ioring-read-1");
+        let parsed_read = wait_for_rpc_response(&mut ws_stream, "ioring-read-1").await;
         assert_eq!(parsed_read["success"], true);
         let files = parsed_read.get("data")
             .or_else(|| parsed_read.get("payload"))
@@ -783,6 +795,50 @@ mod tests {
             .expect("files array");
         assert_eq!(files.len(), 1);
         assert_eq!(files[0]["size"], 27);
+
+        daemon.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_speech_envelopes() {
+        let port = 6787;
+        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+        let url = format!("ws://127.0.0.1:{}", port);
+        let (mut ws_stream, _) = connect_async(&url).await.expect("connect");
+
+        // 1. Test speech/status
+        let status_msg = serde_json::json!({
+            "id": "speech-status-1",
+            "type": "speech/status",
+            "payload": {}
+        });
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(status_msg.to_string())).await.unwrap();
+        let parsed_status = wait_for_rpc_response(&mut ws_stream, "speech-status-1").await;
+        assert_eq!(parsed_status["success"], true);
+        let status_data = parsed_status.get("data").or_else(|| parsed_status.get("payload")).unwrap();
+        assert_eq!(status_data["targetSampleRate"], 16000);
+        assert_eq!(status_data["targetChannels"], 1);
+
+        // 2. Test speech/transcribe with synthetic voiced samples
+        let synthetic_samples: Vec<f64> = (0..16000)
+            .map(|i| (i as f64 * 0.05).sin() * 0.75)
+            .collect();
+
+        let transcribe_msg = serde_json::json!({
+            "id": "speech-transcribe-1",
+            "type": "speech/transcribe",
+            "payload": {
+                "samples": synthetic_samples,
+                "sampleRate": 16000,
+                "channels": 1
+            }
+        });
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(transcribe_msg.to_string())).await.unwrap();
+        let parsed_trans = wait_for_rpc_response(&mut ws_stream, "speech-transcribe-1").await;
+        assert_eq!(parsed_trans["success"], true);
+        let trans_data = parsed_trans.get("data").or_else(|| parsed_trans.get("payload")).unwrap();
+        assert!(!trans_data["transcript"].as_str().unwrap().is_empty());
+        assert_eq!(trans_data["samplesCount"], 16000);
 
         daemon.stop().await;
     }

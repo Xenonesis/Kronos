@@ -36,6 +36,17 @@ pub fn get_crdt_engine() -> &'static crate::kernel::crdt::CrdtEngine {
     &CRDT_ENGINE
 }
 
+static SPEECH_ENGINE: std::sync::LazyLock<std::sync::Arc<tokio::sync::RwLock<crate::kernel::speech::SpeechEngine>>> =
+    std::sync::LazyLock::new(|| {
+        let engine = crate::kernel::speech::SpeechEngine::new(None)
+            .unwrap_or_else(|_| crate::kernel::speech::SpeechEngine::new_mock());
+        std::sync::Arc::new(tokio::sync::RwLock::new(engine))
+    });
+
+pub fn get_speech_engine() -> std::sync::Arc<tokio::sync::RwLock<crate::kernel::speech::SpeechEngine>> {
+    SPEECH_ENGINE.clone()
+}
+
 fn extract_jsonrpc_request_str(val: &serde_json::Value) -> Option<String> {
     if let Some(req) = val.get("request") {
         if let Some(s) = req.as_str() {
@@ -539,6 +550,101 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                 None => RpcResponse::err(&envelope.id, "ioring/read_batch/response", "Missing 'paths' array"),
             }
         }
+        "speech/status" => {
+            let engine_lock = get_speech_engine();
+            let engine = engine_lock.read().await;
+            RpcResponse::ok(
+                &envelope.id,
+                "speech/status/response",
+                Some(serde_json::json!({
+                    "isModelLoaded": engine.is_model_loaded(),
+                    "targetSampleRate": 16000,
+                    "targetChannels": 1,
+                })),
+            )
+        }
+        "speech/transcribe" => {
+            let sample_rate = envelope.payload.get("sampleRate")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(16000) as u32;
+            let channels = envelope.payload.get("channels")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1) as u16;
+
+            let samples_opt: Option<Vec<f32>> = if let Some(arr) = envelope.payload.get("samples").and_then(|v| v.as_array()) {
+                Some(arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+            } else if let Some(b64) = envelope.payload.get("pcmBase64").and_then(|v| v.as_str()) {
+                match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64) {
+                    Ok(bytes) => {
+                        let floats: Vec<f32> = bytes
+                            .chunks_exact(2)
+                            .map(|c| {
+                                let val = i16::from_le_bytes([c[0], c[1]]);
+                                val as f32 / 32768.0
+                            })
+                            .collect();
+                        Some(floats)
+                    }
+                    Err(_) => None,
+                }
+            } else {
+                None
+            };
+
+            match samples_opt {
+                Some(samples) => {
+                    let config = crate::kernel::speech::SpeechAudioConfig::new(sample_rate, channels);
+                    let engine_lock = get_speech_engine();
+                    let engine = engine_lock.read().await;
+
+                    match engine.transcribe_with_config(&samples, config) {
+                        Ok(transcript) => {
+                            let duration_secs = samples.len() as f32 / (sample_rate as f32 * channels as f32);
+                            RpcResponse::ok(
+                                &envelope.id,
+                                "speech/transcribe/response",
+                                Some(serde_json::json!({
+                                    "transcript": transcript,
+                                    "samplesCount": samples.len(),
+                                    "durationSecs": duration_secs,
+                                })),
+                            )
+                        }
+                        Err(e) => RpcResponse::err(&envelope.id, "speech/transcribe/response", e),
+                    }
+                }
+                None => RpcResponse::err(&envelope.id, "speech/transcribe/response", "Missing 'samples' or 'pcmBase64' audio buffer"),
+            }
+        }
+        "speech/load_model" => {
+            let path_opt = envelope.payload.get("modelPath")
+                .or_else(|| envelope.payload.get("model_path"))
+                .and_then(|v| v.as_str());
+
+            match path_opt {
+                Some(path_str) => {
+                    let p = std::path::Path::new(path_str);
+                    match crate::kernel::speech::SpeechEngine::new(Some(p)) {
+                        Ok(new_engine) => {
+                            let engine_lock = get_speech_engine();
+                            let mut writer = engine_lock.write().await;
+                            *writer = new_engine;
+                            RpcResponse::ok(
+                                &envelope.id,
+                                "speech/load_model/response",
+                                Some(serde_json::json!({
+                                    "success": true,
+                                    "modelPath": path_str,
+                                    "isModelLoaded": true,
+                                })),
+                            )
+                        }
+                        Err(e) => RpcResponse::err(&envelope.id, "speech/load_model/response", e),
+                    }
+                }
+                None => RpcResponse::err(&envelope.id, "speech/load_model/response", "Missing 'modelPath' parameter"),
+            }
+        }
         other => RpcResponse::err(
             envelope.id,
             other,
@@ -944,7 +1050,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }
             }
         }
-        msg_type if msg_type.starts_with("crdt/") || msg_type.starts_with("ioring/") => {
+        msg_type if msg_type.starts_with("crdt/") || msg_type.starts_with("ioring/") || msg_type.starts_with("speech/") => {
             let env = RpcEnvelope::new(
                 request_id,
                 msg_type,
@@ -1010,7 +1116,7 @@ pub async fn process_incoming_frame(text: &str) -> Option<String> {
                 let res = dispatch_session_message(&val).await;
                 return serde_json::to_string(&res).ok();
             }
-            "vfs/watch" | "vfs/watch_subscribe" | "vfs/unwatch" | "vfs/watch_unsubscribe" | "ast/analyze" | "ast/parse" | "ast/symbols" | "crdt/join" | "crdt/update" | "crdt/sync" | "crdt/state" | "crdt/edit" | "ioring/status" | "ioring/read_batch" => {
+            "vfs/watch" | "vfs/watch_subscribe" | "vfs/unwatch" | "vfs/watch_unsubscribe" | "ast/analyze" | "ast/parse" | "ast/symbols" | "crdt/join" | "crdt/update" | "crdt/sync" | "crdt/state" | "crdt/edit" | "ioring/status" | "ioring/read_batch" | "speech/status" | "speech/transcribe" | "speech/load_model" => {
                 let res = dispatch_session_message(&val).await;
                 return serde_json::to_string(&res).ok();
             }
