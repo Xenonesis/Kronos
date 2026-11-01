@@ -15,6 +15,20 @@ pub fn get_mcp_hub() -> &'static crate::kernel::mcp::McpHub {
     MCP_HUB.get_or_init(crate::kernel::mcp::McpHub::new)
 }
 
+static WATCHER_ENGINE: std::sync::LazyLock<crate::kernel::watcher::WatcherEngine> =
+    std::sync::LazyLock::new(|| {
+        let engine = crate::kernel::watcher::WatcherEngine::new(25);
+        if let Ok(index) = crate::kernel::search::WorkspaceSearchIndex::new_in_memory() {
+            engine.bind_search_index(Arc::new(index));
+        }
+        engine.bind_shadow_vfs(Arc::new(crate::kernel::vfs::ShadowVfs::new()));
+        engine
+    });
+
+pub fn get_watcher_engine() -> &'static crate::kernel::watcher::WatcherEngine {
+    &WATCHER_ENGINE
+}
+
 fn extract_jsonrpc_request_str(val: &serde_json::Value) -> Option<String> {
     if let Some(req) = val.get("request") {
         if let Some(s) = req.as_str() {
@@ -84,7 +98,12 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                 "desktopManaged": true,
                 "features": {
                     "connectedHosts": true,
-                    "hostMultiplexing": true
+                    "hostMultiplexing": true,
+                    "projectAdd": true,
+                    "stableProjectIdentity": true,
+                    "projectGithubClone": true,
+                    "workspaceGithubRepositorySearch": true,
+                    "projectCreateDirectory": true
                 }
             })),
             error: None,
@@ -128,6 +147,79 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                         "response": null,
                         "notification": true
                     })),
+                ),
+            }
+        }
+        "vfs/watch" | "vfs/watch_subscribe" => {
+            let path_opt = envelope.payload.get("path")
+                .and_then(|v| v.as_str())
+                .or_else(|| envelope.payload.as_str());
+            let ignore: Vec<String> = envelope.payload.get("ignore")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            match path_opt {
+                Some(path) => {
+                    let engine = get_watcher_engine();
+                    match engine.watch(path, &ignore) {
+                        Ok(sub_id) => RpcResponse::ok(
+                            &envelope.id,
+                            "vfs/watch/response",
+                            Some(serde_json::json!({
+                                "subscriptionId": sub_id,
+                                "path": path,
+                            })),
+                        ),
+                        Err(err) => RpcResponse::err(
+                            &envelope.id,
+                            "vfs/watch/response",
+                            err,
+                        ),
+                    }
+                }
+                None => RpcResponse::err(
+                    &envelope.id,
+                    "vfs/watch/response",
+                    "Missing 'path' parameter for vfs/watch",
+                ),
+            }
+        }
+        "vfs/unwatch" | "vfs/watch_unsubscribe" => {
+            let sub_id_opt = envelope.payload.get("subscriptionId")
+                .or_else(|| envelope.payload.get("subscription_id"))
+                .or_else(|| envelope.payload.get("sub_id"))
+                .or_else(|| envelope.payload.get("id"))
+                .and_then(|v| v.as_str())
+                .or_else(|| envelope.payload.as_str());
+
+            match sub_id_opt {
+                Some(sub_id) => {
+                    let engine = get_watcher_engine();
+                    match engine.unwatch(sub_id) {
+                        Ok(unwatched) => RpcResponse::ok(
+                            &envelope.id,
+                            "vfs/unwatch/response",
+                            Some(serde_json::json!({
+                                "unwatched": unwatched,
+                                "subscriptionId": sub_id,
+                            })),
+                        ),
+                        Err(err) => RpcResponse::err(
+                            &envelope.id,
+                            "vfs/unwatch/response",
+                            err,
+                        ),
+                    }
+                }
+                None => RpcResponse::err(
+                    &envelope.id,
+                    "vfs/unwatch/response",
+                    "Missing 'subscriptionId' parameter for vfs/unwatch",
                 ),
             }
         }
@@ -266,6 +358,120 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }),
             }
         }
+        "vfs/watch" | "vfs/watch_subscribe" => {
+            let payload = msg.get("payload");
+            let path = msg.get("path")
+                .or_else(|| payload.and_then(|p| p.get("path")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let ignore: Vec<String> = msg.get("ignore")
+                .or_else(|| payload.and_then(|p| p.get("ignore")))
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            if path.is_empty() {
+                serde_json::json!({
+                    "type": "vfs/watch/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": false,
+                    "error": "Missing 'path' parameter",
+                    "payload": {
+                        "error": "Missing 'path' parameter"
+                    }
+                })
+            } else {
+                let engine = get_watcher_engine();
+                match engine.watch(path, &ignore) {
+                    Ok(sub_id) => {
+                        serde_json::json!({
+                            "type": "vfs/watch/response",
+                            "requestId": request_id,
+                            "id": request_id,
+                            "success": true,
+                            "payload": {
+                                "subscriptionId": sub_id,
+                                "path": path,
+                            },
+                            "subscriptionId": sub_id,
+                            "path": path,
+                        })
+                    }
+                    Err(err) => {
+                        serde_json::json!({
+                            "type": "vfs/watch/response",
+                            "requestId": request_id,
+                            "id": request_id,
+                            "success": false,
+                            "error": err,
+                            "payload": {
+                                "error": err
+                            }
+                        })
+                    }
+                }
+            }
+        }
+        "vfs/unwatch" | "vfs/watch_unsubscribe" => {
+            let payload = msg.get("payload");
+            let sub_id = msg.get("subscriptionId")
+                .or_else(|| payload.and_then(|p| p.get("subscriptionId")))
+                .or_else(|| msg.get("subscription_id"))
+                .or_else(|| payload.and_then(|p| p.get("subscription_id")))
+                .or_else(|| msg.get("sub_id"))
+                .or_else(|| payload.and_then(|p| p.get("sub_id")))
+                .or_else(|| msg.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            if sub_id.is_empty() {
+                serde_json::json!({
+                    "type": "vfs/unwatch/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": false,
+                    "error": "Missing 'subscriptionId' parameter",
+                    "payload": {
+                        "error": "Missing 'subscriptionId' parameter"
+                    }
+                })
+            } else {
+                let engine = get_watcher_engine();
+                match engine.unwatch(sub_id) {
+                    Ok(unwatched) => {
+                        serde_json::json!({
+                            "type": "vfs/unwatch/response",
+                            "requestId": request_id,
+                            "id": request_id,
+                            "success": true,
+                            "payload": {
+                                "unwatched": unwatched,
+                                "subscriptionId": sub_id,
+                            },
+                            "unwatched": unwatched,
+                            "subscriptionId": sub_id,
+                        })
+                    }
+                    Err(err) => {
+                        serde_json::json!({
+                            "type": "vfs/unwatch/response",
+                            "requestId": request_id,
+                            "id": request_id,
+                            "success": false,
+                            "error": err,
+                            "payload": {
+                                "error": err
+                            }
+                        })
+                    }
+                }
+            }
+        }
         other => {
             serde_json::json!({
                 "type": format!("{}/response", other),
@@ -312,6 +518,10 @@ pub async fn process_incoming_frame(text: &str) -> Option<String> {
                 }
             }
             "mcp/request" | "mcp/jsonrpc" | "mcp_request" => {
+                let res = dispatch_session_message(&val).await;
+                return serde_json::to_string(&res).ok();
+            }
+            "vfs/watch" | "vfs/watch_subscribe" | "vfs/unwatch" | "vfs/watch_unsubscribe" => {
                 let res = dispatch_session_message(&val).await;
                 return serde_json::to_string(&res).ok();
             }
@@ -453,11 +663,34 @@ impl DaemonHandle {
 }
 
 async fn handle_ws(mut socket: WebSocket, mut shutdown_rx: broadcast::Receiver<()>) {
+    let mut watcher_rx = get_watcher_engine().subscribe_events();
+    let mut watcher_active = true;
     loop {
         tokio::select! {
             _ = shutdown_rx.recv() => {
                 let _ = socket.send(Message::Close(None)).await;
                 break;
+            }
+            events_res = watcher_rx.recv(), if watcher_active => {
+                match events_res {
+                    Ok(events) => {
+                        let frame = serde_json::json!({
+                            "type": "vfs/change_events",
+                            "payload": events,
+                        });
+                        if let Ok(text) = serde_json::to_string(&frame) {
+                            if socket.send(Message::Text(text.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        watcher_active = false;
+                    }
+                }
             }
             msg = socket.recv() => {
                 match msg {

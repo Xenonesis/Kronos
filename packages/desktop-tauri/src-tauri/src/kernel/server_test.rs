@@ -396,4 +396,185 @@ mod tests {
         let nonexistent = std::path::Path::new("/nonexistent_path/fake.sock");
         assert!(!is_safe_socket_path_to_remove(nonexistent));
     }
+
+    #[tokio::test]
+    async fn test_daemon_vfs_watch_and_unwatch_envelope() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let watch_req = RpcEnvelope {
+            id: "watch-1".to_string(),
+            msg_type: "vfs/watch".to_string(),
+            payload: serde_json::json!({
+                "path": temp.path().to_str().unwrap(),
+                "ignore": [".git", "target"]
+            }),
+        };
+
+        let watch_res = dispatch_envelope(watch_req).await;
+        assert!(watch_res.success);
+        let sub_id = watch_res.data.unwrap()["subscriptionId"].as_str().unwrap().to_string();
+        assert!(!sub_id.is_empty());
+
+        let unwatch_req = RpcEnvelope {
+            id: "unwatch-1".to_string(),
+            msg_type: "vfs/unwatch".to_string(),
+            payload: serde_json::json!({
+                "subscriptionId": sub_id
+            }),
+        };
+        let unwatch_res = dispatch_envelope(unwatch_req).await;
+        assert!(unwatch_res.success);
+    }
+
+    #[tokio::test]
+    async fn test_daemon_vfs_watch_and_unwatch_session_message() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let watch_msg = serde_json::json!({
+            "type": "vfs/watch",
+            "requestId": "sess-watch-1",
+            "path": temp.path().to_str().unwrap(),
+            "ignore": [".git"]
+        });
+
+        let watch_res = dispatch_session_message(&watch_msg).await;
+        assert_eq!(watch_res["type"], "vfs/watch/response");
+        assert_eq!(watch_res["requestId"], "sess-watch-1");
+        assert_eq!(watch_res["success"], true);
+        let sub_id = watch_res["subscriptionId"].as_str().unwrap().to_string();
+        assert!(!sub_id.is_empty());
+        assert_eq!(watch_res["payload"]["subscriptionId"], sub_id);
+
+        let unwatch_msg = serde_json::json!({
+            "type": "vfs/unwatch",
+            "requestId": "sess-unwatch-1",
+            "subscriptionId": sub_id
+        });
+
+        let unwatch_res = dispatch_session_message(&unwatch_msg).await;
+        assert_eq!(unwatch_res["type"], "vfs/unwatch/response");
+        assert_eq!(unwatch_res["requestId"], "sess-unwatch-1");
+        assert_eq!(unwatch_res["success"], true);
+        assert_eq!(unwatch_res["unwatched"], true);
+        assert_eq!(unwatch_res["payload"]["unwatched"], true);
+
+        // Error cases
+        let missing_path = serde_json::json!({
+            "type": "vfs/watch",
+            "requestId": "err-1"
+        });
+        let err_res = dispatch_session_message(&missing_path).await;
+        assert_eq!(err_res["success"], false);
+
+        let missing_sub = serde_json::json!({
+            "type": "vfs/unwatch",
+            "requestId": "err-2"
+        });
+        let err_sub = dispatch_session_message(&missing_sub).await;
+        assert_eq!(err_sub["success"], false);
+    }
+
+    #[tokio::test]
+    async fn test_daemon_vfs_envelope_errors() {
+        let missing_path = RpcEnvelope {
+            id: "err-env-1".to_string(),
+            msg_type: "vfs/watch".to_string(),
+            payload: serde_json::json!({}),
+        };
+        let res1 = dispatch_envelope(missing_path).await;
+        assert!(!res1.success);
+        assert!(res1.error.is_some());
+
+        let missing_sub = RpcEnvelope {
+            id: "err-env-2".to_string(),
+            msg_type: "vfs/unwatch".to_string(),
+            payload: serde_json::json!({}),
+        };
+        let res2 = dispatch_envelope(missing_sub).await;
+        assert!(!res2.success);
+        assert!(res2.error.is_some());
+
+        let nonexistent = RpcEnvelope {
+            id: "err-env-3".to_string(),
+            msg_type: "vfs/watch".to_string(),
+            payload: serde_json::json!({
+                "path": "nonexistent_directory_for_kronos_test_12345"
+            }),
+        };
+        let res3 = dispatch_envelope(nonexistent).await;
+        assert!(!res3.success);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_vfs_websocket_events_forwarding() {
+        let daemon = EmbeddedDaemon::start_test(0).await.expect("Failed to start daemon");
+        let url = format!("ws://127.0.0.1:{}", daemon.port);
+        let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let watch_msg = serde_json::json!({
+            "id": "ws-watch-1",
+            "type": "vfs/watch",
+            "payload": {
+                "path": temp.path().to_str().unwrap()
+            }
+        });
+
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(watch_msg.to_string())).await.unwrap();
+
+        let watch_reply = ws_stream.next().await.unwrap().unwrap();
+        let parsed_reply: serde_json::Value = serde_json::from_str(watch_reply.to_text().unwrap()).unwrap();
+        assert_eq!(parsed_reply["id"], "ws-watch-1");
+        assert_eq!(parsed_reply["success"], true);
+        let sub_id = parsed_reply["data"]["subscriptionId"].as_str().unwrap().to_string();
+        assert!(!sub_id.is_empty());
+
+        // Write a test file to trigger a filesystem event
+        let file_path = temp.path().join("vfs_stream_test.txt");
+        std::fs::write(&file_path, b"hello vfs stream").expect("write test file");
+
+        // Receive the broadcasted vfs/change_events frame
+        let mut received_event = false;
+        let timeout = tokio::time::sleep(std::time::Duration::from_secs(3));
+        tokio::pin!(timeout);
+
+        loop {
+            tokio::select! {
+                _ = &mut timeout => {
+                    break;
+                }
+                maybe_frame = ws_stream.next() => {
+                    if let Some(Ok(frame)) = maybe_frame {
+                        if let Ok(text) = frame.to_text() {
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(text) {
+                                if json.get("type").and_then(|v| v.as_str()) == Some("vfs/change_events") {
+                                    let events = json["payload"].as_array().expect("events array");
+                                    assert!(!events.is_empty());
+                                    received_event = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(received_event, "Expected to receive vfs/change_events frame over WebSocket");
+
+        // Unwatch
+        let unwatch_msg = serde_json::json!({
+            "id": "ws-unwatch-1",
+            "type": "vfs/unwatch",
+            "payload": {
+                "subscriptionId": sub_id
+            }
+        });
+        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(unwatch_msg.to_string())).await.unwrap();
+
+        let unwatch_reply = ws_stream.next().await.unwrap().unwrap();
+        let parsed_unwatch: serde_json::Value = serde_json::from_str(unwatch_reply.to_text().unwrap()).unwrap();
+        assert_eq!(parsed_unwatch["id"], "ws-unwatch-1");
+        assert_eq!(parsed_unwatch["success"], true);
+
+        daemon.stop().await;
+    }
 }
