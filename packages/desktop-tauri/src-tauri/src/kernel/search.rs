@@ -138,7 +138,7 @@ pub fn suggest_directory_entries(
     }
 
     let query_trimmed = query.trim();
-    let query_lower = query_trimmed.to_ascii_lowercase();
+    let query_lower = query_trimmed.to_ascii_lowercase().replace('\\', "/");
     let max_limit = limit.max(1).min(200);
 
     let mut scored_entries: Vec<(i32, DirectorySuggestionEntry)> = Vec::new();
@@ -251,7 +251,7 @@ fn collect_suggestions_recursive(
                 capacity,
             );
         } else if path.is_file() && include_files {
-            if name_str.starts_with(".git") {
+            if name_str == ".git" {
                 continue;
             }
             let rel_raw = path

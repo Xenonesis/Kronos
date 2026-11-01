@@ -155,7 +155,7 @@ mod tests {
         assert!(!entries.is_empty(), "Empty query should return top-level entries");
         assert!(entries.iter().all(|e| !e.path.contains('\\')), "Paths must be normalized with forward slashes");
         assert!(entries.iter().all(|e| !e.path.starts_with("node_modules")), "Must filter node_modules");
-        assert!(entries.iter().all(|e| !e.path.starts_with(".git")), "Must filter .git");
+        assert!(entries.iter().all(|e| e.path != ".git" && !e.path.starts_with(".git/")), "Must filter .git directory");
         assert!(entries.iter().all(|e| !e.path.starts_with("target")), "Must filter target");
     }
 
@@ -261,6 +261,36 @@ mod tests {
         );
         assert!(!entries.is_empty(), "Path-based query should find src/kernel/search.rs");
         let found = entries.iter().find(|e| e.path.ends_with("search.rs"));
+        assert!(found.is_some());
+    }
+
+    #[test]
+    fn test_suggest_directory_entries_backslash_normalization() {
+        let root = std::path::Path::new(".");
+        let (_dirs, entries) = crate::kernel::search::suggest_directory_entries(
+            root,
+            "kernel\\search",
+            true,
+            false,
+            10,
+        );
+        assert!(!entries.is_empty(), "Backslash path query should find src/kernel/search.rs");
+        let found = entries.iter().find(|e| e.path.ends_with("search.rs"));
+        assert!(found.is_some());
+    }
+
+    #[test]
+    fn test_suggest_directory_entries_gitignore_searchable() {
+        let root = std::path::Path::new(".");
+        let (_dirs, entries) = crate::kernel::search::suggest_directory_entries(
+            root,
+            ".gitignore",
+            true,
+            false,
+            10,
+        );
+        assert!(!entries.is_empty(), ".gitignore should be found when queried");
+        let found = entries.iter().find(|e| e.path.ends_with(".gitignore"));
         assert!(found.is_some());
     }
 
