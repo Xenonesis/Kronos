@@ -86,12 +86,19 @@ async function downloadToFile(options: DownloadToFileOptions): Promise<void> {
 
 export async function resolveTarCommand(): Promise<string> {
   if (process.platform === "win32") {
-    const systemRoot = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows";
+    const systemRoot =
+      process.env.SystemRoot ||
+      process.env.SYSTEMROOT ||
+      process.env.windir ||
+      process.env.WINDIR ||
+      "C:\\Windows";
+    const progFiles = process.env.ProgramFiles || "C:\\Program Files";
+    const progFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
     const candidates = [
       path.join(systemRoot, "System32", "tar.exe"),
       path.join(systemRoot, "SysWOW64", "tar.exe"),
-      "C:\\Program Files\\Git\\usr\\bin\\tar.exe",
-      "C:\\Program Files (x86)\\Git\\usr\\bin\\tar.exe",
+      path.join(progFiles, "Git", "usr", "bin", "tar.exe"),
+      path.join(progFilesX86, "Git", "usr", "bin", "tar.exe"),
     ];
     for (const candidate of candidates) {
       try {
