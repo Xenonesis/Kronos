@@ -115,7 +115,12 @@ pub fn build_server_info_payload() -> Value {
             "connectedHosts": true,
             "hostMultiplexing": true,
             "terminalChunkedReplay": true,
-            "binaryChunkingV1": true
+            "binaryChunkingV1": true,
+            "projectAdd": true,
+            "stableProjectIdentity": true,
+            "projectGithubClone": true,
+            "workspaceGithubRepositorySearch": true,
+            "projectCreateDirectory": true
         }
     })
 }

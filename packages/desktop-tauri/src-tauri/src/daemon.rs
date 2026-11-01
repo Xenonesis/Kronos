@@ -542,7 +542,7 @@ pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
     if wait_for_daemon_health(1) {
         return None;
     }
-    let engine = env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "rust".to_string());
+    let engine = env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "node".to_string());
     if engine.eq_ignore_ascii_case("node") {
         stop_embedded();
         if let Some(child) = start_node_daemon(server_id) {
@@ -625,7 +625,7 @@ pub fn stop_daemon(state: &DaemonState) {
 pub fn restart_daemon(state: &DaemonState) -> bool {
     stop_daemon(state);
     let new_child = start_daemon(None);
-    let engine = env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "rust".to_string());
+    let engine = env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "node".to_string());
     if engine.eq_ignore_ascii_case("node") {
         if let Ok(mut lock) = state.process.lock() {
             let success = new_child.is_some();
