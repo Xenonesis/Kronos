@@ -141,4 +141,142 @@ mod tests {
         assert_eq!(summary.node_count, 0);
         assert!(summary.declarations.is_empty());
     }
+
+    #[test]
+    fn test_suggest_directory_entries_empty_and_filtered() {
+        let root = std::path::Path::new(".");
+        let (_dirs, entries) = crate::kernel::search::suggest_directory_entries(
+            root,
+            "",
+            true,
+            true,
+            50,
+        );
+        assert!(!entries.is_empty(), "Empty query should return top-level entries");
+        assert!(entries.iter().all(|e| !e.path.contains('\\')), "Paths must be normalized with forward slashes");
+        assert!(entries.iter().all(|e| !e.path.starts_with("node_modules")), "Must filter node_modules");
+        assert!(entries.iter().all(|e| !e.path.starts_with(".git")), "Must filter .git");
+        assert!(entries.iter().all(|e| !e.path.starts_with("target")), "Must filter target");
+    }
+
+    #[test]
+    fn test_suggest_directory_entries_query_matching() {
+        let root = std::path::Path::new(".");
+        let (_dirs, entries) = crate::kernel::search::suggest_directory_entries(
+            root,
+            "search.rs",
+            true,
+            false,
+            10,
+        );
+        assert!(!entries.is_empty(), "Should find search.rs");
+        let found = entries.iter().find(|e| e.path.ends_with("search.rs"));
+        assert!(found.is_some(), "Expected search.rs in matched entries");
+        assert_eq!(found.unwrap().kind, "file");
+        assert!(found.unwrap().path.ends_with("src/kernel/search.rs") || found.unwrap().path.ends_with("search.rs"));
+    }
+
+    #[test]
+    fn test_suggest_directory_entries_nonexistent_root() {
+        let root = std::path::Path::new("./non_existent_folder_xyz_123");
+        let (dirs, entries) = crate::kernel::search::suggest_directory_entries(
+            root,
+            "",
+            true,
+            true,
+            10,
+        );
+        assert!(dirs.is_empty());
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_suggest_directory_entries_limit_enforcement() {
+        let root = std::path::Path::new(".");
+        let (_dirs, entries) = crate::kernel::search::suggest_directory_entries(
+            root,
+            "",
+            true,
+            true,
+            5,
+        );
+        assert!(entries.len() <= 5);
+    }
+
+    #[test]
+    fn test_suggest_directory_entries_dirs_only() {
+        let root = std::path::Path::new(".");
+        let (dirs, entries) = crate::kernel::search::suggest_directory_entries(
+            root,
+            "",
+            false,
+            true,
+            20,
+        );
+        assert!(!entries.is_empty(), "Should return directories");
+        assert!(entries.iter().all(|e| e.kind == "directory"));
+        assert_eq!(dirs.len(), entries.len());
+        assert_eq!(dirs, entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_suggest_directory_entries_files_only() {
+        let root = std::path::Path::new(".");
+        let (dirs, entries) = crate::kernel::search::suggest_directory_entries(
+            root,
+            "",
+            true,
+            false,
+            20,
+        );
+        assert!(!entries.is_empty(), "Should return files");
+        assert!(entries.iter().all(|e| e.kind == "file"));
+        assert!(dirs.is_empty(), "dirs tuple output should be empty when include_dirs is false");
+    }
+
+    #[test]
+    fn test_suggest_directory_entries_case_insensitive() {
+        let root = std::path::Path::new(".");
+        let (_dirs, entries) = crate::kernel::search::suggest_directory_entries(
+            root,
+            "SEARCH.RS",
+            true,
+            false,
+            10,
+        );
+        assert!(!entries.is_empty(), "Case-insensitive query should find search.rs");
+        let found = entries.iter().find(|e| e.path.ends_with("search.rs"));
+        assert!(found.is_some());
+    }
+
+    #[test]
+    fn test_suggest_directory_entries_path_subsequence() {
+        let root = std::path::Path::new(".");
+        let (_dirs, entries) = crate::kernel::search::suggest_directory_entries(
+            root,
+            "kernel/search",
+            true,
+            false,
+            10,
+        );
+        assert!(!entries.is_empty(), "Path-based query should find src/kernel/search.rs");
+        let found = entries.iter().find(|e| e.path.ends_with("search.rs"));
+        assert!(found.is_some());
+    }
+
+    #[test]
+    fn test_suggest_directory_entries_performance() {
+        let root = std::path::Path::new(".");
+        let start = std::time::Instant::now();
+        let (_dirs, entries) = crate::kernel::search::suggest_directory_entries(
+            root,
+            "search",
+            true,
+            true,
+            50,
+        );
+        let duration = start.elapsed();
+        println!("Directory suggestion benchmark executed in: {:?}", duration);
+        assert!(!entries.is_empty());
+    }
 }
