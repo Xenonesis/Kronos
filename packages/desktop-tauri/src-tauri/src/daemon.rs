@@ -364,6 +364,35 @@ fn ensure_port_clean() {
         }
     }
 }
+#[cfg(windows)]
+fn sanitize_windows_path() -> Option<String> {
+    let path_var = env::var("PATH").ok()?;
+    let system_root = env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    let sys32 = format!("{}\\System32", system_root);
+    let wbem = format!("{}\\System32\\Wbem", system_root);
+    let powershell = format!("{}\\System32\\WindowsPowerShell\\v1.0", system_root);
+
+    let parts: Vec<&str> = path_var
+        .split(';')
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .filter(|p| !p.contains("whisper-rs-sys") && !p.contains("CMakeScratch") && !p.contains("CompilerId"))
+        .collect();
+
+    let mut deduplicated: Vec<String> = Vec::new();
+    for sys_dir in [&sys32, &system_root, &wbem, &powershell] {
+        if !deduplicated.iter().any(|d| d.eq_ignore_ascii_case(sys_dir)) {
+            deduplicated.push(sys_dir.to_string());
+        }
+    }
+    for p in parts {
+        if !deduplicated.iter().any(|d| d.eq_ignore_ascii_case(p)) {
+            deduplicated.push(p.to_string());
+        }
+    }
+    Some(deduplicated.join(";"))
+}
+
 
 pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
     if wait_for_daemon_health(1) {
@@ -416,6 +445,10 @@ pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
         #[cfg(not(windows))]
         cmd.env("NODE_PATH", node_paths.join(":"));
     }
+    #[cfg(windows)]
+    if let Some(clean_path) = sanitize_windows_path() {
+        cmd.env("PATH", &clean_path);
+    }
     cmd.current_dir(&work_dir).stdin(Stdio::null());
 
     if let Some(mut home) = dirs::home_dir() {
@@ -464,6 +497,10 @@ pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
                     fallback_cmd.env("NODE_PATH", node_paths.join(";"));
                     #[cfg(not(windows))]
                     fallback_cmd.env("NODE_PATH", node_paths.join(":"));
+                }
+                #[cfg(windows)]
+                if let Some(clean_path) = sanitize_windows_path() {
+                    fallback_cmd.env("PATH", &clean_path);
                 }
                 fallback_cmd.current_dir(&work_dir).stdin(Stdio::null());
                 if let Some(mut home) = dirs::home_dir() {

@@ -84,22 +84,59 @@ async function downloadToFile(options: DownloadToFileOptions): Promise<void> {
   }
 }
 
+export async function resolveTarCommand(): Promise<string> {
+  if (process.platform === "win32") {
+    const systemRoot = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows";
+    const candidates = [
+      path.join(systemRoot, "System32", "tar.exe"),
+      path.join(systemRoot, "SysWOW64", "tar.exe"),
+      "C:\\Program Files\\Git\\usr\\bin\\tar.exe",
+      "C:\\Program Files (x86)\\Git\\usr\\bin\\tar.exe",
+    ];
+    for (const candidate of candidates) {
+      try {
+        const s = await stat(candidate);
+        if (s.isFile()) {
+          return candidate;
+        }
+      } catch {
+        // continue
+      }
+    }
+  }
+  return "tar";
+}
+
 async function extractTarArchive(
   archivePath: string,
   destDir: string,
   signal?: AbortSignal,
 ): Promise<void> {
   await mkdir(destDir, { recursive: true });
+  const tarBin = await resolveTarCommand();
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawnProcess("tar", ["xf", archivePath, "-C", destDir], {
-      stdio: "inherit",
+    const child = spawnProcess(tarBin, ["xf", archivePath, "-C", destDir], {
+      stdio: ["ignore", "pipe", "pipe"],
       signal,
     });
-    child.on("error", reject);
+    let stderr = "";
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (err) => {
+      reject(new Error(`Failed to execute tar (${tarBin}): ${err.message}`));
+    });
     child.on("exit", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`tar exited with code ${code}`));
+      if (code === 0) {
+        resolve();
+      } else {
+        const errorDetail = stderr.trim();
+        const msg = errorDetail
+          ? `tar exited with code ${code}: ${errorDetail}`
+          : `tar exited with code ${code}`;
+        reject(new Error(msg));
+      }
     });
   });
 }

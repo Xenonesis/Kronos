@@ -14,7 +14,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import pino from "pino";
 
-import { ensureSherpaOnnxModel, getSherpaOnnxModelDir } from "./model-downloader.js";
+import {
+  ensureSherpaOnnxModel,
+  getSherpaOnnxModelDir,
+  resolveTarCommand,
+} from "./model-downloader.js";
 import { getSherpaOnnxModelSpec } from "./model-catalog.js";
 
 function makeTmpDir(): string {
@@ -109,5 +113,16 @@ describe("sherpa model downloader", () => {
     });
 
     expect(out).toBe(modelDir);
+  });
+
+  test("resolveTarCommand returns an executable tar string or absolute path", async () => {
+    const tarCmd = await resolveTarCommand();
+    expect(typeof tarCmd).toBe("string");
+    expect(tarCmd.length).toBeGreaterThan(0);
+    if (process.platform === "win32") {
+      expect(tarCmd.toLowerCase()).toMatch(/tar(\.exe)?$/);
+    } else {
+      expect(tarCmd).toBe("tar");
+    }
   });
 });
