@@ -283,6 +283,19 @@ fn get_kernel_telemetry() -> crate::kernel::telemetry::KernelTelemetry {
     crate::kernel::telemetry::get_kernel_telemetry()
 }
 
+#[tauri::command]
+async fn workspace_search(
+    query: String,
+    root: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<crate::kernel::search::SearchResult>, String> {
+    let target_root = root.unwrap_or_else(|| ".".to_string());
+    let path = std::path::PathBuf::from(target_root);
+    let results = crate::kernel::cli::execute_search_in(&query, &path)?;
+    let max_limit = limit.unwrap_or(100);
+    Ok(results.into_iter().take(max_limit).collect())
+}
+
 
 fn detect_and_configure_portable_mode() -> Option<PathBuf> {
     // Check KRONOS_PORTABLE=1 env var
@@ -1170,6 +1183,17 @@ try {{
         }}
         return null;
       }}
+      if (command === 'workspace_search') {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            return await window.__TAURI_INTERNALS__.invoke('workspace_search', args || {{}});
+          }}
+        }} catch (e) {{
+          console.error('[TauriBridge] workspace_search failed:', e);
+          throw e;
+        }}
+        return null;
+      }}
       return null;
     }}
     getKernelTelemetry: async function() {{
@@ -1364,6 +1388,7 @@ try {{
             check_app_update,
             install_app_update,
             get_kernel_telemetry,
+            workspace_search,
             desktop_window_minimize,
             desktop_window_toggle_maximize,
             desktop_window_close,
@@ -1577,5 +1602,19 @@ mod tests {
         std::env::remove_var("KRONOS_PORTABLE");
         std::env::remove_var("KRONOS_HOME");
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_workspace_search_command() {
+        let res = workspace_search(
+            "WorkspaceSearchIndex".to_string(),
+            Some(".".to_string()),
+            Some(10),
+        )
+        .await;
+        assert!(res.is_ok());
+        let matches = res.unwrap();
+        assert!(!matches.is_empty());
+        assert!(matches.iter().any(|m| m.path.contains("search.rs")));
     }
 }
