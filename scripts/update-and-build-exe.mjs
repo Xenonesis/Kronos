@@ -93,6 +93,18 @@ function needsServerBuild({ force, serverDistExists, changedFiles }) {
   return touchesSources(changedFiles, SERVER_SOURCE_PREFIXES);
 }
 
+function isAppDistValid(distDir) {
+  const indexPath = path.join(distDir, "index.html");
+  const expoDir = path.join(distDir, "_expo");
+  if (!existsSync(indexPath) || !existsSync(expoDir)) return false;
+  try {
+    const html = readFileSync(indexPath, "utf8");
+    return html.includes("<script");
+  } catch {
+    return false;
+  }
+}
+
 function needsAppBuild({ force, appDistExists, changedFiles }) {
   if (!appDistExists) return true;
   if (force) return true;
@@ -200,11 +212,12 @@ function buildInternalPackages(serverNeedsBuild) {
   }
 }
 
-function exportWebBundle(appNeedsBuild) {
+function exportWebBundle(appNeedsBuild, force) {
   console.log("\n\x1b[33m[3/5] Frontend web bundle export...\x1b[0m");
   if (appNeedsBuild) {
+    const clearArg = force ? " --clear" : "";
     run(
-      "npx cross-env NODE_ENV=production PASEO_WEB_PLATFORM=electron npx expo export --platform web --clear",
+      `npx cross-env NODE_ENV=production PASEO_WEB_PLATFORM=electron npx expo export --platform web${clearArg}`,
       path.join(rootDir, "packages", "app"),
     );
   } else {
@@ -244,7 +257,7 @@ async function main() {
   const serverDistExists = existsSync(
     path.join(rootDir, "packages/desktop-tauri/server-dist/dist"),
   );
-  const appDistExists = existsSync(path.join(rootDir, "packages/app/dist"));
+  const appDistExists = isAppDistValid(path.join(rootDir, "packages/app/dist"));
   const distInstallerPath = path.join(rootDir, "dist", `Kronos_${appVersion}_x64-setup.exe`);
   const hasDistInstaller = existsSync(distInstallerPath);
 
@@ -269,7 +282,7 @@ async function main() {
   const appNeedsBuild = needsAppBuild({ force, appDistExists, changedFiles });
 
   buildInternalPackages(serverNeedsBuild);
-  exportWebBundle(appNeedsBuild);
+  exportWebBundle(appNeedsBuild, force);
 
   // Step 4: Prepare Server Distribution Assets
   console.log(
