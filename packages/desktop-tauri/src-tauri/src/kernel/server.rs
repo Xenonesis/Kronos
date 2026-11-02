@@ -1699,12 +1699,28 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .unwrap_or_default();
             let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
             let agent_id = format!("ag_{:016x}", dur.as_nanos() as u64);
+            let payload = msg.get("payload");
+            let provider = msg.get("provider")
+                .or_else(|| payload.and_then(|p| p.get("provider")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("codex");
+            let model = msg.get("model")
+                .or_else(|| payload.and_then(|p| p.get("model")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("gpt-5.4");
+            let cwd = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let ws_id = msg.get("workspaceId")
+                .or_else(|| payload.and_then(|p| p.get("workspaceId")))
+                .and_then(|v| v.as_str());
 
-            let agent_snapshot = serde_json::json!({
+            let mut agent_snapshot = serde_json::json!({
                 "id": agent_id,
-                "provider": "omp",
-                "cwd": ".",
-                "model": "native",
+                "provider": provider,
+                "cwd": cwd,
+                "model": model,
                 "createdAt": now_iso,
                 "updatedAt": now_iso,
                 "lastUserMessageAt": null,
@@ -1727,6 +1743,9 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "title": null,
                 "labels": {}
             });
+            if let Some(w) = ws_id {
+                agent_snapshot["workspaceId"] = serde_json::json!(w);
+            }
 
             serde_json::json!({
                 "type": "agent.create.response",
@@ -1944,12 +1963,13 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
                 .unwrap_or_default();
             let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+            let entries = get_default_provider_snapshot_entries();
             serde_json::json!({
                 "type": "get_providers_snapshot_response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
-                    "entries": [],
+                    "entries": entries,
                     "generatedAt": now_iso
                 }
             })
@@ -1964,8 +1984,41 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
-                    "providers": [],
+                    "providers": [
+                        { "provider": "codex", "available": true },
+                        { "provider": "claude", "available": true },
+                        { "provider": "opencode", "available": true },
+                        { "provider": "pi", "available": true },
+                        { "provider": "omp", "available": true },
+                        { "provider": "copilot", "available": true }
+                    ],
                     "fetchedAt": now_iso
+                }
+            })
+        }
+        "refresh_providers_snapshot_request" => {
+            serde_json::json!({
+                "type": "refresh_providers_snapshot_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "acknowledged": true
+                }
+            })
+        }
+        "provider_diagnostic_request" => {
+            let payload = msg.get("payload");
+            let provider = msg.get("provider")
+                .or_else(|| payload.and_then(|p| p.get("provider")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("codex");
+            serde_json::json!({
+                "type": "provider_diagnostic_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "provider": provider,
+                    "diagnostic": "Provider ready"
                 }
             })
         }
@@ -3135,4 +3188,216 @@ async fn run_unix_socket(sock_path: String, mut shutdown_rx: broadcast::Receiver
         }
     }
     safe_remove_socket_file(p);
+}
+
+pub fn get_default_provider_snapshot_entries() -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({
+            "provider": "claude",
+            "status": "ready",
+            "enabled": true,
+            "source": "builtin",
+            "label": "Claude",
+            "description": "Anthropic Claude with MCP, tools, and reasoning",
+            "defaultModeId": "auto",
+            "modes": [
+                { "id": "auto", "label": "Auto mode", "description": "Review permission prompts automatically", "colorTier": "moderate" },
+                { "id": "plan", "label": "Plan Mode", "description": "Analyze codebase without executing tools or edits", "colorTier": "planning" },
+                { "id": "bypassPermissions", "label": "Bypass", "description": "Skip all permission prompts", "colorTier": "dangerous" }
+            ],
+            "models": [
+                {
+                    "provider": "claude",
+                    "id": "claude-opus-5",
+                    "label": "Opus 5",
+                    "description": "Opus 5 · Anthropic flagship reasoning model",
+                    "isDefault": true,
+                    "isSelectable": true,
+                    "contextWindowMaxTokens": 1000000
+                },
+                {
+                    "provider": "claude",
+                    "id": "claude-3-7-sonnet-20250219",
+                    "label": "Claude 3.7 Sonnet",
+                    "description": "Hybrid thinking and coding model",
+                    "isDefault": false,
+                    "isSelectable": true,
+                    "contextWindowMaxTokens": 200000
+                },
+                {
+                    "provider": "claude",
+                    "id": "claude-3-5-haiku-20241022",
+                    "label": "Claude 3.5 Haiku",
+                    "description": "Fast lightweight model",
+                    "isDefault": false,
+                    "isSelectable": true,
+                    "contextWindowMaxTokens": 200000
+                }
+            ]
+        }),
+        serde_json::json!({
+            "provider": "codex",
+            "status": "ready",
+            "enabled": true,
+            "source": "builtin",
+            "label": "Codex",
+            "description": "OpenAI Codex workspace agent",
+            "defaultModeId": "auto",
+            "modes": [
+                { "id": "auto", "label": "Default Permissions", "description": "Edit files and run commands with Codex default approval flow", "colorTier": "moderate" },
+                { "id": "full-access", "label": "Full Access", "description": "Edit files, run commands, and access network without prompts", "colorTier": "dangerous" }
+            ],
+            "models": [
+                {
+                    "provider": "codex",
+                    "id": "gpt-5.4",
+                    "label": "GPT-5.4",
+                    "description": "OpenAI flagship coding model",
+                    "isDefault": true,
+                    "isSelectable": true,
+                    "contextWindowMaxTokens": 272000
+                },
+                {
+                    "provider": "codex",
+                    "id": "gpt-5.4-mini",
+                    "label": "GPT-5.4 Mini",
+                    "description": "Fast coding and review model",
+                    "isDefault": false,
+                    "isSelectable": true,
+                    "contextWindowMaxTokens": 272000
+                },
+                {
+                    "provider": "codex",
+                    "id": "o3-mini",
+                    "label": "o3-mini",
+                    "description": "Reasoning model for complex logic",
+                    "isDefault": false,
+                    "isSelectable": true,
+                    "contextWindowMaxTokens": 200000
+                },
+                {
+                    "provider": "codex",
+                    "id": "gpt-4o",
+                    "label": "GPT-4o",
+                    "description": "Multimodal general purpose model",
+                    "isDefault": false,
+                    "isSelectable": true,
+                    "contextWindowMaxTokens": 128000
+                }
+            ]
+        }),
+        serde_json::json!({
+            "provider": "opencode",
+            "status": "ready",
+            "enabled": true,
+            "source": "builtin",
+            "label": "OpenCode",
+            "description": "Open-source coding assistant with multi-provider model support",
+            "defaultModeId": "build",
+            "modes": [
+                { "id": "build", "label": "Build", "description": "Allows edits and tool execution", "colorTier": "moderate" },
+                { "id": "plan", "label": "Plan", "description": "Read-only planning mode that avoids edits", "colorTier": "planning" }
+            ],
+            "models": [
+                {
+                    "provider": "opencode",
+                    "id": "deepseek-coder-v2",
+                    "label": "DeepSeek Coder V2",
+                    "description": "High capability open code model",
+                    "isDefault": true,
+                    "isSelectable": true,
+                    "contextWindowMaxTokens": 128000
+                },
+                {
+                    "provider": "opencode",
+                    "id": "qwen2.5-coder",
+                    "label": "Qwen 2.5 Coder",
+                    "description": "Alibaba Qwen coding model",
+                    "isDefault": false,
+                    "isSelectable": true,
+                    "contextWindowMaxTokens": 128000
+                }
+            ]
+        }),
+        serde_json::json!({
+            "provider": "pi",
+            "status": "ready",
+            "enabled": true,
+            "source": "builtin",
+            "label": "Pi",
+            "description": "Minimal terminal-based coding agent",
+            "defaultModeId": null,
+            "modes": [],
+            "models": [
+                {
+                    "provider": "pi",
+                    "id": "pi-default",
+                    "label": "Pi Default",
+                    "description": "Pi CLI coding model",
+                    "isDefault": true,
+                    "isSelectable": true,
+                    "contextWindowMaxTokens": 128000
+                }
+            ]
+        }),
+        serde_json::json!({
+            "provider": "omp",
+            "status": "ready",
+            "enabled": true,
+            "source": "builtin",
+            "label": "Oh My Pi",
+            "description": "Multi-provider coding agent with native approvals and subagents",
+            "defaultModeId": "full",
+            "modes": [
+                { "id": "full", "label": "Full Access", "description": "Yolo approval mode so tools run without prompts", "colorTier": "dangerous" },
+                { "id": "write", "label": "Write Approval", "description": "Reads are free, writes require approval", "colorTier": "moderate" },
+                { "id": "ask", "label": "Always Ask", "description": "Always ask approval for write and exec tools", "colorTier": "safe" }
+            ],
+            "models": [
+                {
+                    "provider": "omp",
+                    "id": "omp-default",
+                    "label": "OMP Default",
+                    "description": "Default Oh My Pi model configuration",
+                    "isDefault": true,
+                    "isSelectable": true,
+                    "contextWindowMaxTokens": 200000
+                }
+            ]
+        }),
+        serde_json::json!({
+            "provider": "copilot",
+            "status": "ready",
+            "enabled": true,
+            "source": "builtin",
+            "label": "Copilot",
+            "description": "GitHub Copilot via Agent Client Protocol",
+            "defaultModeId": "https://agentclientprotocol.com/protocol/session-modes#agent",
+            "modes": [
+                { "id": "https://agentclientprotocol.com/protocol/session-modes#agent", "label": "Agent", "description": "Default agent mode", "colorTier": "moderate" },
+                { "id": "https://agentclientprotocol.com/protocol/session-modes#plan", "label": "Plan", "description": "Plan mode", "colorTier": "planning" },
+                { "id": "allow-all", "label": "Allow All", "description": "Approve all Copilot tool requests", "colorTier": "dangerous" }
+            ],
+            "models": [
+                {
+                    "provider": "copilot",
+                    "id": "claude-3.5-sonnet",
+                    "label": "Claude 3.5 Sonnet",
+                    "description": "GitHub Copilot Claude 3.5 Sonnet",
+                    "isDefault": true,
+                    "isSelectable": true,
+                    "contextWindowMaxTokens": 200000
+                },
+                {
+                    "provider": "copilot",
+                    "id": "gpt-4o",
+                    "label": "GPT-4o",
+                    "description": "GitHub Copilot GPT-4o",
+                    "isDefault": false,
+                    "isSelectable": true,
+                    "contextWindowMaxTokens": 128000
+                }
+            ]
+        })
+    ]
 }

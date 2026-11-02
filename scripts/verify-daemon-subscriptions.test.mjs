@@ -29,6 +29,8 @@ test("server.rs contains handlers for all core subscriptions and directory sync 
     '"daemon.get_status.request"',
     '"workspace.create.request"',
     '"agent.create.request"',
+    '"refresh_providers_snapshot_request"',
+    '"provider_diagnostic_request"',
   ];
   for (const handler of requiredHandlers) {
     assert.ok(
@@ -53,5 +55,15 @@ test("server.rs contains handlers for all core subscriptions and directory sync 
   assert.ok(
     !content.includes('"projectIconRevision": 1,'),
     "projectIconRevision must never be a numeric literal (schema requires string)",
+  );
+
+  const protocolRsPath = join(
+    repoRoot,
+    "packages/desktop-tauri/src-tauri/src/kernel/protocol.rs",
+  );
+  const protocolContent = await readFile(protocolRsPath, "utf8");
+  assert.ok(
+    protocolContent.includes('"providersSnapshot": true'),
+    "protocol.rs must advertise providersSnapshot: true in server_info features",
   );
 });

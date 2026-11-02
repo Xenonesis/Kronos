@@ -1331,5 +1331,46 @@ mod tests {
         let status_resp = dispatch_session_message(&status_req).await;
         assert_eq!(status_resp["type"], "daemon.get_status.response");
         assert_eq!(status_resp["payload"]["listen"], "127.0.0.1:6767");
+
+        // 8. get_providers_snapshot_request
+        let prov_snap_req = serde_json::json!({
+            "type": "get_providers_snapshot_request",
+            "requestId": "req-snap-1"
+        });
+        let prov_snap_resp = dispatch_session_message(&prov_snap_req).await;
+        assert_eq!(prov_snap_resp["type"], "get_providers_snapshot_response");
+        let entries = prov_snap_resp["payload"]["entries"].as_array().expect("entries array");
+        assert!(!entries.is_empty());
+        assert!(entries.iter().any(|e| e["provider"] == "codex" && !e["models"].as_array().unwrap().is_empty()));
+        assert!(entries.iter().any(|e| e["provider"] == "claude" && !e["models"].as_array().unwrap().is_empty()));
+
+        // 9. list_available_providers_request
+        let list_prov_req = serde_json::json!({
+            "type": "list_available_providers_request",
+            "requestId": "req-list-prov-1"
+        });
+        let list_prov_resp = dispatch_session_message(&list_prov_req).await;
+        assert_eq!(list_prov_resp["type"], "list_available_providers_response");
+        let provs = list_prov_resp["payload"]["providers"].as_array().expect("providers array");
+        assert!(provs.iter().any(|p| p["provider"] == "codex" && p["available"] == true));
+
+        // 10. refresh_providers_snapshot_request
+        let ref_req = serde_json::json!({
+            "type": "refresh_providers_snapshot_request",
+            "requestId": "req-ref-1"
+        });
+        let ref_resp = dispatch_session_message(&ref_req).await;
+        assert_eq!(ref_resp["type"], "refresh_providers_snapshot_response");
+        assert_eq!(ref_resp["payload"]["acknowledged"], true);
+
+        // 11. provider_diagnostic_request
+        let diag_req = serde_json::json!({
+            "type": "provider_diagnostic_request",
+            "requestId": "req-diag-1",
+            "provider": "codex"
+        });
+        let diag_resp = dispatch_session_message(&diag_req).await;
+        assert_eq!(diag_resp["type"], "provider_diagnostic_response");
+        assert_eq!(diag_resp["payload"]["diagnostic"], "Provider ready");
     }
 }
