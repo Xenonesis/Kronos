@@ -1198,6 +1198,7 @@ mod tests {
         let proj = &add_resp["payload"]["project"];
         assert_eq!(proj["projectDisplayName"], "my-test-project");
         assert!(proj["projectId"].as_str().unwrap().starts_with("prj_"));
+        assert_eq!(proj["projectIconRevision"], "automatic:none:v1");
 
         // 2. List projects request
         let list_req = serde_json::json!({
@@ -1207,7 +1208,7 @@ mod tests {
         let list_resp = dispatch_session_message(&list_req).await;
         assert_eq!(list_resp["type"], "project.list.response");
         let projects = list_resp["payload"]["projects"].as_array().expect("projects array");
-        assert!(projects.iter().any(|p| p["projectDisplayName"] == "my-test-project"));
+        assert!(projects.iter().any(|p| p["projectDisplayName"] == "my-test-project" && p["projectIconRevision"] == "automatic:none:v1"));
 
         // 3. Open project request
         let open_req = serde_json::json!({
@@ -1221,6 +1222,33 @@ mod tests {
         let ws = &open_resp["payload"]["workspace"];
         assert_eq!(ws["name"], "my-test-project");
         assert_eq!(ws["projectDisplayName"], "my-test-project");
+
+        // 4. Workspace create request
+        let ws_create_req = serde_json::json!({
+            "type": "workspace.create.request",
+            "requestId": "req-ws-create-1",
+            "source": {
+                "kind": "directory",
+                "path": project_dir.to_str().unwrap()
+            }
+        });
+        let ws_create_resp = dispatch_session_message(&ws_create_req).await;
+        assert_eq!(ws_create_resp["type"], "workspace.create.response");
+        assert!(ws_create_resp["payload"]["error"].is_null());
+        let created_ws = &ws_create_resp["payload"]["workspace"];
+        assert_eq!(created_ws["name"], "my-test-project");
+
+        // 5. Agent create request
+        let ag_create_req = serde_json::json!({
+            "type": "agent.create.request",
+            "requestId": "req-ag-create-1",
+            "workspaceId": created_ws["id"].as_str().unwrap()
+        });
+        let ag_create_resp = dispatch_session_message(&ag_create_req).await;
+        assert_eq!(ag_create_resp["type"], "agent.create.response");
+        assert!(ag_create_resp["payload"]["error"].is_null());
+        let created_ag = &ag_create_resp["payload"]["agent"];
+        assert!(created_ag["id"].as_str().unwrap().starts_with("ag_"));
     }
 
     #[tokio::test]

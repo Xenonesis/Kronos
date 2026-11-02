@@ -27,8 +27,9 @@ test("server.rs contains handlers for all core subscriptions and directory sync 
     '"browser.host.register.request"',
     '"get_daemon_config_request"',
     '"daemon.get_status.request"',
+    '"workspace.create.request"',
+    '"agent.create.request"',
   ];
-
   for (const handler of requiredHandlers) {
     assert.ok(
       content.includes(handler),
@@ -48,5 +49,9 @@ test("server.rs contains handlers for all core subscriptions and directory sync 
   assert.ok(
     content.includes('"pageInfo"'),
     "fetch_workspaces_response must contain pageInfo",
+  );
+  assert.ok(
+    !content.includes('"projectIconRevision": 1,'),
+    "projectIconRevision must never be a numeric literal (schema requires string)",
   );
 });

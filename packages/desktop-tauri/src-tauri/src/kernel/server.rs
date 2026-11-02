@@ -1170,7 +1170,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     "projectDisplayName": p.name,
                     "projectCustomName": null,
                     "projectCustomIconRevision": null,
-                    "projectIconRevision": 1,
+                    "projectIconRevision": "automatic:none:v1",
                     "projectRootPath": p.path,
                     "projectKind": "directory"
                 })
@@ -1249,7 +1249,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                         "projectDisplayName": dir_name,
                         "projectCustomName": null,
                         "projectCustomIconRevision": null,
-                        "projectIconRevision": 1,
+                        "projectIconRevision": "automatic:none:v1",
                         "projectRootPath": abs_path,
                         "projectKind": "directory"
                     });
@@ -1430,7 +1430,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                             "projectDisplayName": dir_name,
                             "projectCustomName": null,
                             "projectCustomIconRevision": null,
-                            "projectIconRevision": 1,
+                            "projectIconRevision": "automatic:none:v1",
                             "projectRootPath": abs_path,
                             "projectKind": "directory"
                         });
@@ -1509,6 +1509,10 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             } else {
                 None
             };
+            let dur = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default();
+            let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
             let store = crate::kernel::config_store::get_config_store();
             let workspaces = store.list_workspaces();
             let projects = store.list_projects();
@@ -1537,7 +1541,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     "status": "done",
                     "statusEnteredAt": null,
                     "activityAt": null,
-                    "createdAt": null,
+                    "createdAt": now_iso,
                     "diffStat": null,
                     "scripts": [],
                     "gitRuntime": null,
@@ -1554,7 +1558,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     "projectDisplayName": p.name,
                     "projectCustomName": null,
                     "projectCustomIconRevision": null,
-                    "projectIconRevision": 1,
+                    "projectIconRevision": "automatic:none:v1",
                     "projectRootPath": p.path,
                     "projectKind": "directory"
                 })
@@ -1573,6 +1577,164 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                         "prevCursor": null,
                         "hasMore": false
                     }
+                }
+            })
+        }
+        "workspace.create.request" => {
+            let payload = msg.get("payload");
+            let source = msg.get("source").or_else(|| payload.and_then(|p| p.get("source")));
+            let source_path = source.and_then(|s| s.get("path")).and_then(|v| v.as_str())
+                .or_else(|| source.and_then(|s| s.get("cwd")).and_then(|v| v.as_str()))
+                .or_else(|| msg.get("path").and_then(|v| v.as_str()))
+                .or_else(|| msg.get("cwd").and_then(|v| v.as_str()))
+                .unwrap_or("")
+                .trim();
+
+            let project_id_req = source.and_then(|s| s.get("projectId")).and_then(|v| v.as_str())
+                .or_else(|| msg.get("projectId").and_then(|v| v.as_str()))
+                .unwrap_or("");
+
+            let requested_id = msg.get("workspaceId")
+                .or_else(|| payload.and_then(|p| p.get("workspaceId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let store = crate::kernel::config_store::get_config_store();
+
+            let (abs_path, project_id, dir_name) = if !source_path.is_empty() {
+                let p = std::path::Path::new(source_path);
+                let canonical = canonicalize_path(p);
+                let abs = canonical.to_string_lossy().to_string();
+                let name = canonical.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("workspace")
+                    .to_string();
+
+                let pid = if !project_id_req.is_empty() {
+                    project_id_req.to_string()
+                } else {
+                    let normalized = abs.to_lowercase().replace('\\', "/");
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    std::hash::Hash::hash(&normalized, &mut hasher);
+                    let h = std::hash::Hasher::finish(&hasher);
+                    format!("prj_{:016x}", h)
+                };
+                (abs, pid, name)
+            } else if !project_id_req.is_empty() {
+                if let Some(proj) = store.get_project(project_id_req) {
+                    (proj.path, proj.id, proj.name)
+                } else {
+                    (".".to_string(), project_id_req.to_string(), "workspace".to_string())
+                }
+            } else {
+                (".".to_string(), "prj_default".to_string(), "workspace".to_string())
+            };
+
+            let ws_id = if requested_id.starts_with("wks_") && requested_id.len() == 20 {
+                requested_id.to_string()
+            } else {
+                let dur = std::time::SystemTime::now()
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default();
+                format!("wks_{:016x}", dur.as_nanos() as u64)
+            };
+
+            let dur = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default();
+            let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+
+            let ws_record = crate::kernel::config_store::WorkspaceRecord {
+                id: ws_id.clone(),
+                project_id: project_id.clone(),
+                name: dir_name.clone(),
+                path: abs_path.clone(),
+                kind: "directory".to_string(),
+            };
+            let _ = store.add_workspace(ws_record);
+
+            let is_git = std::path::Path::new(&abs_path).join(".git").exists();
+            let project_kind = if is_git { "git" } else { "directory" };
+
+            let workspace_descriptor = serde_json::json!({
+                "id": ws_id,
+                "projectId": project_id,
+                "projectDisplayName": dir_name,
+                "projectCustomName": null,
+                "projectCustomIconRevision": null,
+                "projectRootPath": abs_path,
+                "workspaceDirectory": abs_path,
+                "setupStatus": null,
+                "projectKind": project_kind,
+                "workspaceKind": "directory",
+                "name": dir_name,
+                "title": null,
+                "pinnedAt": null,
+                "background": false,
+                "archivingAt": null,
+                "status": "done",
+                "statusEnteredAt": null,
+                "activityAt": null,
+                "createdAt": now_iso,
+                "diffStat": null,
+                "scripts": [],
+                "gitRuntime": null,
+                "githubRuntime": null
+            });
+
+            serde_json::json!({
+                "type": "workspace.create.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "workspace": workspace_descriptor,
+                    "setupTerminalId": null,
+                    "error": null
+                }
+            })
+        }
+        "agent.create.request" | "create_agent_request" => {
+            let dur = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default();
+            let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+            let agent_id = format!("ag_{:016x}", dur.as_nanos() as u64);
+
+            let agent_snapshot = serde_json::json!({
+                "id": agent_id,
+                "provider": "omp",
+                "cwd": ".",
+                "model": "native",
+                "createdAt": now_iso,
+                "updatedAt": now_iso,
+                "lastUserMessageAt": null,
+                "status": "idle",
+                "capabilities": {
+                    "canInterrupt": true,
+                    "canSendInput": true,
+                    "canSpawnTerminals": true,
+                    "supportsStreaming": true,
+                    "supportsSessionPersistence": false,
+                    "supportsDynamicModes": false,
+                    "supportsMcpServers": true,
+                    "supportsReasoningStream": false,
+                    "supportsToolInvocations": true
+                },
+                "currentModeId": null,
+                "availableModes": [],
+                "pendingPermissions": [],
+                "persistence": null,
+                "title": null,
+                "labels": {}
+            });
+
+            serde_json::json!({
+                "type": "agent.create.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "agent": agent_snapshot,
+                    "error": null
                 }
             })
         }
