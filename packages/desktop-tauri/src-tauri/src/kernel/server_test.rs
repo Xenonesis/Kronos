@@ -1450,6 +1450,29 @@ mod tests {
         assert_eq!(ref_resp["type"], "refresh_providers_snapshot_response");
         assert_eq!(ref_resp["payload"]["acknowledged"], true);
 
+        // 10b. subscribe_providers_request and verify push update
+        let mut push_rx = crate::kernel::server::get_provider_push_tx().subscribe();
+        let sub_prov_req = serde_json::json!({
+            "type": "subscribe_providers_request",
+            "requestId": "req-sub-prov-1"
+        });
+        let sub_prov_resp = dispatch_session_message(&sub_prov_req).await;
+        assert_eq!(sub_prov_resp["type"], "subscribe_providers_response");
+        assert_eq!(sub_prov_resp["payload"]["subscriptionId"], "sub-providers-req-sub-prov-1");
+        
+        // Wait for pushed update frame
+        let pushed_frame = tokio::time::timeout(std::time::Duration::from_secs(3), push_rx.recv())
+            .await
+            .expect("timeout waiting for providers_snapshot_update")
+            .expect("recv error");
+        let parsed_update: serde_json::Value = serde_json::from_str(&pushed_frame).expect("valid json update");
+        assert_eq!(parsed_update["type"], "session");
+        assert_eq!(parsed_update["message"]["type"], "providers_snapshot_update");
+        let pushed_entries = parsed_update["message"]["payload"]["entries"].as_array().expect("entries array");
+        let claude_entry = pushed_entries.iter().find(|e| e["provider"] == "claude").expect("claude entry");
+        let claude_models = claude_entry["models"].as_array().expect("claude models");
+        assert!(!claude_models.is_empty(), "Claude must have models populated!");
+        assert!(claude_models.iter().any(|m| m["id"] == "claude-opus-5-5"));
         // 11. provider_diagnostic_request
         let diag_req = serde_json::json!({
             "type": "provider_diagnostic_request",

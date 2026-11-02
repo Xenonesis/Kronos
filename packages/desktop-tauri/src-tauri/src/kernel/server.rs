@@ -13,6 +13,12 @@ use crate::kernel::protocol::{RpcEnvelope, RpcResponse};
 static PROVIDER_SNAPSHOT_CACHE: std::sync::LazyLock<
     tokio::sync::Mutex<Option<(Instant, String, Vec<serde_json::Value>)>>,
 > = std::sync::LazyLock::new(|| tokio::sync::Mutex::new(None));
+static PROVIDER_PUSH_TX: std::sync::LazyLock<broadcast::Sender<String>> =
+    std::sync::LazyLock::new(|| broadcast::channel::<String>(16).0);
+
+pub fn get_provider_push_tx() -> broadcast::Sender<String> {
+    PROVIDER_PUSH_TX.clone()
+}
 static MCP_HUB: std::sync::OnceLock<crate::kernel::mcp::McpHub> = std::sync::OnceLock::new();
 
 pub fn get_mcp_hub() -> &'static crate::kernel::mcp::McpHub {
@@ -3469,6 +3475,41 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "error": resp.error,
             })
         }
+        "subscribe_providers_request" | "subscribe_providers" => {
+            // ACK the subscription immediately, then push providers_snapshot_update via broadcast channel
+            let req_id = request_id.to_owned();
+            let cwd = msg.get("cwd").and_then(|v| v.as_str()).unwrap_or(".").to_owned();
+            let push_tx = get_provider_push_tx();
+            tokio::spawn(async move {
+                let entries = get_provider_snapshot_entries(&cwd).await;
+                let dur = std::time::SystemTime::now()
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default();
+                let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+                let update = serde_json::json!({
+                    "type": "session",
+                    "message": {
+                        "type": "providers_snapshot_update",
+                        "requestId": req_id,
+                        "payload": {
+                            "requestId": req_id,
+                            "entries": entries,
+                            "generatedAt": now_iso
+                        }
+                    }
+                });
+                let _ = push_tx.send(serde_json::to_string(&update).unwrap_or_default());
+            });
+            serde_json::json!({
+                "type": "subscribe_providers_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "subscriptionId": format!("sub-providers-{}", request_id),
+                    "error": null
+                }
+            })
+        }
         msg_type if msg_type.contains("subscribe") || msg_type.contains("set_subscription") => {
             let resp_type = if msg_type.ends_with(".request") {
                 format!("{}.response", &msg_type[..msg_type.len() - 8])
@@ -3688,6 +3729,7 @@ async fn handle_ws(mut socket: WebSocket, mut shutdown_rx: broadcast::Receiver<(
     let mut watcher_rx = get_watcher_engine().subscribe_events();
     let mut crdt_rx = get_crdt_engine().subscribe();
     let mut term_output_rx = crate::native_pty::get_pty_manager().subscribe_output();
+    let mut provider_push_rx = get_provider_push_tx().subscribe();
     let mut subscribed_terminals: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
     let mut watcher_active = true;
     let mut crdt_active = true;
@@ -3708,6 +3750,17 @@ async fn handle_ws(mut socket: WebSocket, mut shutdown_rx: broadcast::Receiver<(
                             break;
                         }
                     }
+                }
+            }
+            provider_update = provider_push_rx.recv() => {
+                match provider_update {
+                    Ok(text) => {
+                        if socket.send(Message::Text(text.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {}
                 }
             }
             events_res = watcher_rx.recv(), if watcher_active => {
@@ -4445,23 +4498,44 @@ pub(crate) fn codex_models_from_response(response: &serde_json::Value) -> Vec<se
 }
 
 async fn discover_claude_configured_model() -> Vec<serde_json::Value> {
-    let configured_model = std::env::var("ANTHROPIC_MODEL")
-        .ok()
-        .map(|model| model.trim().to_owned())
-        .filter(|model| !model.is_empty());
-    let model = if configured_model.is_some() {
-        configured_model
-    } else if let Ok(config_dir) = std::env::var("CLAUDE_CONFIG_DIR") {
-        read_claude_settings_model(std::path::Path::new(&config_dir)).await
-    } else if let Some(home) = dirs::home_dir() {
-        read_claude_settings_model(&home.join(".claude")).await
-    } else {
-        None
+    // Determine the user's configured/preferred model (used to mark isDefault)
+    let preferred_id = {
+        let from_env = std::env::var("ANTHROPIC_MODEL")
+            .ok()
+            .map(|m| m.trim().to_owned())
+            .filter(|m| !m.is_empty());
+        if from_env.is_some() {
+            from_env
+        } else if let Ok(config_dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+            read_claude_settings_model(std::path::Path::new(&config_dir)).await
+        } else if let Some(home) = dirs::home_dir() {
+            read_claude_settings_model(&home.join(".claude")).await
+        } else {
+            None
+        }
     };
 
-    model
-        .into_iter()
-        .map(|id| dynamic_model("claude", &id, None, None, true, None))
+    // Static Claude model catalog — always returned so the UI has models to pick from.
+    // Claude Code requires no local binary for these; the user authenticates via API key.
+    static CLAUDE_MODELS: &[(&str, &str, &str, bool, u64)] = &[
+        ("claude-opus-5-5",    "Opus 5.5",    "Opus 5.5 · Latest release",                     true,  200_000),
+        ("claude-opus-5",      "Opus 5",      "Opus 5 · Previous release",                     false, 200_000),
+        ("claude-sonnet-5-5",  "Sonnet 5.5",  "Sonnet 5.5 · Best for everyday tasks",          false, 200_000),
+        ("claude-sonnet-5",    "Sonnet 5",    "Sonnet 5 · Previous release",                   false, 200_000),
+        ("claude-opus-4-6",    "Opus 4.6",    "Opus 4.6 · Most capable for complex work",      false, 200_000),
+        ("claude-sonnet-4-6",  "Sonnet 4.6",  "Sonnet 4.6 · Great for everyday work",          false, 200_000),
+        ("claude-haiku-4-6",   "Haiku 4.6",   "Haiku 4.6 · Fastest and most compact",          false, 200_000),
+        ("claude-opus-4-5",    "Opus 4.5",    "Opus 4.5 · Previous major release",             false, 200_000),
+        ("claude-sonnet-4-5",  "Sonnet 4.5",  "Sonnet 4.5 · Previous release",                false, 200_000),
+        ("claude-haiku-4-5",   "Haiku 4.5",   "Haiku 4.5 · Previous compact release",         false, 200_000),
+    ];
+
+    CLAUDE_MODELS
+        .iter()
+        .map(|&(id, label, description, _default_flag, ctx)| {
+            let is_default = preferred_id.as_deref().map(|p| p == id).unwrap_or(id == "claude-opus-5-5");
+            dynamic_model("claude", id, Some(label), Some(description), is_default, Some(ctx))
+        })
         .collect()
 }
 
