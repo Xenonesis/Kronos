@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "terminal_attention_required"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        },
+        "serverId": {
+          "type": "string"
+        },
+        "terminalId": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["finished", "needs_input"]
+        },
+        "title": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "shouldNotify": {
+          "type": "boolean"
+        }
+      },
+      "required": ["terminalId", "cwd", "reason", "title", "body", "shouldNotify"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

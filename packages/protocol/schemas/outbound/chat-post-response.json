@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "chat/post/response"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "roomId": {
+                  "type": "string"
+                },
+                "authorAgentId": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": "string"
+                },
+                "replyToMessageId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "mentionAgentIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "createdAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "roomId",
+                "authorAgentId",
+                "body",
+                "replyToMessageId",
+                "mentionAgentIds",
+                "createdAt"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["requestId", "message", "error"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

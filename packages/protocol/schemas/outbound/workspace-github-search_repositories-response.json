@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "workspace.github.search_repositories.response"
+    },
+    "payload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "success"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "repositories": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "nameWithOwner": {
+                    "type": "string",
+                    "minLength": 3
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": ["public", "private", "internal"]
+                  },
+                  "updatedAt": {
+                    "type": "string"
+                  },
+                  "cloneUrl": {
+                    "type": "string",
+                    "minLength": 3
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "nameWithOwner",
+                  "description",
+                  "visibility",
+                  "updatedAt",
+                  "cloneUrl"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "available": {
+              "type": "boolean",
+              "const": true
+            },
+            "error": {
+              "type": "null"
+            }
+          },
+          "required": ["status", "requestId", "repositories", "available", "error"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "unavailable"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "repositories": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "nameWithOwner": {
+                    "type": "string",
+                    "minLength": 3
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": ["public", "private", "internal"]
+                  },
+                  "updatedAt": {
+                    "type": "string"
+                  },
+                  "cloneUrl": {
+                    "type": "string",
+                    "minLength": 3
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "nameWithOwner",
+                  "description",
+                  "visibility",
+                  "updatedAt",
+                  "cloneUrl"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "reason": {
+              "type": "string",
+              "const": "gh_missing"
+            },
+            "available": {
+              "type": "boolean",
+              "const": false
+            },
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": ["status", "requestId", "repositories", "reason", "available", "error"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "unauthenticated"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "repositories": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "nameWithOwner": {
+                    "type": "string",
+                    "minLength": 3
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": ["public", "private", "internal"]
+                  },
+                  "updatedAt": {
+                    "type": "string"
+                  },
+                  "cloneUrl": {
+                    "type": "string",
+                    "minLength": 3
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "nameWithOwner",
+                  "description",
+                  "visibility",
+                  "updatedAt",
+                  "cloneUrl"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "available": {
+              "type": "boolean",
+              "const": false
+            },
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": ["status", "requestId", "repositories", "available", "error"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "error"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "repositories": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "nameWithOwner": {
+                    "type": "string",
+                    "minLength": 3
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": ["public", "private", "internal"]
+                  },
+                  "updatedAt": {
+                    "type": "string"
+                  },
+                  "cloneUrl": {
+                    "type": "string",
+                    "minLength": 3
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "nameWithOwner",
+                  "description",
+                  "visibility",
+                  "updatedAt",
+                  "cloneUrl"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "available": {
+              "type": "boolean",
+              "const": true
+            },
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": ["status", "requestId", "repositories", "available", "error"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

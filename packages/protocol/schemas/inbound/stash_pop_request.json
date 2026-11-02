@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "stash_pop_request"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "stashIndex": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "cwd", "stashIndex", "requestId"],
+  "additionalProperties": false
+}

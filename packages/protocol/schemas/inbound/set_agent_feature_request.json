@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "set_agent_feature_request"
+    },
+    "agentId": {
+      "type": "string"
+    },
+    "featureId": {
+      "type": "string"
+    },
+    "value": {},
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "agentId", "featureId", "value", "requestId"],
+  "additionalProperties": false
+}

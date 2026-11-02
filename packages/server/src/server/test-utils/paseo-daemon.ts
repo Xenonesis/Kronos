@@ -2,10 +2,13 @@ import { BuiltinPluginLoader } from "../plugins/builtin/index.js";
 import os from "node:os";
 import path from "node:path";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import net from "node:net";
+import { spawn } from "node:child_process";
 
 import pino from "pino";
 import {
   createPaseoDaemon,
+  type PaseoDaemon,
   type PaseoDaemonConfig,
   type PaseoOpenAIConfig,
   type PaseoSpeechConfig,
@@ -61,7 +64,7 @@ interface TestPaseoDaemonOptions {
 
 export interface TestPaseoDaemon {
   config: PaseoDaemonConfig;
-  daemon: Awaited<ReturnType<typeof createPaseoDaemon>>;
+  daemon: PaseoDaemon;
   port: number;
   paseoHome: string;
   staticDir: string;
@@ -70,10 +73,7 @@ export interface TestPaseoDaemon {
 
 const TEST_DAEMON_START_TIMEOUT_MS = 20_000;
 
-async function startDaemonWithTimeout(
-  daemon: Awaited<ReturnType<typeof createPaseoDaemon>>,
-  timeoutMs: number,
-): Promise<void> {
+async function startDaemonWithTimeout(daemon: PaseoDaemon, timeoutMs: number): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const timeoutHandle = setTimeout(() => {
       const timeoutError = new Error(
@@ -97,9 +97,86 @@ async function startDaemonWithTimeout(
   });
 }
 
+async function createTestDaemonFromBinary(
+  binPath: string,
+  options: TestPaseoDaemonOptions,
+): Promise<TestPaseoDaemon> {
+  const { config, paseoHomeRoot, paseoHome, staticDir } = await prepareTestDaemonConfig(options);
+  const server = net.createServer();
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const port = (server.address() as net.AddressInfo).port;
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+
+  const child = spawn(binPath, ["--port", String(port)], {
+    env: {
+      ...process.env,
+      KRONOS_PORT: String(port),
+      PASEO_PORT: String(port),
+      PASEO_HOME: paseoHome,
+    },
+    stdio: "pipe",
+  });
+
+  const start = Date.now();
+  let healthy = false;
+  while (Date.now() - start < 15_000) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/health`);
+      if (res.ok) {
+        healthy = true;
+        break;
+      }
+    } catch {
+      // retry
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  if (!healthy) {
+    child.kill();
+    throw new Error(`Failed to start test daemon binary at ${binPath} on port ${port}`);
+  }
+
+  return {
+    config,
+    daemon: undefined as unknown as PaseoDaemon,
+    port,
+    paseoHome,
+    staticDir,
+    close: async () => {
+      child.kill();
+      if (options.cleanup ?? true) {
+        await removeDirs([paseoHomeRoot, staticDir]);
+      }
+    },
+  };
+}
+
 export async function createTestPaseoDaemon(
   options: TestPaseoDaemonOptions = {},
 ): Promise<TestPaseoDaemon> {
+  if (process.env.PASEO_TEST_DAEMON_URL) {
+    const rawUrl = process.env.PASEO_TEST_DAEMON_URL;
+    const parsedUrl = new URL(rawUrl.startsWith("http") ? rawUrl : `http://${rawUrl}`);
+    const port = parseInt(parsedUrl.port, 10) || (parsedUrl.protocol === "https:" ? 443 : 80);
+    const { config, paseoHome, staticDir } = await prepareTestDaemonConfig(options);
+    return {
+      config,
+      daemon: undefined as unknown as PaseoDaemon,
+      port,
+      paseoHome,
+      staticDir,
+      close: async () => {},
+    };
+  }
+
+  if (process.env.KRONOS_TEST_DAEMON_BIN) {
+    return createTestDaemonFromBinary(process.env.KRONOS_TEST_DAEMON_BIN, options);
+  }
   const maxAttempts = 8;
   let lastError: unknown;
 

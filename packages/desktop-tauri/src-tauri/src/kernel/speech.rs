@@ -326,4 +326,67 @@ impl SpeechEngine {
         let normalized = Self::normalize_pcm(samples, config)?;
         self.transcribe_pcm(&normalized)
     }
+
+    pub async fn transcribe_openai(
+        api_key: &str,
+        wav_bytes: Vec<u8>,
+    ) -> Result<String, String> {
+        let client = reqwest::Client::new();
+        let part = reqwest::multipart::Part::bytes(wav_bytes)
+            .file_name("audio.wav")
+            .mime_str("audio/wav")
+            .map_err(|e| e.to_string())?;
+
+        let form = reqwest::multipart::Form::new()
+            .text("model", "whisper-1")
+            .part("file", part);
+
+        let res = client
+            .post("https://api.openai.com/v1/audio/transcriptions")
+            .bearer_auth(api_key)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| format!("OpenAI STT request failed: {e}"))?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let err_text = res.text().await.unwrap_or_default();
+            return Err(format!("OpenAI STT error {status}: {err_text}"));
+        }
+
+        let json: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+        Ok(json["text"].as_str().unwrap_or("").to_string())
+    }
+
+    pub async fn synthesize_openai(
+        api_key: &str,
+        text: &str,
+        voice: &str,
+    ) -> Result<Vec<u8>, String> {
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({
+            "model": "tts-1",
+            "input": text,
+            "voice": voice,
+            "response_format": "mp3"
+        });
+
+        let res = client
+            .post("https://api.openai.com/v1/audio/speech")
+            .bearer_auth(api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("OpenAI TTS request failed: {e}"))?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let err_text = res.text().await.unwrap_or_default();
+            return Err(format!("OpenAI TTS error {status}: {err_text}"));
+        }
+
+        let bytes = res.bytes().await.map_err(|e| e.to_string())?;
+        Ok(bytes.to_vec())
+    }
 }

@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "checkout.commits.list.response"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "baseRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "sha": {
+                "type": "string"
+              },
+              "shortSha": {
+                "type": "string"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "authorName": {
+                "type": "string"
+              },
+              "authorDate": {
+                "type": "string"
+              },
+              "isOnRemote": {
+                "type": "boolean"
+              },
+              "isOnBase": {
+                "type": "boolean"
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "additions": {
+                      "type": "number"
+                    },
+                    "deletions": {
+                      "type": "number"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["added", "modified", "deleted", "renamed"]
+                    }
+                  },
+                  "required": ["path", "additions", "deletions"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "sha",
+              "shortSha",
+              "subject",
+              "authorName",
+              "authorDate",
+              "isOnRemote",
+              "files"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": ["NOT_GIT_REPO", "NOT_ALLOWED", "MERGE_CONFLICT", "UNKNOWN"]
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": ["code", "message"],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": ["cwd", "baseRef", "commits", "error", "requestId"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "workspace.label.list.response"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "subscriptionId": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "color": {
+                "type": "string",
+                "enum": [
+                  "violet",
+                  "sky",
+                  "emerald",
+                  "orange",
+                  "pink",
+                  "indigo",
+                  "teal",
+                  "red",
+                  "amber",
+                  "blue"
+                ]
+              }
+            },
+            "required": ["name", "color"],
+            "additionalProperties": false
+          }
+        },
+        "sync": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["snapshot", "changes"]
+            },
+            "generation": {
+              "type": "string"
+            },
+            "headSeq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "removals": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "seq": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": ["name", "seq"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["mode", "generation", "headSeq", "removals"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["requestId", "labels", "sync"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

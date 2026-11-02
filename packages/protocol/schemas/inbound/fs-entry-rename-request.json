@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "fs.entry.rename.request"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "cwd", "path", "name", "requestId"],
+  "additionalProperties": false
+}

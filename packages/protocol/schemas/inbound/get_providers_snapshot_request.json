@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "get_providers_snapshot_request"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "ifNoneMatch": {
+      "type": "string"
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "requestId"],
+  "additionalProperties": false
+}

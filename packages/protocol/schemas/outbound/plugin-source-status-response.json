@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "plugin.source.status.response"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "plugins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$"
+              },
+              "source": {
+                "type": "string",
+                "enum": ["directory", "git"]
+              },
+              "npm": {
+                "type": "object",
+                "properties": {
+                  "packageName": {
+                    "type": "string"
+                  },
+                  "requestedSpec": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string"
+                  },
+                  "integrity": {
+                    "type": "string"
+                  }
+                },
+                "required": ["packageName", "requestedSpec", "version", "integrity"],
+                "additionalProperties": false
+              },
+              "installation": {
+                "type": "object",
+                "properties": {
+                  "identity": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "directory"
+                          },
+                          "path": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["kind", "path"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "git"
+                          },
+                          "remote": {
+                            "type": "string"
+                          },
+                          "pluginPath": {
+                            "type": "string"
+                          },
+                          "registry": {
+                            "type": "object",
+                            "properties": {
+                              "url": {
+                                "type": "string",
+                                "format": "uri"
+                              },
+                              "id": {
+                                "type": "string",
+                                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*\\/[a-z0-9]+(?:-[a-z0-9]+)*$"
+                              }
+                            },
+                            "required": ["url", "id"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": ["kind", "remote", "pluginPath"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "npm"
+                          },
+                          "packageName": {
+                            "type": "string"
+                          },
+                          "pluginPath": {
+                            "type": "string"
+                          },
+                          "registry": {
+                            "type": "object",
+                            "properties": {
+                              "url": {
+                                "type": "string",
+                                "format": "uri"
+                              },
+                              "id": {
+                                "type": "string",
+                                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*\\/[a-z0-9]+(?:-[a-z0-9]+)*$"
+                              }
+                            },
+                            "required": ["url", "id"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": ["kind", "packageName", "pluginPath"],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "currentRevision": {
+                    "type": "string"
+                  }
+                },
+                "required": ["identity"],
+                "additionalProperties": false
+              },
+              "path": {
+                "type": "string"
+              },
+              "remote": {
+                "type": "string"
+              },
+              "ref": {
+                "type": "string"
+              },
+              "currentCommit": {
+                "type": "string"
+              },
+              "latestCommit": {
+                "type": "string"
+              },
+              "commitsBehind": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "updateAvailable": {
+                "type": "boolean"
+              }
+            },
+            "required": ["id", "source", "path"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["requestId", "plugins"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

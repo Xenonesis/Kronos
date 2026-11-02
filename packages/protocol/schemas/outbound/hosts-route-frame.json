@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "hosts.route.frame"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        },
+        "data": {
+          "type": "string"
+        },
+        "binary": {
+          "type": "boolean",
+          "const": false
+        }
+      },
+      "required": ["subscriptionId", "data", "binary"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

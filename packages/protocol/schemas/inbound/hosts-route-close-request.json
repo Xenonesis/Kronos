@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "hosts.route.close.request"
+    },
+    "routeId": {
+      "type": "string"
+    },
+    "scopeId": {
+      "type": "string"
+    }
+  },
+  "required": ["type"],
+  "additionalProperties": false
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "dictation_stream_finish"
+    },
+    "dictationId": {
+      "type": "string"
+    },
+    "finalSeq": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": ["type", "dictationId", "finalSeq"],
+  "additionalProperties": false
+}

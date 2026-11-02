@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "checkout.diff.get.request"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "compare": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["uncommitted", "base", "all"]
+        },
+        "baseRef": {
+          "type": "string"
+        },
+        "ignoreWhitespace": {
+          "type": "boolean"
+        }
+      },
+      "required": ["mode"],
+      "additionalProperties": false
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "cwd", "compare", "requestId"],
+  "additionalProperties": false
+}

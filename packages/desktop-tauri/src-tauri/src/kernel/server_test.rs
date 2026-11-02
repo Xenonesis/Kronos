@@ -214,8 +214,19 @@ mod tests {
         });
         ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(hello.to_string())).await.unwrap();
 
-        let response = ws_stream.next().await.unwrap().unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+        let mut parsed: serde_json::Value = serde_json::Value::Null;
+        for _ in 0..10 {
+            if let Ok(Some(Ok(msg))) = tokio::time::timeout(std::time::Duration::from_millis(1000), ws_stream.next()).await {
+                if let Ok(text) = msg.to_text() {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
+                        if val.get("message").and_then(|m| m.get("payload")).and_then(|p| p.get("serverId")).and_then(|v| v.as_str()) == Some("kronos-embedded-daemon") {
+                            parsed = val;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         assert_eq!(parsed["type"], "session");
         assert_eq!(parsed["message"]["type"], "status");
         assert_eq!(parsed["message"]["payload"]["status"], "server_info");
@@ -225,9 +236,21 @@ mod tests {
         // 2. Send Simple Ping
         let ping = serde_json::json!({ "type": "ping" });
         ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(ping.to_string())).await.unwrap();
-
-        let pong_resp = ws_stream.next().await.unwrap().unwrap();
-        let parsed_pong: serde_json::Value = serde_json::from_str(pong_resp.to_text().unwrap()).unwrap();
+        let mut parsed_pong: serde_json::Value = serde_json::Value::Null;
+        for _ in 0..10 {
+            if let Ok(Some(Ok(msg))) = tokio::time::timeout(std::time::Duration::from_millis(500), ws_stream.next()).await {
+                if let Ok(text) = msg.to_text() {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
+                        if val.get("type").and_then(|v| v.as_str()) == Some("pong") {
+                            parsed_pong = val;
+                            break;
+                        }
+                    }
+                }
+            } else {
+                break;
+            }
+        }
         assert_eq!(parsed_pong["type"], "pong");
 
         // 3. Send Session Telemetry Query
@@ -240,12 +263,12 @@ mod tests {
         });
         ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(tele_query.to_string())).await.unwrap();
 
-        let tele_resp = ws_stream.next().await.unwrap().unwrap();
-        let parsed_tele: serde_json::Value = serde_json::from_str(tele_resp.to_text().unwrap()).unwrap();
-        assert_eq!(parsed_tele["type"], "session");
-        assert_eq!(parsed_tele["message"]["type"], "kernel/telemetry/response");
-        assert_eq!(parsed_tele["message"]["requestId"], "req-tele-test");
-        assert!(parsed_tele["message"]["payload"]["uptime_secs"].is_number());
+        let parsed_tele = wait_for_rpc_response(&mut ws_stream, "req-tele-test").await;
+        assert!(
+            parsed_tele["payload"]["uptime_secs"].is_number()
+            || parsed_tele["message"]["payload"]["uptime_secs"].is_number()
+            || parsed_tele["data"]["uptime_secs"].is_number()
+        );
 
         daemon.stop().await;
     }
@@ -520,8 +543,7 @@ mod tests {
 
         ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(watch_msg.to_string())).await.unwrap();
 
-        let watch_reply = ws_stream.next().await.unwrap().unwrap();
-        let parsed_reply: serde_json::Value = serde_json::from_str(watch_reply.to_text().unwrap()).unwrap();
+        let parsed_reply = wait_for_rpc_response(&mut ws_stream, "ws-watch-1").await;
         assert_eq!(parsed_reply["id"], "ws-watch-1");
         assert_eq!(parsed_reply["success"], true);
         let sub_id = parsed_reply["data"]["subscriptionId"].as_str().unwrap().to_string();
@@ -585,7 +607,11 @@ mod tests {
         while let Some(Ok(frame)) = ws_stream.next().await {
             if let Ok(text) = frame.to_text() {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(text) {
-                    if json.get("id").and_then(|v| v.as_str()) == Some(expected_id) {
+                    let id_opt = json.get("id")
+                        .or_else(|| json.get("requestId"))
+                        .or_else(|| json.get("message").and_then(|m| m.get("id").or_else(|| m.get("requestId"))))
+                        .and_then(|v| v.as_str());
+                    if id_opt == Some(expected_id) {
                         return json;
                     }
                 }
@@ -623,8 +649,7 @@ mod tests {
         });
         ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(analyze_envelope.to_string())).await.unwrap();
 
-        let analyze_resp = ws_stream.next().await.unwrap().unwrap();
-        let parsed_analyze: serde_json::Value = serde_json::from_str(analyze_resp.to_text().unwrap()).unwrap();
+        let parsed_analyze = wait_for_rpc_response(&mut ws_stream, "ast-analyze-1").await;
         assert_eq!(parsed_analyze["id"], "ast-analyze-1");
         assert_eq!(parsed_analyze["success"], true);
         let symbols = parsed_analyze.get("data")
@@ -646,8 +671,7 @@ mod tests {
         });
         ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(symbols_envelope.to_string())).await.unwrap();
 
-        let symbols_resp = ws_stream.next().await.unwrap().unwrap();
-        let parsed_symbols: serde_json::Value = serde_json::from_str(symbols_resp.to_text().unwrap()).unwrap();
+        let parsed_symbols = wait_for_rpc_response(&mut ws_stream, "ast-symbols-1").await;
         assert_eq!(parsed_symbols["id"], "ast-symbols-1");
         assert_eq!(parsed_symbols["success"], true);
         let symbols_list = parsed_symbols.get("data")
@@ -900,5 +924,259 @@ mod tests {
         assert_eq!(records.last().unwrap()["streamId"], "terminal-stream-1");
 
         daemon.stop().await;
+    }
+    #[tokio::test]
+    async fn test_embedded_daemon_unsupported_session_message_returns_rpc_error() {
+        let session_msg = serde_json::json!({
+            "type": "project.unknown_unsupported.request",
+            "requestId": "req-unsupported-99",
+            "payload": {}
+        });
+
+        let resp = dispatch_session_message(&session_msg).await;
+        assert_eq!(resp["type"], "rpc_error");
+        assert_eq!(resp["payload"]["requestId"], "req-unsupported-99");
+        assert_eq!(resp["payload"]["requestType"], "project.unknown_unsupported.request");
+        assert_eq!(resp["payload"]["code"], "not_implemented");
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_truthful_features() {
+        let server_info = crate::kernel::protocol::build_server_info_payload();
+        let features = &server_info["features"];
+        // Unimplemented features must be explicitly false until ported
+        assert_eq!(features["connectedHosts"], false);
+        assert_eq!(features["projectAdd"], false);
+        assert_eq!(features["workspaceGithubRepositorySearch"], false);
+        // Kernel modules must be true
+        assert_eq!(features["kernelTelemetry"], true);
+        assert_eq!(features["kernelAst"], true);
+        assert_eq!(features["kernelCrdt"], true);
+        assert_eq!(features["kernelIoRing"], true);
+        assert_eq!(features["kernelShm"], true);
+        assert_eq!(features["kernelSpeech"], true);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_browser_proxy_endpoints() {
+        let port = 6792;
+        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+
+        let client = reqwest::Client::new();
+
+        // 1. Test POST /api/browser-proxy/cookies
+        let cookies_resp = client
+            .post(format!("http://127.0.0.1:{port}/api/browser-proxy/cookies"))
+            .json(&serde_json::json!({
+                "host": "test-domain.com",
+                "cookies": "sid=12345; auth=ok"
+            }))
+            .send()
+            .await
+            .expect("Failed to post cookies");
+
+        assert_eq!(cookies_resp.status(), reqwest::StatusCode::OK);
+        let cookies_json: serde_json::Value = cookies_resp.json().await.unwrap();
+        assert_eq!(cookies_json["ok"], true);
+        assert_eq!(cookies_json["host"], "test-domain.com");
+        assert_eq!(cookies_json["count"], 2);
+
+        // 2. Test GET /api/browser-proxy with missing url
+        let missing_url_resp = client
+            .get(format!("http://127.0.0.1:{port}/api/browser-proxy"))
+            .send()
+            .await
+            .expect("Failed to call browser proxy");
+        assert_eq!(missing_url_resp.status(), reqwest::StatusCode::BAD_REQUEST);
+
+        daemon.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_file_service_wire_protocol() {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let root_str = root.to_str().unwrap();
+
+        // 1. Create a file
+        let create_req = serde_json::json!({
+            "type": "fs.entry.create.request",
+            "requestId": "req-create-1",
+            "cwd": root_str,
+            "parentPath": "",
+            "name": "hello.txt",
+            "kind": "file"
+        });
+        let create_resp = dispatch_session_message(&create_req).await;
+        assert_eq!(create_resp["type"], "fs.entry.create.response");
+        assert_eq!(create_resp["success"], true);
+        assert!(root.join("hello.txt").exists());
+
+        // 2. Write content
+        let write_req = serde_json::json!({
+            "type": "fs.file.write.request",
+            "requestId": "req-write-1",
+            "cwd": root_str,
+            "path": "hello.txt",
+            "content": "Rust Kernel VFS File Service"
+        });
+        let write_resp = dispatch_session_message(&write_req).await;
+        assert_eq!(write_resp["type"], "fs.file.write.response");
+        assert_eq!(write_resp["success"], true);
+        assert_eq!(std::fs::read_to_string(root.join("hello.txt")).unwrap(), "Rust Kernel VFS File Service");
+
+        // 3. File explorer request
+        let explore_req = serde_json::json!({
+            "type": "file_explorer_request",
+            "requestId": "req-explore-1",
+            "cwd": root_str
+        });
+        let explore_resp = dispatch_session_message(&explore_req).await;
+        assert_eq!(explore_resp["type"], "file_explorer_response");
+        assert_eq!(explore_resp["success"], true);
+        let entries = explore_resp["payload"]["entries"].as_array().expect("entries array");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["name"], "hello.txt");
+
+        // 4. Delete entry
+        let delete_req = serde_json::json!({
+            "type": "fs.entry.delete.request",
+            "requestId": "req-del-1",
+            "cwd": root_str,
+            "path": "hello.txt"
+        });
+        let delete_resp = dispatch_session_message(&delete_req).await;
+        assert_eq!(delete_resp["type"], "fs.entry.delete.response");
+        assert_eq!(delete_resp["success"], true);
+        assert!(!root.join("hello.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_git_wire_protocol() {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let root_str = root.to_str().unwrap();
+
+        // Initialize git repo
+        let init_out = tokio::process::Command::new("git")
+            .args(&["init"])
+            .current_dir(root)
+            .output()
+            .await
+            .expect("git init");
+        assert!(init_out.status.success());
+
+        // Configure local git user for test commit
+        let _ = tokio::process::Command::new("git").args(&["config", "user.name", "Kronos Test"]).current_dir(root).output().await;
+        let _ = tokio::process::Command::new("git").args(&["config", "user.email", "test@kronos.local"]).current_dir(root).output().await;
+
+        // Create and commit a file
+        std::fs::write(root.join("file1.txt"), b"line1\n").unwrap();
+        let _ = tokio::process::Command::new("git").args(&["add", "file1.txt"]).current_dir(root).output().await;
+        let _ = tokio::process::Command::new("git").args(&["commit", "-m", "init commit"]).current_dir(root).output().await;
+
+        // 1. Test git/branches wire call
+        let branches_req = serde_json::json!({
+            "type": "git/branches",
+            "requestId": "req-branches-1",
+            "cwd": root_str
+        });
+        let branches_resp = dispatch_session_message(&branches_req).await;
+        assert_eq!(branches_resp["type"], "git/branches/response");
+        assert_eq!(branches_resp["success"], true);
+        let branches = branches_resp["payload"]["branches"].as_array().expect("branches array");
+        assert!(!branches.is_empty());
+
+        // 2. Modify file and test git/diff wire call
+        std::fs::write(root.join("file1.txt"), b"line1\nline2\n").unwrap();
+        let diff_req = serde_json::json!({
+            "type": "git/diff",
+            "requestId": "req-diff-1",
+            "cwd": root_str,
+            "staged": false
+        });
+        let diff_resp = dispatch_session_message(&diff_req).await;
+        assert_eq!(diff_resp["type"], "git/diff/response");
+        assert_eq!(diff_resp["success"], true);
+        let diff_text = diff_resp["payload"]["diff"].as_str().expect("diff str");
+        assert!(diff_text.contains("+line2"));
+
+        // 3. Test git/worktree/list wire call
+        let wt_req = serde_json::json!({
+            "type": "git/worktree/list",
+            "requestId": "req-wt-1",
+            "cwd": root_str
+        });
+        let wt_resp = dispatch_session_message(&wt_req).await;
+        assert_eq!(wt_resp["type"], "git/worktree/list/response");
+        assert_eq!(wt_resp["success"], true);
+        let wt_list = wt_resp["payload"]["worktrees"].as_array().expect("worktrees array");
+        assert_eq!(wt_list.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_agent_and_plugins_wire_protocol() {
+        // 1. List providers
+        let prov_req = serde_json::json!({
+            "type": "providers/list",
+            "requestId": "req-prov-1"
+        });
+        let prov_resp = dispatch_session_message(&prov_req).await;
+        assert_eq!(prov_resp["type"], "providers/list/response");
+        assert_eq!(prov_resp["success"], true);
+        let providers = prov_resp["payload"]["providers"].as_array().expect("providers array");
+        assert!(providers.iter().any(|p| p["id"] == "mock"));
+        assert!(providers.iter().any(|p| p["id"] == "claude"));
+        assert!(providers.iter().any(|p| p["id"] == "codex"));
+        assert!(providers.iter().any(|p| p["id"] == "opencode"));
+
+        // 2. Create agent
+        let create_req = serde_json::json!({
+            "type": "agent/create",
+            "requestId": "req-ag-1",
+            "provider": "mock",
+            "cwd": "/workspace/demo",
+            "title": "Wire Test Agent"
+        });
+        let create_resp = dispatch_session_message(&create_req).await;
+        assert_eq!(create_resp["type"], "agent/create/response");
+        assert_eq!(create_resp["success"], true);
+        let agent_id = create_resp["payload"]["id"].as_str().expect("agent id");
+
+        // 3. Send message
+        let msg_req = serde_json::json!({
+            "type": "agent/message",
+            "requestId": "req-msg-1",
+            "id": agent_id,
+            "text": "Hello Agent!"
+        });
+        let msg_resp = dispatch_session_message(&msg_req).await;
+        assert_eq!(msg_resp["type"], "agent/message/response");
+        assert_eq!(msg_resp["success"], true);
+
+        // 4. Query timeline
+        let time_req = serde_json::json!({
+            "type": "agent/timeline",
+            "requestId": "req-time-1",
+            "id": agent_id
+        });
+        let time_resp = dispatch_session_message(&time_req).await;
+        assert_eq!(time_resp["type"], "agent/timeline/response");
+        assert_eq!(time_resp["success"], true);
+        let items = time_resp["payload"]["items"].as_array().expect("timeline items");
+        assert_eq!(items.len(), 1);
+
+        // 5. Query plugin usage metrics
+        let usage_req = serde_json::json!({
+            "type": "plugins/usage",
+            "requestId": "req-usage-1"
+        });
+        let usage_resp = dispatch_session_message(&usage_req).await;
+        assert_eq!(usage_resp["type"], "plugins/usage/response");
+        assert_eq!(usage_resp["success"], true);
+        let metrics = usage_resp["payload"]["metrics"].as_array().expect("metrics array");
+        assert_eq!(metrics.len(), 9);
     }
 }

@@ -112,15 +112,21 @@ pub fn build_server_info_payload() -> Value {
         "version": env!("CARGO_PKG_VERSION"),
         "desktopManaged": true,
         "features": {
-            "connectedHosts": true,
-            "hostMultiplexing": true,
-            "terminalChunkedReplay": true,
-            "binaryChunkingV1": true,
-            "projectAdd": true,
-            "stableProjectIdentity": true,
-            "projectGithubClone": true,
-            "workspaceGithubRepositorySearch": true,
-            "projectCreateDirectory": true
+            "connectedHosts": false,
+            "hostMultiplexing": false,
+            "terminalChunkedReplay": false,
+            "binaryChunkingV1": false,
+            "projectAdd": false,
+            "stableProjectIdentity": false,
+            "projectGithubClone": false,
+            "workspaceGithubRepositorySearch": false,
+            "projectCreateDirectory": false,
+            "kernelTelemetry": true,
+            "kernelAst": true,
+            "kernelCrdt": true,
+            "kernelIoRing": true,
+            "kernelShm": true,
+            "kernelSpeech": true
         }
     })
 }

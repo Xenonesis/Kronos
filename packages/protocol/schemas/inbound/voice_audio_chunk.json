@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "voice_audio_chunk"
+    },
+    "audio": {
+      "type": "string"
+    },
+    "format": {
+      "type": "string"
+    },
+    "isLast": {
+      "type": "boolean"
+    }
+  },
+  "required": ["type", "audio", "format", "isLast"],
+  "additionalProperties": false
+}

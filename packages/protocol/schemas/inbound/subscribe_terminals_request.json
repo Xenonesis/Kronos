@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "subscribe_terminals_request"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "workspaceId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "cwd"],
+  "additionalProperties": false
+}

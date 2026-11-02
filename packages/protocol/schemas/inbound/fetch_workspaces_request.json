@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "includeBackground": {
+      "type": "boolean"
+    },
+    "type": {
+      "type": "string",
+      "const": "fetch_workspaces_request"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "filter": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "idPrefix": {
+          "type": "string"
+        },
+        "includeInternal": {
+          "type": "boolean"
+        },
+        "includeBackground": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "sort": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": ["status_priority", "activity_at", "name", "project_id"]
+          },
+          "direction": {
+            "type": "string",
+            "enum": ["asc", "desc"]
+          }
+        },
+        "required": ["key", "direction"],
+        "additionalProperties": false
+      }
+    },
+    "page": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 200
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["limit"],
+      "additionalProperties": false
+    },
+    "subscribe": {
+      "type": "object",
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "sync": {
+      "type": "object",
+      "properties": {
+        "generation": {
+          "type": "string"
+        },
+        "afterSeq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "requestId"],
+  "additionalProperties": false
+}

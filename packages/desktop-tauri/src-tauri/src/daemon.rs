@@ -588,13 +588,14 @@ pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
     if wait_for_daemon_health(1) {
         return None;
     }
-    let engine = env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "node".to_string());
+    let engine = env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "rust".to_string());
     if engine.eq_ignore_ascii_case("node") {
         stop_embedded();
         if let Some(child) = start_node_daemon(server_id) {
             return Some(child);
         }
-        eprintln!("[Daemon] Node daemon requested but failed to start; falling back to in-process Rust daemon");
+        eprintln!("[Daemon] Node daemon requested (KRONOS_DAEMON_ENGINE=node) but failed to start; refusing to hijack port 6767 with protocol-incompatible EmbeddedDaemon");
+        return None;
     }
 
     stop_embedded();
@@ -671,7 +672,7 @@ pub fn stop_daemon(state: &DaemonState) {
 pub fn restart_daemon(state: &DaemonState) -> bool {
     stop_daemon(state);
     let new_child = start_daemon(None);
-    let engine = env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "node".to_string());
+    let engine = env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "rust".to_string());
     if engine.eq_ignore_ascii_case("node") {
         if let Ok(mut lock) = state.process.lock() {
             let success = new_child.is_some();
@@ -710,6 +711,10 @@ mod tests {
             process: Mutex::new(None),
         };
         let _ = start_daemon(None);
+        assert!(
+            !is_embedded_running(),
+            "Node engine mode must never silently fall back to EmbeddedDaemon on port 6767"
+        );
         stop_daemon(&state);
         std::env::remove_var("KRONOS_DAEMON_ENGINE");
     }

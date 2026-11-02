@@ -22,6 +22,7 @@
  */
 
 import { spawn, execSync, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -180,9 +181,17 @@ async function bootDaemon(): Promise<BootedDaemon> {
     throw new Error("Refusing to use port 6767 (the developer daemon)");
   }
   const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-bench-home-"));
-  const tsxBin = execSync("which tsx").toString().trim();
-
-  const child = spawn(tsxBin, ["scripts/supervisor-entrypoint.ts", "--dev"], {
+  const isWindows = process.platform === "win32";
+  const distScript = path.join(SERVER_DIR, "dist/scripts/supervisor-entrypoint.js");
+  const useDist = existsSync(distScript);
+  let spawnCmd = "npx";
+  if (useDist) {
+    spawnCmd = "node";
+  } else if (isWindows) {
+    spawnCmd = "npx.cmd";
+  }
+  const spawnArgs = useDist ? [distScript] : ["tsx", "scripts/supervisor-entrypoint.ts", "--dev"];
+  const child = spawn(spawnCmd, spawnArgs, {
     cwd: SERVER_DIR,
     env: {
       ...process.env,
@@ -194,6 +203,7 @@ async function bootDaemon(): Promise<BootedDaemon> {
     },
     stdio: ["ignore", "pipe", "pipe"],
     detached: false,
+    shell: isWindows,
   });
 
   child.stdout?.on("data", (data: Buffer) => {

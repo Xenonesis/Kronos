@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "close_items_response"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "archivedAt": {
+                "type": "string"
+              }
+            },
+            "required": ["agentId", "archivedAt"],
+            "additionalProperties": false
+          }
+        },
+        "terminals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "terminalId": {
+                "type": "string"
+              },
+              "success": {
+                "type": "boolean"
+              }
+            },
+            "required": ["terminalId", "success"],
+            "additionalProperties": false
+          }
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": ["agents", "terminals", "requestId"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

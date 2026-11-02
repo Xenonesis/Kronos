@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "subscribe_checkout_diff_response"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "oldPath": {
+                "type": "string"
+              },
+              "isNew": {
+                "type": "boolean"
+              },
+              "isDeleted": {
+                "type": "boolean"
+              },
+              "additions": {
+                "type": "number"
+              },
+              "deletions": {
+                "type": "number"
+              },
+              "hunks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "oldStart": {
+                      "type": "number"
+                    },
+                    "oldCount": {
+                      "type": "number"
+                    },
+                    "newStart": {
+                      "type": "number"
+                    },
+                    "newCount": {
+                      "type": "number"
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": ["add", "remove", "context", "header"]
+                          },
+                          "content": {
+                            "type": "string"
+                          },
+                          "tokens": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "text": {
+                                  "type": "string"
+                                },
+                                "style": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": ["text", "style"],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": ["type", "content"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["oldStart", "oldCount", "newStart", "newCount", "lines"],
+                  "additionalProperties": false
+                }
+              },
+              "status": {
+                "type": "string",
+                "enum": ["ok", "too_large", "binary"]
+              }
+            },
+            "required": ["path", "isNew", "isDeleted", "additions", "deletions", "hunks"],
+            "additionalProperties": false
+          }
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": ["NOT_GIT_REPO", "NOT_ALLOWED", "MERGE_CONFLICT", "UNKNOWN"]
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": ["code", "message"],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "diffTooLarge": {
+          "type": "boolean"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": ["subscriptionId", "cwd", "files", "error", "requestId"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

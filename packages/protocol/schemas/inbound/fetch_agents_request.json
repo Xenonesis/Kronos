@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "fetch_agents_request"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "scope": {
+      "type": "string",
+      "enum": ["active"]
+    },
+    "includeBackground": {
+      "type": "boolean"
+    },
+    "filter": {
+      "type": "object",
+      "properties": {
+        "labels": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "projectKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "statuses": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["initializing", "idle", "running", "error", "closed"]
+          }
+        },
+        "includeArchived": {
+          "type": "boolean"
+        },
+        "requiresAttention": {
+          "type": "boolean"
+        },
+        "thinkingOptionId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "includeInternal": {
+          "type": "boolean"
+        },
+        "includeBackground": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "sort": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": ["status_priority", "created_at", "updated_at", "title"]
+          },
+          "direction": {
+            "type": "string",
+            "enum": ["asc", "desc"]
+          }
+        },
+        "required": ["key", "direction"],
+        "additionalProperties": false
+      }
+    },
+    "page": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 200
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["limit"],
+      "additionalProperties": false
+    },
+    "subscribe": {
+      "type": "object",
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "sync": {
+      "type": "object",
+      "properties": {
+        "generation": {
+          "type": "string"
+        },
+        "afterSeq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "requestId"],
+  "additionalProperties": false
+}

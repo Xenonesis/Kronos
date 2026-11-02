@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "fetch_workspaces_response"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "subscriptionId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "entries": {
+          "type": "array",
+          "items": {}
+        },
+        "emptyProjects": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "projectId": {
+                "type": "string"
+              },
+              "projectKey": {
+                "type": "string"
+              },
+              "projectDisplayName": {
+                "type": "string"
+              },
+              "projectCustomName": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "projectCustomIconRevision": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "projectIconRevision": {
+                "type": "string"
+              },
+              "projectRootPath": {
+                "type": "string"
+              },
+              "projectKind": {
+                "type": "string",
+                "enum": ["git", "non_git", "directory"]
+              },
+              "syncSeq": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": ["projectId", "projectDisplayName", "projectRootPath", "projectKind"],
+            "additionalProperties": false
+          }
+        },
+        "pageInfo": {
+          "type": "object",
+          "properties": {
+            "nextCursor": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "prevCursor": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "hasMore": {
+              "type": "boolean"
+            }
+          },
+          "required": ["nextCursor", "prevCursor", "hasMore"],
+          "additionalProperties": false
+        },
+        "sync": {
+          "type": "object",
+          "properties": {
+            "generation": {
+              "type": "string"
+            },
+            "headSeq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "mode": {
+              "type": "string",
+              "enum": ["snapshot", "changes"]
+            },
+            "reason": {
+              "type": "string",
+              "enum": ["no_cursor", "generation_changed", "cursor_expired", "changes_too_large"]
+            },
+            "removals": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "seq": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": ["id", "seq"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["generation", "headSeq", "mode", "removals"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["requestId", "entries", "emptyProjects", "pageInfo"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

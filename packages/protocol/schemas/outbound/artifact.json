@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "artifact"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["markdown", "diff", "image", "code"]
+        },
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "isBase64": {
+          "type": "boolean"
+        }
+      },
+      "required": ["type", "id", "title", "content", "isBase64"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

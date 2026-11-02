@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "agent_permission_response"
+    },
+    "agentId": {
+      "type": "string"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "response": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "behavior": {
+              "type": "string",
+              "const": "allow"
+            },
+            "selectedActionId": {
+              "type": "string"
+            },
+            "updatedInput": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "updatedPermissions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            }
+          },
+          "required": ["behavior"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "behavior": {
+              "type": "string",
+              "const": "deny"
+            },
+            "selectedActionId": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "interrupt": {
+              "type": "boolean"
+            }
+          },
+          "required": ["behavior"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": ["type", "agentId", "requestId", "response"],
+  "additionalProperties": false
+}

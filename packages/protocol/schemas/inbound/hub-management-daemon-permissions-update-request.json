@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "hub.management.daemon.permissions.update.request"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "grant": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "daemon.read",
+          "daemon.manage",
+          "tunnel.manage",
+          "access.manage",
+          "workspace.read",
+          "workspace.write",
+          "workspace.manage",
+          "automation.manage",
+          "hub.execute"
+        ]
+      }
+    },
+    "revoke": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "daemon.read",
+          "daemon.manage",
+          "tunnel.manage",
+          "access.manage",
+          "workspace.read",
+          "workspace.write",
+          "workspace.manage",
+          "automation.manage",
+          "hub.execute"
+        ]
+      }
+    }
+  },
+  "required": ["type", "requestId", "grant", "revoke"],
+  "additionalProperties": false
+}

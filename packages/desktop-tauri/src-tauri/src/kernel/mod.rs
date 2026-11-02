@@ -15,6 +15,13 @@ pub mod speech;
 pub mod rkyv_shm;
 pub mod telemetry;
 pub mod watcher;
+pub mod browser_proxy;
+pub mod auth;
+pub mod config_store;
+pub mod file_service;
+pub mod terminal;
+pub mod services;
+pub mod relay_crypto;
 
 #[cfg(test)]
 mod protocol_test;

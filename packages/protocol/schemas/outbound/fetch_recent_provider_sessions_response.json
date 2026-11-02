@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "fetch_recent_provider_sessions_response"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "providerId": {
+                "type": "string"
+              },
+              "providerLabel": {
+                "type": "string"
+              },
+              "providerHandleId": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "firstPromptPreview": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "lastPromptPreview": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "lastActivityAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "providerId",
+              "providerLabel",
+              "providerHandleId",
+              "cwd",
+              "title",
+              "firstPromptPreview",
+              "lastPromptPreview",
+              "lastActivityAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "filteredAlreadyImportedCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "providerErrors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": ["provider", "message"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["requestId", "entries"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

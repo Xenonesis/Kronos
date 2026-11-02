@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "agent_attention_required"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        },
+        "agentId": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["finished", "error", "permission"]
+        },
+        "timestamp": {
+          "type": "string"
+        },
+        "shouldNotify": {
+          "type": "boolean"
+        },
+        "notification": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "body": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object",
+              "properties": {
+                "serverId": {
+                  "type": "string"
+                },
+                "workspaceId": {
+                  "type": "string"
+                },
+                "agentId": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string",
+                  "enum": ["finished", "error", "permission"]
+                }
+              },
+              "required": ["serverId", "agentId", "reason"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["title", "body", "data"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["agentId", "reason", "timestamp", "shouldNotify"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

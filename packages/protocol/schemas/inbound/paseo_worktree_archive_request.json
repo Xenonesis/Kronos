@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "paseo_worktree_archive_request"
+    },
+    "worktreePath": {
+      "type": "string"
+    },
+    "repoRoot": {
+      "type": "string"
+    },
+    "branchName": {
+      "type": "string"
+    },
+    "workspaceId": {
+      "type": "string"
+    },
+    "scope": {
+      "default": "workspace",
+      "type": "string",
+      "enum": ["workspace", "worktree"]
+    },
+    "deleteWorktreeFromDisk": {
+      "default": false,
+      "type": "boolean"
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "scope", "deleteWorktreeFromDisk", "requestId"],
+  "additionalProperties": false
+}

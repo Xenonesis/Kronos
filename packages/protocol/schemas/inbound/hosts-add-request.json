@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "hosts.add.request"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "input": {
+      "type": "object",
+      "properties": {
+        "connection": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "metadata": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "sourceKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": ["connection"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "requestId", "input"],
+  "additionalProperties": false
+}

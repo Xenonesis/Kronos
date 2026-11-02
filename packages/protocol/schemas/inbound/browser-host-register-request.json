@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "browser.host.register.request"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "hostKind": {
+      "type": "string",
+      "minLength": 1
+    },
+    "supportedCommands": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "list_tabs",
+          "new_tab",
+          "snapshot",
+          "click",
+          "fill",
+          "wait",
+          "type",
+          "keypress",
+          "navigate",
+          "back",
+          "forward",
+          "reload",
+          "screenshot",
+          "upload",
+          "select",
+          "hover",
+          "drag",
+          "logs",
+          "evaluate",
+          "scroll",
+          "resize",
+          "close_tab"
+        ]
+      }
+    }
+  },
+  "required": ["type", "requestId", "hostKind", "supportedCommands"],
+  "additionalProperties": false
+}

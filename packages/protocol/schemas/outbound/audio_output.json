@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "audio_output"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "audio": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "isVoiceMode": {
+          "type": "boolean"
+        },
+        "groupId": {
+          "type": "string"
+        },
+        "chunkIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "isLastChunk": {
+          "type": "boolean"
+        }
+      },
+      "required": ["audio", "format", "id", "isVoiceMode"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

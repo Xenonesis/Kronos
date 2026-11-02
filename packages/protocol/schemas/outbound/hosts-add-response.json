@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "hosts.add.response"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "host": {
+          "type": "object",
+          "properties": {
+            "registrationId": {
+              "type": "string"
+            },
+            "serverId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "label": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                }
+              },
+              "required": ["id", "key"],
+              "additionalProperties": false
+            },
+            "metadata": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "additionalProperties": {
+                "type": "string",
+                "maxLength": 4096
+              }
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "status": {
+              "type": "string",
+              "enum": ["connecting", "online", "offline", "error", "disabled"]
+            },
+            "targetDescription": {
+              "type": "string"
+            },
+            "lastOnlineAt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "nextRetryAt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "registrationId",
+            "serverId",
+            "label",
+            "source",
+            "metadata",
+            "enabled",
+            "status",
+            "targetDescription",
+            "lastOnlineAt",
+            "nextRetryAt",
+            "error"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": ["requestId", "host"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "project.create_directory.request"
+    },
+    "parentPath": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "parentPath", "name", "requestId"],
+  "additionalProperties": false
+}

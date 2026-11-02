@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "plugin.source.update.response"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "plugins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$"
+              },
+              "previousCommit": {
+                "type": "string"
+              },
+              "currentCommit": {
+                "type": "string"
+              },
+              "commits": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "updated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["id", "previousCommit", "currentCommit", "commits", "updated"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["requestId", "plugins"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

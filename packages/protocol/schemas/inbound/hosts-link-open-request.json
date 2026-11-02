@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "hosts.link.open.request"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "channelId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    }
+  },
+  "required": ["type", "requestId", "channelId"],
+  "additionalProperties": false
+}

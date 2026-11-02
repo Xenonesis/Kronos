@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "dictation_stream_chunk"
+    },
+    "dictationId": {
+      "type": "string"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "audio": {
+      "type": "string"
+    },
+    "format": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "dictationId", "seq", "audio", "format"],
+  "additionalProperties": false
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "file_explorer_request"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["list", "file"]
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "acceptBinary": {
+      "type": "boolean"
+    },
+    "maxBytes": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": ["type", "cwd", "mode", "requestId"],
+  "additionalProperties": false
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "chat/post"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "room": {
+      "type": "string"
+    },
+    "body": {
+      "type": "string"
+    },
+    "authorAgentId": {
+      "type": "string"
+    },
+    "replyToMessageId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "requestId", "room", "body"],
+  "additionalProperties": false
+}

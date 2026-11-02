@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "terminals_changed"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "terminals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "workspaceId": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "activity": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "default": "idle",
+                        "type": "string",
+                        "enum": ["idle", "working", "attention"]
+                      },
+                      "attentionReason": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": ["finished", "needs_input"]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "changedAt": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["state", "changedAt"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": ["id", "name"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["cwd", "terminals"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

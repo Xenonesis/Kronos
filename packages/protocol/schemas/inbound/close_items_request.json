@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "close_items_request"
+    },
+    "agentIds": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "terminalIds": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "agentIds", "terminalIds", "requestId"],
+  "additionalProperties": false
+}

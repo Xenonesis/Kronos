@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "workspace.pin.set.request"
+    },
+    "workspaceId": {
+      "type": "string"
+    },
+    "pinned": {
+      "type": "boolean"
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "workspaceId", "pinned", "requestId"],
+  "additionalProperties": false
+}

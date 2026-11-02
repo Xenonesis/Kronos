@@ -1,0 +1,740 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "checkout_status_update"
+    },
+    "payload": {
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "cwd": {
+                  "type": "string"
+                },
+                "error": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": ["NOT_GIT_REPO", "NOT_ALLOWED", "MERGE_CONFLICT", "UNKNOWN"]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["code", "message"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "requestId": {
+                  "type": "string"
+                },
+                "upstreamRef": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "isGit": {
+                  "type": "boolean",
+                  "const": false
+                },
+                "isPaseoOwnedWorktree": {
+                  "type": "boolean",
+                  "const": false
+                },
+                "repoRoot": {
+                  "type": "null"
+                },
+                "currentBranch": {
+                  "type": "null"
+                },
+                "isDirty": {
+                  "type": "null"
+                },
+                "baseRef": {
+                  "type": "null"
+                },
+                "aheadBehind": {
+                  "type": "null"
+                },
+                "aheadOfOrigin": {
+                  "type": "null"
+                },
+                "behindOfOrigin": {
+                  "type": "null"
+                },
+                "hasRemote": {
+                  "type": "boolean"
+                },
+                "remoteUrl": {
+                  "type": "null"
+                }
+              },
+              "required": [
+                "cwd",
+                "error",
+                "requestId",
+                "isGit",
+                "isPaseoOwnedWorktree",
+                "repoRoot",
+                "currentBranch",
+                "isDirty",
+                "baseRef",
+                "aheadBehind",
+                "aheadOfOrigin",
+                "behindOfOrigin",
+                "hasRemote",
+                "remoteUrl"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "cwd": {
+                  "type": "string"
+                },
+                "error": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": ["NOT_GIT_REPO", "NOT_ALLOWED", "MERGE_CONFLICT", "UNKNOWN"]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["code", "message"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "requestId": {
+                  "type": "string"
+                },
+                "upstreamRef": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "isGit": {
+                  "type": "boolean",
+                  "const": true
+                },
+                "isPaseoOwnedWorktree": {
+                  "type": "boolean",
+                  "const": false
+                },
+                "repoRoot": {
+                  "type": "string"
+                },
+                "mainRepoRoot": {
+                  "default": null,
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "currentBranch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "isDirty": {
+                  "type": "boolean"
+                },
+                "baseRef": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "aheadBehind": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "ahead": {
+                          "type": "number"
+                        },
+                        "behind": {
+                          "type": "number"
+                        }
+                      },
+                      "required": ["ahead", "behind"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "aheadOfOrigin": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "behindOfOrigin": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "hasRemote": {
+                  "type": "boolean"
+                },
+                "remoteUrl": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "cwd",
+                "error",
+                "requestId",
+                "isGit",
+                "isPaseoOwnedWorktree",
+                "repoRoot",
+                "mainRepoRoot",
+                "currentBranch",
+                "isDirty",
+                "baseRef",
+                "aheadBehind",
+                "aheadOfOrigin",
+                "behindOfOrigin",
+                "hasRemote",
+                "remoteUrl"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "cwd": {
+                  "type": "string"
+                },
+                "error": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": ["NOT_GIT_REPO", "NOT_ALLOWED", "MERGE_CONFLICT", "UNKNOWN"]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["code", "message"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "requestId": {
+                  "type": "string"
+                },
+                "upstreamRef": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "isGit": {
+                  "type": "boolean",
+                  "const": true
+                },
+                "isPaseoOwnedWorktree": {
+                  "type": "boolean",
+                  "const": true
+                },
+                "repoRoot": {
+                  "type": "string"
+                },
+                "mainRepoRoot": {
+                  "type": "string"
+                },
+                "currentBranch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "isDirty": {
+                  "type": "boolean"
+                },
+                "baseRef": {
+                  "type": "string"
+                },
+                "aheadBehind": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "ahead": {
+                          "type": "number"
+                        },
+                        "behind": {
+                          "type": "number"
+                        }
+                      },
+                      "required": ["ahead", "behind"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "aheadOfOrigin": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "behindOfOrigin": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "hasRemote": {
+                  "type": "boolean"
+                },
+                "remoteUrl": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "cwd",
+                "error",
+                "requestId",
+                "isGit",
+                "isPaseoOwnedWorktree",
+                "repoRoot",
+                "mainRepoRoot",
+                "currentBranch",
+                "isDirty",
+                "baseRef",
+                "aheadBehind",
+                "aheadOfOrigin",
+                "behindOfOrigin",
+                "hasRemote",
+                "remoteUrl"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "subscriptionId": {
+              "type": "string"
+            },
+            "prStatus": {
+              "type": "object",
+              "properties": {
+                "cwd": {
+                  "type": "string"
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "forge": {
+                          "default": "github",
+                          "type": "string"
+                        },
+                        "projectPath": {
+                          "type": "string"
+                        },
+                        "number": {
+                          "type": "number"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string"
+                        },
+                        "baseRefName": {
+                          "type": "string"
+                        },
+                        "headRefName": {
+                          "type": "string"
+                        },
+                        "isMerged": {
+                          "type": "boolean"
+                        },
+                        "isDraft": {
+                          "default": false,
+                          "type": "boolean"
+                        },
+                        "mergeable": {
+                          "default": "UNKNOWN",
+                          "type": "string",
+                          "enum": ["MERGEABLE", "CONFLICTING", "UNKNOWN"]
+                        },
+                        "checks": {
+                          "default": [],
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string"
+                              },
+                              "url": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "workflow": {
+                                "type": "string"
+                              },
+                              "duration": {
+                                "type": "string"
+                              },
+                              "checkRunId": {
+                                "type": "number"
+                              },
+                              "workflowRunId": {
+                                "type": "number"
+                              },
+                              "traits": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": ["name", "status", "url"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "checksStatus": {
+                          "type": "string"
+                        },
+                        "reviewDecision": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "repoOwner": {
+                          "type": "string"
+                        },
+                        "repoName": {
+                          "type": "string"
+                        },
+                        "github": {
+                          "type": "object",
+                          "properties": {
+                            "mergeStateStatus": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "autoMergeRequest": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "enabledAt": {
+                                      "default": null,
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "mergeMethod": {
+                                      "default": null,
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "enabledBy": {
+                                      "default": null,
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": ["enabledAt", "mergeMethod", "enabledBy"],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "viewerCanEnableAutoMerge": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "viewerCanDisableAutoMerge": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "viewerCanMergeAsAdmin": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "viewerCanUpdateBranch": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "repository": {
+                              "default": {
+                                "autoMergeAllowed": false,
+                                "mergeCommitAllowed": false,
+                                "squashMergeAllowed": false,
+                                "rebaseMergeAllowed": false,
+                                "viewerDefaultMergeMethod": null
+                              },
+                              "type": "object",
+                              "properties": {
+                                "autoMergeAllowed": {
+                                  "default": false,
+                                  "type": "boolean"
+                                },
+                                "mergeCommitAllowed": {
+                                  "default": false,
+                                  "type": "boolean"
+                                },
+                                "squashMergeAllowed": {
+                                  "default": false,
+                                  "type": "boolean"
+                                },
+                                "rebaseMergeAllowed": {
+                                  "default": false,
+                                  "type": "boolean"
+                                },
+                                "viewerDefaultMergeMethod": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "autoMergeAllowed",
+                                "mergeCommitAllowed",
+                                "squashMergeAllowed",
+                                "rebaseMergeAllowed",
+                                "viewerDefaultMergeMethod"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "isMergeQueueEnabled": {
+                              "default": false,
+                              "type": "boolean"
+                            },
+                            "isInMergeQueue": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "mergeStateStatus",
+                            "autoMergeRequest",
+                            "viewerCanEnableAutoMerge",
+                            "viewerCanDisableAutoMerge",
+                            "viewerCanMergeAsAdmin",
+                            "viewerCanUpdateBranch",
+                            "repository",
+                            "isMergeQueueEnabled",
+                            "isInMergeQueue"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "forgeSpecific": {}
+                      },
+                      "required": [
+                        "forge",
+                        "url",
+                        "title",
+                        "state",
+                        "baseRefName",
+                        "headRefName",
+                        "isMerged",
+                        "isDraft",
+                        "mergeable",
+                        "checks"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "githubFeaturesEnabled": {
+                  "type": "boolean"
+                },
+                "authState": {},
+                "forge": {
+                  "default": "github",
+                  "type": "string"
+                },
+                "error": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": ["NOT_GIT_REPO", "NOT_ALLOWED", "MERGE_CONFLICT", "UNKNOWN"]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["code", "message"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "requestId": {
+                  "type": "string"
+                }
+              },
+              "required": ["cwd", "status", "githubFeaturesEnabled", "forge", "error", "requestId"],
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

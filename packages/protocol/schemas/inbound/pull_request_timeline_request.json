@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "pull_request_timeline_request"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "prNumber": {
+      "type": "number"
+    },
+    "repoOwner": {
+      "type": "string"
+    },
+    "repoName": {
+      "type": "string"
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "cwd", "prNumber", "repoOwner", "repoName", "requestId"],
+  "additionalProperties": false
+}

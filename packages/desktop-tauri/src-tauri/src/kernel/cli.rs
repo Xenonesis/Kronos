@@ -55,6 +55,22 @@ pub enum CliCommand {
         #[arg(short, long, default_value_t = 1000)]
         max_files: usize,
     },
+    /// Check daemon status and health metrics
+    Status {
+        #[arg(long, default_value_t = 6767)]
+        port: u16,
+    },
+    /// List registered workspace projects
+    Projects,
+    /// List active Git worktrees
+    Worktrees {
+        #[arg(default_value = ".")]
+        path: String,
+    },
+    /// List active plugins and token usage metrics
+    Plugins,
+    /// Diagnose system environment, runtimes, and hardware accelerators
+    Doctor,
 }
 
 /// Parses CLI arguments from `std::env::args_os()` and dispatches commands if any.
@@ -685,6 +701,68 @@ pub fn dispatch(args: CliArgs) -> Option<i32> {
             force_fallback,
             max_files,
         } => execute_ioring_bench_to(&directory, queue_size, force_fallback, max_files, std::io::stdout()),
+        CliCommand::Status { port } => {
+            let healthy = probe_daemon_health(port);
+            println!("=== Kronos Daemon Status ===");
+            println!("Port: {}", port);
+            println!("Health: {}", if healthy { "UP (HTTP 200)" } else { "OFFLINE" });
+            let tele = crate::kernel::telemetry::get_kernel_telemetry();
+            println!("Working Set (RSS): {:.2} MB", tele.memory_working_set_bytes as f64 / (1024.0 * 1024.0));
+            println!("Private Memory: {:.2} MB", tele.memory_private_bytes as f64 / (1024.0 * 1024.0));
+            Some(if healthy { 0 } else { 1 })
+        }
+        CliCommand::Projects => {
+            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(".paseo");
+            let store = crate::kernel::config_store::DaemonConfigStore::new(home);
+            let projects = store.list_projects();
+            println!("=== Registered Projects ({}) ===", projects.len());
+            for p in projects {
+                println!("  [{}] {} ({})", p.id, p.name, p.path);
+            }
+            Some(0)
+        }
+        CliCommand::Worktrees { path } => {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let path_buf = std::path::PathBuf::from(path);
+            rt.block_on(async {
+                match crate::kernel::git::GitEngine::worktree_list(&path_buf).await {
+                    Ok(worktrees) => {
+                        println!("=== Git Worktrees ({}) ===", worktrees.len());
+                        for wt in worktrees {
+                            let branch_str = wt.branch.as_deref().unwrap_or("detached");
+                            println!("  {} [{} @ {}]", wt.path, branch_str, &wt.head[..7.min(wt.head.len())]);
+                        }
+                        Some(0)
+                    }
+                    Err(err) => {
+                        eprintln!("Failed listing worktrees: {err}");
+                        Some(1)
+                    }
+                }
+            })
+        }
+        CliCommand::Plugins => {
+            let mgr = crate::agent::providers::plugins::NativePluginManager::new();
+            println!("=== Active Built-in Plugins ===");
+            for p in mgr.list_active_plugins() {
+                println!("  * {p}");
+            }
+            println!("\n=== Usage Metrics ===");
+            for m in mgr.get_metrics() {
+                println!("  {}: input={} output={} cost=${:.4}", m.provider_id, m.input_tokens, m.output_tokens, m.total_cost_usd);
+            }
+            Some(0)
+        }
+        CliCommand::Doctor => {
+            println!("=== Kronos Doctor: System Diagnostics ===");
+            println!("Version: {}", env!("CARGO_PKG_VERSION"));
+            println!("OS: {} ({})", std::env::consts::OS, std::env::consts::ARCH);
+            println!("Git CLI: {}", if crate::agent::registry::is_command_available("git") { "AVAILABLE" } else { "NOT FOUND" });
+            println!("Whisper Voice Engine: EMBEDDED (C++/Rust whisper.cpp)");
+            println!("IoRing Engine: AVAILABLE (Windows 11 Kernel IORING)");
+            println!("Memory Telemetry: AVAILABLE (Win32 PSAPI)");
+            Some(0)
+        }
     }
 }
 

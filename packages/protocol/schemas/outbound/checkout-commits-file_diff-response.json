@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "checkout.commits.file_diff.response"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "sha": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "file": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "oldPath": {
+                  "type": "string"
+                },
+                "isNew": {
+                  "type": "boolean"
+                },
+                "isDeleted": {
+                  "type": "boolean"
+                },
+                "additions": {
+                  "type": "number"
+                },
+                "deletions": {
+                  "type": "number"
+                },
+                "hunks": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "oldStart": {
+                        "type": "number"
+                      },
+                      "oldCount": {
+                        "type": "number"
+                      },
+                      "newStart": {
+                        "type": "number"
+                      },
+                      "newCount": {
+                        "type": "number"
+                      },
+                      "lines": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": ["add", "remove", "context", "header"]
+                            },
+                            "content": {
+                              "type": "string"
+                            },
+                            "tokens": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "text": {
+                                    "type": "string"
+                                  },
+                                  "style": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": ["text", "style"],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": ["type", "content"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["oldStart", "oldCount", "newStart", "newCount", "lines"],
+                    "additionalProperties": false
+                  }
+                },
+                "status": {
+                  "type": "string",
+                  "enum": ["ok", "too_large", "binary"]
+                }
+              },
+              "required": ["path", "isNew", "isDeleted", "additions", "deletions", "hunks"],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": ["NOT_GIT_REPO", "NOT_ALLOWED", "MERGE_CONFLICT", "UNKNOWN"]
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": ["code", "message"],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": ["cwd", "sha", "path", "file", "error", "requestId"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

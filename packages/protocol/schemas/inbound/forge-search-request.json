@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "forge.search.request"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "query": {
+      "type": "string"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50
+    },
+    "kinds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["issue", "change_request", "github-issue", "github-pr", "pr"]
+      }
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "cwd", "query", "requestId"],
+  "additionalProperties": false
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "transcription_result"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "number"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "avgLogprob": {
+          "type": "number"
+        },
+        "isLowConfidence": {
+          "type": "boolean"
+        },
+        "byteLength": {
+          "type": "number"
+        },
+        "format": {
+          "type": "string"
+        },
+        "debugRecordingPath": {
+          "type": "string"
+        }
+      },
+      "required": ["text", "requestId"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

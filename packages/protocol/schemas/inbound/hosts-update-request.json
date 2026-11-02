@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "hosts.update.request"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "registrationId": {
+      "type": "string"
+    },
+    "patch": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "connection": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "replaceIdentity": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "requestId", "registrationId", "patch"],
+  "additionalProperties": false
+}

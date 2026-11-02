@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "kill_terminal_response"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "terminalId": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": ["terminalId", "success", "requestId"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

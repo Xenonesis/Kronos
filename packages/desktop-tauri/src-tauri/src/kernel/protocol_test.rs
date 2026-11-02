@@ -131,4 +131,51 @@ mod tests {
         assert_eq!(info["message"]["payload"]["protocolVersion"], 1);
         assert_eq!(info["message"]["payload"]["serverId"], "kronos-embedded-daemon");
     }
+
+    #[test]
+    fn test_generated_session_inbound_roundtrip() {
+        use crate::kernel::generated_types::SessionInboundMessage;
+
+        // 1. hosts.list.request
+        let hosts_list_json = json!({
+            "type": "hosts.list.request",
+            "requestId": "req-hosts-42",
+            "observe": true
+        });
+        let in_msg: SessionInboundMessage = serde_json::from_value(hosts_list_json.clone()).expect("Deserialize HostsListRequest");
+        match in_msg {
+            SessionInboundMessage::HostsListRequest { request_id, observe } => {
+                assert_eq!(request_id, "req-hosts-42");
+                assert_eq!(observe, Some(true));
+            }
+            _ => panic!("Expected HostsListRequest variant"),
+        }
+
+        // 2. loop/run
+        let loop_run_json = json!({
+            "type": "loop/run",
+            "requestId": "req-loop-1",
+            "prompt": "Fix all tests",
+            "cwd": "/workspace/project",
+            "archive": true
+        });
+        let loop_msg: SessionInboundMessage = serde_json::from_value(loop_run_json.clone()).expect("Deserialize LoopRun");
+        match loop_msg {
+            SessionInboundMessage::LoopRun { request_id, prompt, cwd, archive, .. } => {
+                assert_eq!(request_id, "req-loop-1");
+                assert_eq!(prompt, "Fix all tests");
+                assert_eq!(cwd, "/workspace/project");
+                assert_eq!(archive, Some(true));
+            }
+            _ => panic!("Expected LoopRun variant"),
+        }
+
+        // 3. Unknown fallback variant
+        let unknown_json = json!({
+            "type": "custom.future.unrecognized.message",
+            "foo": "bar"
+        });
+        let unknown_msg: SessionInboundMessage = serde_json::from_value(unknown_json).expect("Deserialize Unknown");
+        assert_eq!(unknown_msg, SessionInboundMessage::Unknown);
+    }
 }

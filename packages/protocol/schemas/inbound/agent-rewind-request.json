@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "agent.rewind.request"
+    },
+    "agentId": {
+      "type": "string"
+    },
+    "messageId": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["conversation", "files", "both"]
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "agentId", "messageId", "mode", "requestId"],
+  "additionalProperties": false
+}

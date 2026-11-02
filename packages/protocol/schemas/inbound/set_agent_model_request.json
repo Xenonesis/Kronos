@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "set_agent_model_request"
+    },
+    "agentId": {
+      "type": "string"
+    },
+    "modelId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "agentId", "modelId", "requestId"],
+  "additionalProperties": false
+}

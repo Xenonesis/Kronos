@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "hosts.route.frame.request"
+    },
+    "routeId": {
+      "type": "string"
+    },
+    "data": {
+      "type": "string",
+      "maxLength": 104857600
+    },
+    "binary": {
+      "type": "boolean",
+      "const": false
+    }
+  },
+  "required": ["type", "routeId", "data", "binary"],
+  "additionalProperties": false
+}

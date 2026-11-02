@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "create_paseo_worktree_request"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "worktreeSlug": {
+      "type": "string"
+    },
+    "nameContext": {
+      "type": "string"
+    },
+    "attachments": {},
+    "firstAgentContext": {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "type": "string"
+        },
+        "attachments": {}
+      },
+      "additionalProperties": false
+    },
+    "refName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "action": {
+      "type": "string",
+      "enum": ["branch-off", "checkout"]
+    },
+    "checkoutSource": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "change_request"
+        },
+        "forge": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "projectPath": {
+          "type": "string"
+        }
+      },
+      "required": ["kind", "number"],
+      "additionalProperties": false
+    },
+    "githubPrNumber": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "cwd", "requestId"],
+  "additionalProperties": false
+}

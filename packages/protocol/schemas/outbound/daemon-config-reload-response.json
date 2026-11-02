@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "daemon.config.reload.response"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "appliedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "restartRequiredPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "overrideControlledPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["requestId", "appliedPaths", "restartRequiredPaths", "overrideControlledPaths"],
+      "additionalProperties": {}
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

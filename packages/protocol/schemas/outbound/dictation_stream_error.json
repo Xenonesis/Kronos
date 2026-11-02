@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "dictation_stream_error"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "dictationId": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "reasonCode": {
+          "type": "string"
+        },
+        "missingModelIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "debugRecordingPath": {
+          "type": "string"
+        }
+      },
+      "required": ["dictationId", "error", "retryable"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

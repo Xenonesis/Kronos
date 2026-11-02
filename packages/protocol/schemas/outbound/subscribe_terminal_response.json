@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "subscribe_terminal_response"
+    },
+    "payload": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "terminalId": {
+              "type": "string"
+            },
+            "slot": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "subscriptionId": {
+              "type": "string"
+            },
+            "error": {
+              "type": "null"
+            },
+            "requestId": {
+              "type": "string"
+            }
+          },
+          "required": ["terminalId", "slot", "error", "requestId"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "terminalId": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "requestId": {
+              "type": "string"
+            }
+          },
+          "required": ["terminalId", "error", "requestId"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

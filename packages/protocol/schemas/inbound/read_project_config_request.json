@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "read_project_config_request"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "repoRoot": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "requestId", "repoRoot"],
+  "additionalProperties": false
+}

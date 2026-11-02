@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "usage.list_reports.request"
+    },
+    "agentId": {
+      "type": "string"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "reportIds": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "forceRefresh": {
+      "type": "boolean"
+    }
+  },
+  "required": ["type", "requestId"],
+  "additionalProperties": false
+}

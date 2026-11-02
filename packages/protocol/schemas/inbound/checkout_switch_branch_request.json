@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "checkout_switch_branch_request"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "branch": {
+      "type": "string"
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "cwd", "branch", "requestId"],
+  "additionalProperties": false
+}

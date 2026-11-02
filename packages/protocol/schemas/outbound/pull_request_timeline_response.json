@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "pull_request_timeline_response"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "default": "",
+          "type": "string"
+        },
+        "prNumber": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "items": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "default": "",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "review"
+                  },
+                  "author": {
+                    "default": "unknown",
+                    "type": "string"
+                  },
+                  "authorUrl": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "avatarUrl": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "body": {
+                    "default": "",
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "default": 0,
+                    "type": "number"
+                  },
+                  "url": {
+                    "default": "",
+                    "type": "string"
+                  },
+                  "reviewState": {
+                    "default": "commented",
+                    "type": "string",
+                    "enum": ["approved", "changes_requested", "commented"]
+                  }
+                },
+                "required": ["id", "kind", "author", "body", "createdAt", "url", "reviewState"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "default": "",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "comment"
+                  },
+                  "author": {
+                    "default": "unknown",
+                    "type": "string"
+                  },
+                  "authorUrl": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "avatarUrl": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "body": {
+                    "default": "",
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "default": 0,
+                    "type": "number"
+                  },
+                  "url": {
+                    "default": "",
+                    "type": "string"
+                  },
+                  "reviewId": {
+                    "type": "string"
+                  },
+                  "threadId": {
+                    "type": "string"
+                  },
+                  "threadIsResolved": {
+                    "type": "boolean"
+                  },
+                  "location": {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      },
+                      "line": {
+                        "type": "number"
+                      },
+                      "startLine": {
+                        "type": "number"
+                      },
+                      "threadId": {
+                        "type": "string"
+                      },
+                      "isResolved": {
+                        "type": "boolean"
+                      },
+                      "isOutdated": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["id", "kind", "author", "body", "createdAt", "url"],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "truncated": {
+          "default": false,
+          "type": "boolean"
+        },
+        "error": {
+          "default": null,
+          "anyOf": [
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "not_found"
+                    },
+                    "message": {
+                      "default": "",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["kind", "message"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "forbidden"
+                    },
+                    "message": {
+                      "default": "",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["kind", "message"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "unknown"
+                    },
+                    "message": {
+                      "default": "",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["kind", "message"],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestId": {
+          "default": "",
+          "type": "string"
+        },
+        "githubFeaturesEnabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "authState": {}
+      },
+      "required": [
+        "cwd",
+        "prNumber",
+        "items",
+        "truncated",
+        "error",
+        "requestId",
+        "githubFeaturesEnabled"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

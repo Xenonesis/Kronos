@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "fetch_recent_provider_sessions_request"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "providers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "since": {
+      "type": "string"
+    },
+    "limit": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 200
+    },
+    "query": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "requestId"],
+  "additionalProperties": false
+}

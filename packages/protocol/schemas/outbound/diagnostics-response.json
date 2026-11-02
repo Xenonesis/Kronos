@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "diagnostics.response"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "diagnostic": {
+          "type": "string"
+        }
+      },
+      "required": ["requestId", "diagnostic"],
+      "additionalProperties": {}
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

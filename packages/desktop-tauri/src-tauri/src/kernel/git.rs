@@ -12,6 +12,15 @@ pub struct GitStatusSummary {
     pub staged_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeEntry {
+    pub path: String,
+    pub head: String,
+    pub branch: Option<String>,
+    pub is_bare: bool,
+}
+
 pub enum RepoRef<'a> {
     Path(Cow<'a, Path>),
     Repo(&'a gix::Repository),
@@ -167,5 +176,110 @@ impl GitEngine {
             untracked_count,
             staged_count,
         })
+    }
+
+    pub async fn git_exec(cwd: &Path, args: &[&str]) -> Result<String, String> {
+        let output = tokio::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .await
+            .map_err(|e| format!("Failed to spawn git: {e}"))?;
+
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if err.is_empty() {
+                format!("git {:?} failed with exit code {:?}", args, output.status.code())
+            } else {
+                err
+            });
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    pub async fn get_diff(cwd: &Path, staged: bool) -> Result<String, String> {
+        if staged {
+            Self::git_exec(cwd, &["diff", "--cached"]).await
+        } else {
+            Self::git_exec(cwd, &["diff"]).await
+        }
+    }
+
+    pub async fn list_branches(cwd: &Path) -> Result<Vec<String>, String> {
+        let out = Self::git_exec(cwd, &["branch", "--format=%(refname:short)"]).await?;
+        Ok(out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+    }
+
+    pub async fn create_branch(cwd: &Path, branch: &str) -> Result<(), String> {
+        Self::git_exec(cwd, &["checkout", "-b", branch]).await.map(|_| ())
+    }
+
+    pub async fn checkout(cwd: &Path, target: &str) -> Result<(), String> {
+        Self::git_exec(cwd, &["checkout", target]).await.map(|_| ())
+    }
+
+    pub async fn commit(cwd: &Path, message: &str) -> Result<String, String> {
+        Self::git_exec(cwd, &["commit", "-m", message]).await
+    }
+
+    pub async fn worktree_add(repo: &Path, path: &Path, branch: &str, create_branch: bool) -> Result<(), String> {
+        let path_str = path.to_str().ok_or("Invalid worktree path")?;
+        if create_branch {
+            Self::git_exec(repo, &["worktree", "add", "-b", branch, path_str]).await.map(|_| ())
+        } else {
+            Self::git_exec(repo, &["worktree", "add", path_str, branch]).await.map(|_| ())
+        }
+    }
+
+    pub async fn worktree_remove(repo: &Path, path: &Path) -> Result<(), String> {
+        let path_str = path.to_str().ok_or("Invalid worktree path")?;
+        Self::git_exec(repo, &["worktree", "remove", "--force", path_str]).await.map(|_| ())
+    }
+
+    pub async fn worktree_list(repo: &Path) -> Result<Vec<WorktreeEntry>, String> {
+        let out = Self::git_exec(repo, &["worktree", "list", "--porcelain"]).await?;
+        let mut worktrees = Vec::new();
+        let mut cur_path = String::new();
+        let mut cur_head = String::new();
+        let mut cur_branch = None;
+        let mut cur_bare = false;
+
+        for line in out.lines() {
+            let line = line.trim();
+            if line.starts_with("worktree ") {
+                if !cur_path.is_empty() {
+                    worktrees.push(WorktreeEntry {
+                        path: cur_path,
+                        head: cur_head,
+                        branch: cur_branch,
+                        is_bare: cur_bare,
+                    });
+                    cur_head = String::new();
+                    cur_branch = None;
+                    cur_bare = false;
+                }
+                cur_path = line["worktree ".len()..].to_string();
+            } else if line.starts_with("HEAD ") {
+                cur_head = line["HEAD ".len()..].to_string();
+            } else if line.starts_with("branch ") {
+                let full = &line["branch ".len()..];
+                let short = full.strip_prefix("refs/heads/").unwrap_or(full);
+                cur_branch = Some(short.to_string());
+            } else if line == "bare" {
+                cur_bare = true;
+            }
+        }
+
+        if !cur_path.is_empty() {
+            worktrees.push(WorktreeEntry {
+                path: cur_path,
+                head: cur_head,
+                branch: cur_branch,
+                is_bare: cur_bare,
+            });
+        }
+
+        Ok(worktrees)
     }
 }

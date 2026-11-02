@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "dictation_stream_start"
+    },
+    "dictationId": {
+      "type": "string"
+    },
+    "format": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "dictationId", "format"],
+  "additionalProperties": false
+}

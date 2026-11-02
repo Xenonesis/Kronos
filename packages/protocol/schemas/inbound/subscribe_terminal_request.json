@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "subscribe_terminal_request"
+    },
+    "terminalId": {
+      "type": "string"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "restore": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["live", "visible-snapshot", "full-snapshot"]
+        },
+        "scrollbackLines": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "size": {
+          "type": "object",
+          "properties": {
+            "rows": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "cols": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": ["rows", "cols"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["mode"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "terminalId", "requestId"],
+  "additionalProperties": false
+}

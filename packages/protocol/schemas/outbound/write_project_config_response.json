@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "write_project_config_response"
+    },
+    "payload": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "requestId": {
+              "type": "string"
+            },
+            "repoRoot": {
+              "type": "string"
+            },
+            "ok": {
+              "type": "boolean",
+              "const": true
+            },
+            "config": {
+              "type": "object",
+              "properties": {
+                "worktree": {
+                  "type": "object",
+                  "properties": {
+                    "setup": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    },
+                    "teardown": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    },
+                    "terminals": {},
+                    "servicePorts": {
+                      "type": "object",
+                      "properties": {
+                        "range": {
+                          "type": "string",
+                          "pattern": "^(\\d{1,5})-(\\d{1,5})$"
+                        },
+                        "portScript": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": {}
+                },
+                "scripts": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "type": {},
+                      "command": {},
+                      "port": {}
+                    },
+                    "additionalProperties": {}
+                  }
+                },
+                "metadataGeneration": {
+                  "default": {},
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "default": {},
+                      "type": "object",
+                      "properties": {
+                        "instructions": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": {}
+                    },
+                    "branchName": {
+                      "default": {},
+                      "type": "object",
+                      "properties": {
+                        "instructions": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": {}
+                    },
+                    "commitMessage": {
+                      "default": {},
+                      "type": "object",
+                      "properties": {
+                        "instructions": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": {}
+                    },
+                    "pullRequest": {
+                      "default": {},
+                      "type": "object",
+                      "properties": {
+                        "instructions": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": {}
+                    }
+                  },
+                  "additionalProperties": {}
+                }
+              },
+              "additionalProperties": {}
+            },
+            "revision": {
+              "type": "object",
+              "properties": {
+                "mtimeMs": {
+                  "type": "number"
+                },
+                "size": {
+                  "type": "number"
+                }
+              },
+              "required": ["mtimeMs", "size"],
+              "additionalProperties": false
+            },
+            "hasUncommittedWorktreeSetupChanges": {
+              "type": "boolean"
+            }
+          },
+          "required": ["requestId", "repoRoot", "ok", "config", "revision"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "requestId": {
+              "type": "string"
+            },
+            "repoRoot": {
+              "type": "string"
+            },
+            "ok": {
+              "type": "boolean",
+              "const": false
+            },
+            "error": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "const": "project_not_found"
+                    }
+                  },
+                  "required": ["code"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "const": "invalid_project_config"
+                    }
+                  },
+                  "required": ["code"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "const": "stale_project_config"
+                    },
+                    "currentRevision": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "mtimeMs": {
+                              "type": "number"
+                            },
+                            "size": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["mtimeMs", "size"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["code", "currentRevision"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "const": "write_failed"
+                    }
+                  },
+                  "required": ["code"],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": ["requestId", "repoRoot", "ok", "error"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

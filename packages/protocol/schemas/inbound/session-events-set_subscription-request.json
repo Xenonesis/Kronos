@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "session.events.set_subscription.request"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "project.update",
+          "providers_snapshot_update",
+          "agent_attention_required",
+          "agent_permission_request",
+          "agent_permission_resolved",
+          "checkout_status_update",
+          "script_status_update",
+          "workspace_setup_progress",
+          "agent.provider_subagents.update",
+          "terminal_attention_required",
+          "status.server_info",
+          "status.daemon_config_changed",
+          "status.plugin_catalog_changed",
+          "status.plugin_settings_changed",
+          "activity_log",
+          "hub.execution.agent.update",
+          "hub.execution.agent.stream"
+        ]
+      }
+    },
+    "notifications": {
+      "type": "boolean"
+    }
+  },
+  "required": ["type", "requestId", "events"],
+  "additionalProperties": false
+}

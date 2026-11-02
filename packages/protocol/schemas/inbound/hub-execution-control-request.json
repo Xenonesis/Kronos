@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "hub.execution.control.request"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "executionId": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string",
+      "enum": ["interrupt", "archive"]
+    }
+  },
+  "required": ["type", "requestId", "executionId", "action"],
+  "additionalProperties": false
+}

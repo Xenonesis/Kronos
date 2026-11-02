@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "list_provider_features_request"
+    },
+    "draftConfig": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "modeId": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "thinkingOptionId": {
+          "type": "string"
+        },
+        "featureValues": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
+        }
+      },
+      "required": ["provider", "cwd"],
+      "additionalProperties": false
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "draftConfig", "requestId"],
+  "additionalProperties": false
+}

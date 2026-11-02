@@ -58,6 +58,20 @@ pub fn get_shm_ring() -> std::sync::Arc<tokio::sync::Mutex<crate::kernel::shm::S
     SHM_RING.clone()
 }
 
+static AGENT_MANAGER: std::sync::OnceLock<crate::agent::manager::AgentManager> = std::sync::OnceLock::new();
+static PLUGIN_MANAGER: std::sync::OnceLock<crate::agent::providers::plugins::NativePluginManager> = std::sync::OnceLock::new();
+
+pub fn get_agent_manager() -> &'static crate::agent::manager::AgentManager {
+    AGENT_MANAGER.get_or_init(|| {
+        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(".paseo");
+        crate::agent::manager::AgentManager::new(home)
+    })
+}
+
+pub fn get_plugin_manager() -> &'static crate::agent::providers::plugins::NativePluginManager {
+    PLUGIN_MANAGER.get_or_init(crate::agent::providers::plugins::NativePluginManager::new)
+}
+
 fn extract_jsonrpc_request_str(val: &serde_json::Value) -> Option<String> {
     if let Some(req) = val.get("request") {
         if let Some(s) = req.as_str() {
@@ -118,23 +132,7 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
             id: envelope.id,
             msg_type: "server_info".to_string(),
             success: true,
-            data: Some(serde_json::json!({
-                "status": "server_info",
-                "protocolVersion": 1,
-                "serverId": "kronos-embedded-daemon",
-                "hostname": "localhost",
-                "version": env!("CARGO_PKG_VERSION"),
-                "desktopManaged": true,
-                "features": {
-                    "connectedHosts": true,
-                    "hostMultiplexing": true,
-                    "projectAdd": true,
-                    "stableProjectIdentity": true,
-                    "projectGithubClone": true,
-                    "workspaceGithubRepositorySearch": true,
-                    "projectCreateDirectory": true
-                }
-            })),
+            data: Some(crate::kernel::protocol::build_server_info_payload()),
             error: None,
         },
         "directory_suggestions_request" | "workspace/suggest_directory" => {
@@ -800,6 +798,310 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "payload": summary
             })
         }
+        "git/diff" => {
+            let payload = msg.get("payload");
+            let cwd_str = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let staged = msg.get("staged")
+                .or_else(|| payload.and_then(|p| p.get("staged")))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let cwd = std::path::Path::new(cwd_str);
+            match crate::kernel::git::GitEngine::get_diff(cwd, staged).await {
+                Ok(diff) => serde_json::json!({
+                    "type": "git/diff/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": true,
+                    "payload": { "diff": diff },
+                    "diff": diff
+                }),
+                Err(err) => serde_json::json!({
+                    "type": "git/diff/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": false,
+                    "error": err,
+                    "payload": { "error": err }
+                })
+            }
+        }
+        "git/branches" => {
+            let payload = msg.get("payload");
+            let cwd_str = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let cwd = std::path::Path::new(cwd_str);
+            match crate::kernel::git::GitEngine::list_branches(cwd).await {
+                Ok(branches) => serde_json::json!({
+                    "type": "git/branches/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": true,
+                    "payload": { "branches": branches },
+                    "branches": branches
+                }),
+                Err(err) => serde_json::json!({
+                    "type": "git/branches/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": false,
+                    "error": err,
+                    "payload": { "error": err }
+                })
+            }
+        }
+        "git/worktree/list" => {
+            let payload = msg.get("payload");
+            let cwd_str = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let cwd = std::path::Path::new(cwd_str);
+            match crate::kernel::git::GitEngine::worktree_list(cwd).await {
+                Ok(worktrees) => serde_json::json!({
+                    "type": "git/worktree/list/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": true,
+                    "payload": { "worktrees": worktrees },
+                    "worktrees": worktrees
+                }),
+                Err(err) => serde_json::json!({
+                    "type": "git/worktree/list/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": false,
+                    "error": err,
+                    "payload": { "error": err }
+                })
+            }
+        }
+        "terminal/snapshot" => {
+            let payload = msg.get("payload");
+            let terminal_id = msg.get("terminalId")
+                .or_else(|| payload.and_then(|p| p.get("terminalId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("term-default");
+            let rows = msg.get("rows")
+                .or_else(|| payload.and_then(|p| p.get("rows")))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(24) as u16;
+            let cols = msg.get("cols")
+                .or_else(|| payload.and_then(|p| p.get("cols")))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(80) as u16;
+
+            let screen = crate::kernel::terminal::get_terminal_registry().get_or_create(terminal_id, rows, cols);
+            let snapshot = screen.snapshot();
+            serde_json::json!({
+                "type": "terminal/snapshot/response",
+                "requestId": request_id,
+                "id": request_id,
+                "success": true,
+                "payload": snapshot,
+                "snapshot": snapshot
+            })
+        }
+        "terminal/feed" => {
+            let payload = msg.get("payload");
+            let terminal_id = msg.get("terminalId")
+                .or_else(|| payload.and_then(|p| p.get("terminalId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("term-default");
+            let data = msg.get("data")
+                .or_else(|| payload.and_then(|p| p.get("data")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let screen = crate::kernel::terminal::get_terminal_registry().get_or_create(terminal_id, 24, 80);
+            screen.process(data.as_bytes());
+            serde_json::json!({
+                "type": "terminal/feed/response",
+                "requestId": request_id,
+                "id": request_id,
+                "success": true
+            })
+        }
+        "agent/create" => {
+            let payload = msg.get("payload");
+            let provider = msg.get("provider")
+                .or_else(|| payload.and_then(|p| p.get("provider")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("claude");
+            let cwd = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let title = msg.get("title")
+                .or_else(|| payload.and_then(|p| p.get("title")))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let workspace_id = msg.get("workspaceId")
+                .or_else(|| payload.and_then(|p| p.get("workspaceId")))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let config = msg.get("config").or_else(|| payload.and_then(|p| p.get("config"))).cloned();
+
+            let mgr = get_agent_manager();
+            match mgr.create_agent(provider, cwd, title, workspace_id, config) {
+                Ok(record) => serde_json::json!({
+                    "type": "agent/create/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": true,
+                    "payload": record,
+                    "agent": record
+                }),
+                Err(err) => serde_json::json!({
+                    "type": "agent/create/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": false,
+                    "error": err,
+                    "payload": { "error": err }
+                })
+            }
+        }
+        "agent/get" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("id")
+                .or_else(|| payload.and_then(|p| p.get("id")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let mgr = get_agent_manager();
+            if let Some(record) = mgr.get_agent(agent_id) {
+                serde_json::json!({
+                    "type": "agent/get/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": true,
+                    "payload": record,
+                    "agent": record
+                })
+            } else {
+                serde_json::json!({
+                    "type": "agent/get/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": false,
+                    "error": format!("Agent {agent_id} not found"),
+                    "payload": { "error": format!("Agent {agent_id} not found") }
+                })
+            }
+        }
+        "agent/list" => {
+            let mgr = get_agent_manager();
+            let agents = mgr.list_agents();
+            serde_json::json!({
+                "type": "agent/list/response",
+                "requestId": request_id,
+                "id": request_id,
+                "success": true,
+                "payload": { "agents": agents },
+                "agents": agents
+            })
+        }
+        "agent/message" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("id")
+                .or_else(|| payload.and_then(|p| p.get("id")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let text = msg.get("text")
+                .or_else(|| payload.and_then(|p| p.get("text")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let mgr = get_agent_manager();
+            match mgr.send_message(agent_id, text) {
+                Ok(()) => serde_json::json!({
+                    "type": "agent/message/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": true
+                }),
+                Err(err) => serde_json::json!({
+                    "type": "agent/message/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": false,
+                    "error": err,
+                    "payload": { "error": err }
+                })
+            }
+        }
+        "agent/timeline" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("id")
+                .or_else(|| payload.and_then(|p| p.get("id")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let mgr = get_agent_manager();
+            let items = mgr.get_timeline(agent_id);
+            serde_json::json!({
+                "type": "agent/timeline/response",
+                "requestId": request_id,
+                "id": request_id,
+                "success": true,
+                "payload": { "items": items },
+                "timeline": items
+            })
+        }
+        "agent/cancel" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("id")
+                .or_else(|| payload.and_then(|p| p.get("id")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let mgr = get_agent_manager();
+            match mgr.cancel_agent(agent_id) {
+                Ok(()) => serde_json::json!({
+                    "type": "agent/cancel/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": true
+                }),
+                Err(err) => serde_json::json!({
+                    "type": "agent/cancel/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": false,
+                    "error": err,
+                    "payload": { "error": err }
+                })
+            }
+        }
+        "providers/list" => {
+            let mgr = get_agent_manager();
+            let providers = mgr.registry().list();
+            serde_json::json!({
+                "type": "providers/list/response",
+                "requestId": request_id,
+                "id": request_id,
+                "success": true,
+                "payload": { "providers": providers },
+                "providers": providers
+            })
+        }
+        "plugins/usage" => {
+            let mgr = get_plugin_manager();
+            let metrics = mgr.get_metrics();
+            serde_json::json!({
+                "type": "plugins/usage/response",
+                "requestId": request_id,
+                "id": request_id,
+                "success": true,
+                "payload": { "metrics": metrics },
+                "metrics": metrics
+            })
+        }
         "directory_suggestions_request" => {
             let payload = msg.get("payload");
             let query = msg.get("query")
@@ -988,6 +1290,197 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }
             }
         }
+        "file_explorer_request" => {
+            let payload = msg.get("payload");
+            let cwd_str = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let path_opt = msg.get("path")
+                .or_else(|| payload.and_then(|p| p.get("path")))
+                .and_then(|v| v.as_str());
+
+            let cwd = std::path::Path::new(cwd_str);
+            match crate::kernel::file_service::list_directory(cwd, path_opt) {
+                Ok(entries) => {
+                    serde_json::json!({
+                        "type": "file_explorer_response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": true,
+                        "payload": {
+                            "entries": entries
+                        },
+                        "entries": entries
+                    })
+                }
+                Err(err) => {
+                    serde_json::json!({
+                        "type": "file_explorer_response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": false,
+                        "error": err.to_string(),
+                        "payload": {
+                            "error": err.to_string()
+                        }
+                    })
+                }
+            }
+        }
+        "fs.file.write.request" => {
+            let payload = msg.get("payload");
+            let cwd_str = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let rel_path = msg.get("path")
+                .or_else(|| payload.and_then(|p| p.get("path")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let content_str = msg.get("content")
+                .or_else(|| payload.and_then(|p| p.get("content")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let cwd = std::path::Path::new(cwd_str);
+            match crate::kernel::file_service::write_file(cwd, rel_path, content_str.as_bytes()) {
+                Ok(()) => {
+                    serde_json::json!({
+                        "type": "fs.file.write.response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": true,
+                        "payload": { "success": true }
+                    })
+                }
+                Err(err) => {
+                    serde_json::json!({
+                        "type": "fs.file.write.response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": false,
+                        "error": err.to_string(),
+                        "payload": { "error": err.to_string() }
+                    })
+                }
+            }
+        }
+        "fs.entry.create.request" => {
+            let payload = msg.get("payload");
+            let cwd_str = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let parent = msg.get("parentPath")
+                .or_else(|| payload.and_then(|p| p.get("parentPath")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let name = msg.get("name")
+                .or_else(|| payload.and_then(|p| p.get("name")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let kind = msg.get("kind")
+                .or_else(|| payload.and_then(|p| p.get("kind")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("file");
+
+            let cwd = std::path::Path::new(cwd_str);
+            let is_dir = kind == "directory";
+            match crate::kernel::file_service::create_entry(cwd, parent, name, is_dir) {
+                Ok(path) => {
+                    serde_json::json!({
+                        "type": "fs.entry.create.response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": true,
+                        "payload": { "success": true, "path": path }
+                    })
+                }
+                Err(err) => {
+                    serde_json::json!({
+                        "type": "fs.entry.create.response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": false,
+                        "error": err.to_string(),
+                        "payload": { "error": err.to_string() }
+                    })
+                }
+            }
+        }
+        "fs.entry.rename.request" => {
+            let payload = msg.get("payload");
+            let cwd_str = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let path = msg.get("path")
+                .or_else(|| payload.and_then(|p| p.get("path")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let new_name = msg.get("newName")
+                .or_else(|| payload.and_then(|p| p.get("newName")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let cwd = std::path::Path::new(cwd_str);
+            match crate::kernel::file_service::rename_entry(cwd, path, new_name) {
+                Ok(new_path) => {
+                    serde_json::json!({
+                        "type": "fs.entry.rename.response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": true,
+                        "payload": { "success": true, "path": new_path }
+                    })
+                }
+                Err(err) => {
+                    serde_json::json!({
+                        "type": "fs.entry.rename.response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": false,
+                        "error": err.to_string(),
+                        "payload": { "error": err.to_string() }
+                    })
+                }
+            }
+        }
+        "fs.entry.delete.request" => {
+            let payload = msg.get("payload");
+            let cwd_str = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let path = msg.get("path")
+                .or_else(|| payload.and_then(|p| p.get("path")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let cwd = std::path::Path::new(cwd_str);
+            match crate::kernel::file_service::delete_entry(cwd, path) {
+                Ok(()) => {
+                    serde_json::json!({
+                        "type": "fs.entry.delete.response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": true,
+                        "payload": { "success": true }
+                    })
+                }
+                Err(err) => {
+                    serde_json::json!({
+                        "type": "fs.entry.delete.response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": false,
+                        "error": err.to_string(),
+                        "payload": { "error": err.to_string() }
+                    })
+                }
+            }
+        }
         "ast/analyze" | "ast/parse" => {
             let payload = msg.get("payload");
             let path_opt = msg.get("path")
@@ -1163,10 +1656,16 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         other => {
             serde_json::json!({
-                "type": format!("{}/response", other),
+                "type": "rpc_error",
                 "requestId": request_id,
-                "success": true,
-                "payload": {}
+                "id": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "request_id": request_id,
+                    "requestType": other,
+                    "error": format!("Unsupported message type in EmbeddedDaemon: {other}"),
+                    "code": "not_implemented"
+                }
             })
         }
     }
@@ -1259,6 +1758,7 @@ impl DaemonHandle {
             .route("/api/health", get(health_check))
             .route("/health", get(health_check))
             .route("/api/version", get(version_check))
+            .merge(crate::kernel::browser_proxy::router())
             .route("/", get({
                 let tx = shutdown_tx.clone();
                 move |ws: WebSocketUpgrade| {

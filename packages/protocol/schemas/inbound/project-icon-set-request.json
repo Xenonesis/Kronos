@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "project.icon.set.request"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "automatic"
+            }
+          },
+          "required": ["type"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "upload"
+            },
+            "data": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "data"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "projectId", "source", "requestId"],
+  "additionalProperties": false
+}

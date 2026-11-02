@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "loop/run"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "prompt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "provider": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "modeId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workerProvider": {
+      "type": "string"
+    },
+    "workerModel": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verifierProvider": {
+      "type": "string"
+    },
+    "verifierModel": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verifierModeId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verifyPrompt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verifyChecks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "archive": {
+      "type": "boolean"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sleepMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "maxIterations": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "maxTimeMs": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": ["type", "requestId", "prompt", "cwd"],
+  "additionalProperties": false
+}

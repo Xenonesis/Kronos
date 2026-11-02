@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "terminal_input"
+    },
+    "terminalId": {
+      "type": "string"
+    },
+    "message": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "input"
+            },
+            "data": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "data"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resize"
+            },
+            "rows": {
+              "type": "number"
+            },
+            "cols": {
+              "type": "number"
+            },
+            "intent": {
+              "type": "string",
+              "enum": ["claim", "update"]
+            }
+          },
+          "required": ["type", "rows", "cols"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "mouse"
+            },
+            "row": {
+              "type": "number"
+            },
+            "col": {
+              "type": "number"
+            },
+            "button": {
+              "type": "number"
+            },
+            "action": {
+              "type": "string",
+              "enum": ["down", "up", "move"]
+            }
+          },
+          "required": ["type", "row", "col", "button", "action"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": ["type", "terminalId", "message"],
+  "additionalProperties": false
+}

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "script_status_update"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "subscriptionId": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "scripts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "scriptName": {
+                "type": "string"
+              },
+              "type": {
+                "default": "service",
+                "type": "string",
+                "enum": ["script", "service"]
+              },
+              "hostname": {
+                "type": "string"
+              },
+              "port": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "localProxyUrl": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "publicProxyUrl": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "proxyUrl": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "lifecycle": {
+                "type": "string",
+                "enum": ["running", "stopped"]
+              },
+              "health": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": ["healthy", "unhealthy"]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "exitCode": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "terminalId": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "scriptName",
+              "type",
+              "hostname",
+              "port",
+              "proxyUrl",
+              "lifecycle",
+              "health",
+              "exitCode",
+              "terminalId"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["workspaceId", "scripts"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

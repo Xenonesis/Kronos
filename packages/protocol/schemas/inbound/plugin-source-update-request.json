@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "plugin.source.update.request"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "pluginId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    }
+  },
+  "required": ["type", "requestId"],
+  "additionalProperties": false
+}

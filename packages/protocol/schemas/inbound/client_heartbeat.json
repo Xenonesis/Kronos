@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "client_heartbeat"
+    },
+    "deviceType": {
+      "type": "string",
+      "enum": ["web", "mobile"]
+    },
+    "focusedAgentId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "focusedTerminalId": {
+      "default": null,
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "lastActivityAt": {
+      "type": "string"
+    },
+    "appVisible": {
+      "type": "boolean"
+    },
+    "appVisibilityChangedAt": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "type",
+    "deviceType",
+    "focusedAgentId",
+    "focusedTerminalId",
+    "lastActivityAt",
+    "appVisible"
+  ],
+  "additionalProperties": false
+}

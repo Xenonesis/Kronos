@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "status"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": ["status"],
+      "additionalProperties": {}
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

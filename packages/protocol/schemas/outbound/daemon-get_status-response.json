@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "daemon.get_status.response"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "serverId": {
+          "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pid": {
+          "type": "number"
+        },
+        "nodePath": {
+          "type": "string"
+        },
+        "startedAt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "listen": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "relay": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "endpoint": {
+                  "type": "string"
+                },
+                "publicEndpoint": {
+                  "type": "string"
+                },
+                "useTls": {
+                  "type": "boolean"
+                },
+                "publicUseTls": {
+                  "type": "boolean"
+                }
+              },
+              "required": ["enabled", "endpoint", "publicEndpoint", "useTls", "publicUseTls"],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "available": {
+                "type": "boolean"
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": ["provider", "available"],
+            "additionalProperties": false
+          }
+        },
+        "terminalCleanupUnconfirmed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "number"
+              },
+              "role": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              }
+            },
+            "required": ["pid", "role", "reason", "detail"],
+            "additionalProperties": false
+          }
+        },
+        "terminalsUnavailable": {
+          "type": "string"
+        }
+      },
+      "required": ["requestId", "serverId", "pid", "nodePath", "listen", "providers"],
+      "additionalProperties": {}
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

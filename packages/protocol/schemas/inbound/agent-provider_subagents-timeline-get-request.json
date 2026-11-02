@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "agent.provider_subagents.timeline.get.request"
+    },
+    "parentAgentId": {
+      "type": "string"
+    },
+    "subagentId": {
+      "type": "string"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "direction": {
+      "type": "string",
+      "enum": ["tail", "before", "after"]
+    },
+    "cursor": {
+      "type": "object",
+      "properties": {
+        "epoch": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": ["epoch", "seq"],
+      "additionalProperties": false
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": ["type", "parentAgentId", "subagentId", "requestId"],
+  "additionalProperties": false
+}

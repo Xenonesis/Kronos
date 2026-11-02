@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "speech.local_models.list.request"
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "requestId"],
+  "additionalProperties": false
+}

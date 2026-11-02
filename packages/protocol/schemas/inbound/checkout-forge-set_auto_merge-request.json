@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "checkout.forge.set_auto_merge.request"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "mergeMethod": {
+      "type": "string",
+      "enum": ["merge", "squash", "rebase"]
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "cwd", "enabled", "requestId"],
+  "additionalProperties": false
+}

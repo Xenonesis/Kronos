@@ -1,0 +1,800 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "browser.automation.execute.response"
+    },
+    "payload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ok": {
+              "type": "boolean",
+              "const": true
+            },
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "list_tabs"
+                    },
+                    "tabs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "browserId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                          },
+                          "workspaceId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "url": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "isActive": {
+                            "default": false,
+                            "type": "boolean"
+                          },
+                          "isLoading": {
+                            "default": false,
+                            "type": "boolean"
+                          },
+                          "canGoBack": {
+                            "type": "boolean"
+                          },
+                          "canGoForward": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": ["browserId", "url", "title", "isActive", "isLoading"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["command", "tabs"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "new_tab"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "workspaceId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "url": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["command", "browserId", "workspaceId", "url"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "snapshot"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "workspaceId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "format": {
+                      "type": "string",
+                      "const": "aria-yaml"
+                    },
+                    "snapshot": {
+                      "type": "string"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    },
+                    "stats": {
+                      "type": "object",
+                      "properties": {
+                        "nodeCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "refCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "textLength": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "iframeCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "maxDepth": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": ["nodeCount", "refCount", "textLength"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "command",
+                    "browserId",
+                    "url",
+                    "title",
+                    "format",
+                    "snapshot",
+                    "truncated",
+                    "stats"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "click"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "ref": {
+                      "type": "string",
+                      "pattern": "^@e\\d+$"
+                    },
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["command", "browserId", "ref"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "fill"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "ref": {
+                      "type": "string",
+                      "pattern": "^@e\\d+$"
+                    }
+                  },
+                  "required": ["command", "browserId", "ref"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "wait"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "matched": {
+                      "type": "string",
+                      "enum": ["text", "url"]
+                    }
+                  },
+                  "required": ["command", "browserId", "matched"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "type"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "ref": {
+                      "type": "string",
+                      "pattern": "^@e\\d+$"
+                    },
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["command", "browserId"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "keypress"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "key": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "ref": {
+                      "type": "string",
+                      "pattern": "^@e\\d+$"
+                    },
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["command", "browserId", "key"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "navigate"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "url": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["command", "browserId", "url"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "back"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    }
+                  },
+                  "required": ["command", "browserId"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "forward"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    }
+                  },
+                  "required": ["command", "browserId"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "reload"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    }
+                  },
+                  "required": ["command", "browserId"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "screenshot"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "mimeType": {
+                      "type": "string",
+                      "const": "image/png"
+                    },
+                    "dataBase64": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "width": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "height": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": ["command", "browserId", "mimeType", "dataBase64", "width", "height"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "upload"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "ref": {
+                      "type": "string",
+                      "pattern": "^@e\\d+$"
+                    },
+                    "filePaths": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  "required": ["command", "browserId", "ref", "filePaths"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "select"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "ref": {
+                      "type": "string",
+                      "pattern": "^@e\\d+$"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["command", "browserId", "ref", "value"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "hover"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "ref": {
+                      "type": "string",
+                      "pattern": "^@e\\d+$"
+                    },
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["command", "browserId", "ref"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "drag"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "sourceRef": {
+                      "type": "string",
+                      "pattern": "^@e\\d+$"
+                    },
+                    "targetRef": {
+                      "type": "string",
+                      "pattern": "^@e\\d+$"
+                    },
+                    "sourceX": {
+                      "type": "number"
+                    },
+                    "sourceY": {
+                      "type": "number"
+                    },
+                    "targetX": {
+                      "type": "number"
+                    },
+                    "targetY": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["command", "browserId", "sourceRef", "targetRef"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "logs"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "console": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "level": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          },
+                          "source": {
+                            "type": "string"
+                          },
+                          "line": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "timestamp": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["level", "message", "timestamp"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "network": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "url": {
+                            "type": "string"
+                          },
+                          "method": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "startTime": {
+                            "type": "number"
+                          },
+                          "duration": {
+                            "type": "number"
+                          },
+                          "transferSize": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["url", "startTime", "duration"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["command", "browserId", "console", "network"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "evaluate"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "resultJson": {
+                      "type": "string"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["command", "browserId", "resultJson", "truncated"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "scroll"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "ref": {
+                      "type": "string",
+                      "pattern": "^@e\\d+$"
+                    },
+                    "deltaX": {
+                      "type": "number"
+                    },
+                    "deltaY": {
+                      "type": "number"
+                    },
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["command", "browserId", "deltaX", "deltaY"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "resize"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    },
+                    "width": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "height": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": ["command", "browserId", "width", "height"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "const": "close_tab"
+                    },
+                    "browserId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\d{13,}-[0-9a-f]+)$"
+                    }
+                  },
+                  "required": ["command", "browserId"],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "dialogs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": ["alert", "confirm", "prompt", "beforeunload"]
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "defaultValue": {
+                    "type": "string"
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": ["accepted", "dismissed"]
+                  },
+                  "promptText": {
+                    "type": "string"
+                  },
+                  "timestamp": {
+                    "type": "number"
+                  }
+                },
+                "required": ["type", "message", "action", "timestamp"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["requestId", "ok", "result"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ok": {
+              "type": "boolean",
+              "const": false
+            },
+            "error": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "browser_disabled",
+                    "browser_no_host",
+                    "browser_tab_not_found",
+                    "browser_tab_closed",
+                    "browser_timeout",
+                    "screenshot_no_frame",
+                    "browser_denied",
+                    "browser_unsupported",
+                    "browser_stale_ref",
+                    "browser_unknown_error"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "retryable": {
+                  "default": false,
+                  "type": "boolean"
+                }
+              },
+              "required": ["code", "message", "retryable"],
+              "additionalProperties": false
+            },
+            "dialogs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": ["alert", "confirm", "prompt", "beforeunload"]
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "defaultValue": {
+                    "type": "string"
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": ["accepted", "dismissed"]
+                  },
+                  "promptText": {
+                    "type": "string"
+                  },
+                  "timestamp": {
+                    "type": "number"
+                  }
+                },
+                "required": ["type", "message", "action", "timestamp"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["requestId", "ok", "error"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": ["type", "payload"],
+  "additionalProperties": false
+}

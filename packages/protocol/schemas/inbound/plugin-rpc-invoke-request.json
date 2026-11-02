@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "plugin.rpc.invoke.request"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "pluginId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "method": {
+      "type": "string",
+      "minLength": 1
+    },
+    "input": {}
+  },
+  "required": ["type", "requestId", "pluginId", "method", "input"],
+  "additionalProperties": false
+}

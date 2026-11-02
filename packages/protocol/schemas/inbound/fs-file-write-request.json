@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "fs.file.write.request"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    },
+    "content": {
+      "type": "string"
+    },
+    "contentEncoding": {
+      "type": "string",
+      "enum": ["utf-8", "base64"]
+    },
+    "expectedModifiedAt": {
+      "type": "string"
+    },
+    "expectedRevision": {
+      "type": "string"
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": ["type", "cwd", "path", "content", "expectedModifiedAt", "requestId"],
+  "additionalProperties": false
+}
