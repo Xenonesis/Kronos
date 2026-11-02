@@ -744,6 +744,20 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
         ),
     }
 }
+fn canonicalize_path(path: &std::path::Path) -> std::path::PathBuf {
+    match std::fs::canonicalize(path) {
+        Ok(p) => {
+            let s = p.to_string_lossy();
+            if let Some(stripped) = s.strip_prefix(r"\\?\") {
+                std::path::PathBuf::from(stripped)
+            } else {
+                p
+            }
+        }
+        Err(_) => path.to_path_buf(),
+    }
+}
+
 
 pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Value {
     let msg_type = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -1143,6 +1157,353 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     "entries": entries,
                     "error": null,
                     "requestId": request_id
+                }
+            })
+        }
+        "project.list.request" => {
+            let store = crate::kernel::config_store::get_config_store();
+            let projects = store.list_projects();
+            let project_descriptors: Vec<serde_json::Value> = projects.iter().map(|p| {
+                serde_json::json!({
+                    "projectId": p.id,
+                    "projectKey": p.id,
+                    "projectDisplayName": p.name,
+                    "projectCustomName": null,
+                    "projectCustomIconRevision": null,
+                    "projectIconRevision": 1,
+                    "projectRootPath": p.path,
+                    "projectKind": "directory"
+                })
+            }).collect();
+
+            serde_json::json!({
+                "type": "project.list.response",
+                "payload": {
+                    "requestId": request_id,
+                    "projects": project_descriptors
+                }
+            })
+        }
+        "project.add.request" => {
+            let payload = msg.get("payload");
+            let requested_cwd = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+
+            if requested_cwd.is_empty() {
+                serde_json::json!({
+                    "type": "project.add.response",
+                    "payload": {
+                        "requestId": request_id,
+                        "project": null,
+                        "error": "Missing or empty directory path",
+                        "errorCode": "directory_not_found"
+                    }
+                })
+            } else {
+                let path = std::path::Path::new(requested_cwd);
+                if !path.is_dir() {
+                    serde_json::json!({
+                        "type": "project.add.response",
+                        "payload": {
+                            "requestId": request_id,
+                            "project": null,
+                            "error": format!("Directory not found: {}", requested_cwd),
+                            "errorCode": "directory_not_found"
+                        }
+                    })
+                } else {
+                    let canonical = canonicalize_path(path);
+                    let abs_path = canonical.to_string_lossy().to_string();
+                    let dir_name = canonical.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("project")
+                        .to_string();
+
+                    let normalized_path_lower = abs_path.to_lowercase().replace('\\', "/");
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    std::hash::Hash::hash(&normalized_path_lower, &mut hasher);
+                    let hash_val = std::hash::Hasher::finish(&hasher);
+                    let project_id = format!("prj_{:016x}", hash_val);
+
+                    let dur = std::time::SystemTime::now()
+                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .unwrap_or_default();
+                    let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+
+                    let store = crate::kernel::config_store::get_config_store();
+                    let record = crate::kernel::config_store::ProjectRecord {
+                        id: project_id.clone(),
+                        name: dir_name.clone(),
+                        path: abs_path.clone(),
+                        created_at: now_iso,
+                        default_workspace_id: None,
+                    };
+                    let _ = store.add_project(record);
+
+                    let project_descriptor = serde_json::json!({
+                        "projectId": project_id,
+                        "projectKey": project_id,
+                        "projectDisplayName": dir_name,
+                        "projectCustomName": null,
+                        "projectCustomIconRevision": null,
+                        "projectIconRevision": 1,
+                        "projectRootPath": abs_path,
+                        "projectKind": "directory"
+                    });
+
+                    serde_json::json!({
+                        "type": "project.add.response",
+                        "payload": {
+                            "requestId": request_id,
+                            "project": project_descriptor,
+                            "error": null
+                        }
+                    })
+                }
+            }
+        }
+        "open_project_request" => {
+            let payload = msg.get("payload");
+            let requested_cwd = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+
+            if requested_cwd.is_empty() {
+                serde_json::json!({
+                    "type": "open_project_response",
+                    "payload": {
+                        "requestId": request_id,
+                        "workspace": null,
+                        "error": "Missing or empty directory path",
+                        "errorCode": "directory_not_found"
+                    }
+                })
+            } else {
+                let path = std::path::Path::new(requested_cwd);
+                if !path.is_dir() {
+                    serde_json::json!({
+                        "type": "open_project_response",
+                        "payload": {
+                            "requestId": request_id,
+                            "workspace": null,
+                            "error": format!("Directory not found: {}", requested_cwd),
+                            "errorCode": "directory_not_found"
+                        }
+                    })
+                } else {
+                    let canonical = canonicalize_path(path);
+                    let abs_path = canonical.to_string_lossy().to_string();
+                    let dir_name = canonical.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("project")
+                        .to_string();
+
+                    let normalized_path_lower = abs_path.to_lowercase().replace('\\', "/");
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    std::hash::Hash::hash(&normalized_path_lower, &mut hasher);
+                    let hash_val = std::hash::Hasher::finish(&hasher);
+                    let project_id = format!("prj_{:016x}", hash_val);
+                    let workspace_id = format!("ws_{:016x}", hash_val);
+
+                    let dur = std::time::SystemTime::now()
+                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .unwrap_or_default();
+                    let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+
+                    let store = crate::kernel::config_store::get_config_store();
+                    let record = crate::kernel::config_store::ProjectRecord {
+                        id: project_id.clone(),
+                        name: dir_name.clone(),
+                        path: abs_path.clone(),
+                        created_at: now_iso.clone(),
+                        default_workspace_id: Some(workspace_id.clone()),
+                    };
+                    let _ = store.add_project(record);
+
+                    let ws_record = crate::kernel::config_store::WorkspaceRecord {
+                        id: workspace_id.clone(),
+                        project_id: project_id.clone(),
+                        name: dir_name.clone(),
+                        path: abs_path.clone(),
+                        kind: "directory".to_string(),
+                    };
+                    let _ = store.add_workspace(ws_record);
+
+                    let workspace_descriptor = serde_json::json!({
+                        "id": workspace_id,
+                        "projectId": project_id,
+                        "projectDisplayName": dir_name,
+                        "projectCustomName": null,
+                        "projectCustomIconRevision": null,
+                        "projectRootPath": abs_path,
+                        "workspaceDirectory": abs_path,
+                        "setupStatus": null,
+                        "projectKind": "directory",
+                        "workspaceKind": "directory",
+                        "name": dir_name,
+                        "title": null,
+                        "pinnedAt": null,
+                        "background": null,
+                        "archivingAt": null,
+                        "status": "done",
+                        "statusEnteredAt": null,
+                        "activityAt": null,
+                        "createdAt": now_iso,
+                        "diffStat": null,
+                        "scripts": { "packageJson": null, "scripts": [] }
+                    });
+
+                    serde_json::json!({
+                        "type": "open_project_response",
+                        "payload": {
+                            "requestId": request_id,
+                            "workspace": workspace_descriptor,
+                            "error": null
+                        }
+                    })
+                }
+            }
+        }
+        "project.create_directory.request" => {
+            let payload = msg.get("payload");
+            let parent_path = msg.get("parentPath")
+                .or_else(|| payload.and_then(|p| p.get("parentPath")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            let name = msg.get("name")
+                .or_else(|| payload.and_then(|p| p.get("name")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+
+            if parent_path.is_empty() || name.is_empty() {
+                serde_json::json!({
+                    "type": "project.create_directory.response",
+                    "payload": {
+                        "requestId": request_id,
+                        "directoryPath": null,
+                        "project": null,
+                        "error": "Parent path and directory name are required",
+                        "errorCode": "invalid_parameters"
+                    }
+                })
+            } else {
+                let target = std::path::Path::new(parent_path).join(name);
+                match std::fs::create_dir_all(&target) {
+                    Ok(_) => {
+                        let canonical = canonicalize_path(&target);
+                        let abs_path = canonical.to_string_lossy().to_string();
+                        let dir_name = name.to_string();
+
+                        let normalized_path_lower = abs_path.to_lowercase().replace('\\', "/");
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        std::hash::Hash::hash(&normalized_path_lower, &mut hasher);
+                        let hash_val = std::hash::Hasher::finish(&hasher);
+                        let project_id = format!("prj_{:016x}", hash_val);
+
+                        let dur = std::time::SystemTime::now()
+                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                            .unwrap_or_default();
+                        let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+
+                        let store = crate::kernel::config_store::get_config_store();
+                        let record = crate::kernel::config_store::ProjectRecord {
+                            id: project_id.clone(),
+                            name: dir_name.clone(),
+                            path: abs_path.clone(),
+                            created_at: now_iso,
+                            default_workspace_id: None,
+                        };
+                        let _ = store.add_project(record);
+
+                        let project_descriptor = serde_json::json!({
+                            "projectId": project_id,
+                            "projectKey": project_id,
+                            "projectDisplayName": dir_name,
+                            "projectCustomName": null,
+                            "projectCustomIconRevision": null,
+                            "projectIconRevision": 1,
+                            "projectRootPath": abs_path,
+                            "projectKind": "directory"
+                        });
+
+                        serde_json::json!({
+                            "type": "project.create_directory.response",
+                            "payload": {
+                                "requestId": request_id,
+                                "directoryPath": abs_path,
+                                "project": project_descriptor,
+                                "error": null,
+                                "errorCode": null
+                            }
+                        })
+                    }
+                    Err(e) => {
+                        serde_json::json!({
+                            "type": "project.create_directory.response",
+                            "payload": {
+                                "requestId": request_id,
+                                "directoryPath": null,
+                                "project": null,
+                                "error": format!("Failed to create directory: {}", e),
+                                "errorCode": "create_failed"
+                            }
+                        })
+                    }
+                }
+            }
+        }
+        "project.remove.request" => {
+            let payload = msg.get("payload");
+            let project_id = msg.get("projectId")
+                .or_else(|| payload.and_then(|p| p.get("projectId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+
+            let store = crate::kernel::config_store::get_config_store();
+            let _ = store.remove_project(project_id);
+
+            serde_json::json!({
+                "type": "project.remove.response",
+                "payload": {
+                    "requestId": request_id,
+                    "projectId": project_id,
+                    "error": null
+                }
+            })
+        }
+        "project.icon.get.request" => {
+            serde_json::json!({
+                "type": "project.icon.get.response",
+                "payload": {
+                    "requestId": request_id,
+                    "icon": null,
+                    "revision": 1
+                }
+            })
+        }
+        "fetch_workspaces_request" => {
+            serde_json::json!({
+                "type": "fetch_workspaces_response",
+                "payload": {
+                    "requestId": request_id,
+                    "workspaces": []
+                }
+            })
+        }
+        "paseo_worktree_list_request" => {
+            serde_json::json!({
+                "type": "paseo_worktree_list_response",
+                "payload": {
+                    "requestId": request_id,
+                    "worktrees": []
                 }
             })
         }

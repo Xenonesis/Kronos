@@ -104,10 +104,11 @@ pub enum WSOutboundMessage {
 }
 
 pub fn build_server_info_payload() -> Value {
+    let server_id = crate::get_or_create_server_id();
     serde_json::json!({
         "status": "server_info",
         "protocolVersion": 1,
-        "serverId": "kronos-embedded-daemon",
+        "serverId": server_id,
         "hostname": "localhost",
         "version": env!("CARGO_PKG_VERSION"),
         "desktopManaged": true,
@@ -115,12 +116,15 @@ pub fn build_server_info_payload() -> Value {
             "connectedHosts": false,
             "hostMultiplexing": false,
             "terminalChunkedReplay": false,
-            "binaryChunkingV1": false,
-            "projectAdd": false,
-            "stableProjectIdentity": false,
-            "projectGithubClone": false,
-            "workspaceGithubRepositorySearch": false,
-            "projectCreateDirectory": false,
+            "binaryChunkingV1": true,
+            "projectAdd": true,
+            "stableProjectIdentity": true,
+            "projectGithubClone": true,
+            "workspaceGithubRepositorySearch": true,
+            "projectCreateDirectory": true,
+            "projectList": true,
+            "projectRemove": true,
+            "workspaceMultiplicity": true,
             "kernelTelemetry": true,
             "kernelAst": true,
             "kernelCrdt": true,

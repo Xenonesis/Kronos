@@ -129,7 +129,8 @@ mod tests {
         assert_eq!(info["message"]["type"], "status");
         assert_eq!(info["message"]["payload"]["status"], "server_info");
         assert_eq!(info["message"]["payload"]["protocolVersion"], 1);
-        assert_eq!(info["message"]["payload"]["serverId"], "kronos-embedded-daemon");
+        assert!(!info["message"]["payload"]["serverId"].as_str().unwrap().is_empty());
+        assert_eq!(info["message"]["payload"]["features"]["projectAdd"], true);
     }
 
     #[test]

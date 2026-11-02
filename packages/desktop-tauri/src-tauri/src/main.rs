@@ -535,7 +535,7 @@ pub fn get_data_dir() -> PathBuf {
     home
 }
 
-fn get_or_create_server_id() -> String {
+pub fn get_or_create_server_id() -> String {
     let home = get_data_dir();
     let _ = fs::create_dir_all(&home);
 
@@ -1388,7 +1388,7 @@ try {{
         return null;
       }}
       return null;
-    }}
+    }},
     getKernelTelemetry: async function() {{
       try {{
         if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{

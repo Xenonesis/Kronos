@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -122,6 +122,13 @@ impl DaemonConfigStore {
     pub fn get_project(&self, id: &str) -> Option<ProjectRecord> {
         self.projects.read().unwrap().get(id).cloned()
     }
+    pub fn remove_project(&self, id: &str) -> std::io::Result<Option<ProjectRecord>> {
+        let mut map = self.projects.write().unwrap();
+        let removed = map.remove(id);
+        Self::save_projects_atomic(&self.home_dir, &map)?;
+        Ok(removed)
+    }
+
 
     pub fn add_workspace(&self, workspace: WorkspaceRecord) -> std::io::Result<()> {
         let mut map = self.workspaces.write().unwrap();
@@ -178,6 +185,14 @@ impl DaemonConfigStore {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         atomic_write(&target, json.as_bytes())
     }
+}
+static CONFIG_STORE: LazyLock<DaemonConfigStore> = LazyLock::new(|| {
+    let home = crate::get_data_dir();
+    DaemonConfigStore::new(home)
+});
+
+pub fn get_config_store() -> &'static DaemonConfigStore {
+    &CONFIG_STORE
 }
 
 pub fn atomic_write(target_path: &Path, content: &[u8]) -> std::io::Result<()> {

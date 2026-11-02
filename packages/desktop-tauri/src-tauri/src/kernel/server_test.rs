@@ -1179,4 +1179,47 @@ mod tests {
         let metrics = usage_resp["payload"]["metrics"].as_array().expect("metrics array");
         assert_eq!(metrics.len(), 9);
     }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_project_wire_protocol() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let project_dir = temp_dir.path().join("my-test-project");
+        std::fs::create_dir_all(&project_dir).expect("create_dir");
+
+        // 1. Add project request
+        let add_req = serde_json::json!({
+            "type": "project.add.request",
+            "requestId": "req-proj-add-1",
+            "cwd": project_dir.to_str().unwrap()
+        });
+        let add_resp = dispatch_session_message(&add_req).await;
+        assert_eq!(add_resp["type"], "project.add.response");
+        assert!(add_resp["payload"]["error"].is_null());
+        let proj = &add_resp["payload"]["project"];
+        assert_eq!(proj["projectDisplayName"], "my-test-project");
+        assert!(proj["projectId"].as_str().unwrap().starts_with("prj_"));
+
+        // 2. List projects request
+        let list_req = serde_json::json!({
+            "type": "project.list.request",
+            "requestId": "req-proj-list-1"
+        });
+        let list_resp = dispatch_session_message(&list_req).await;
+        assert_eq!(list_resp["type"], "project.list.response");
+        let projects = list_resp["payload"]["projects"].as_array().expect("projects array");
+        assert!(projects.iter().any(|p| p["projectDisplayName"] == "my-test-project"));
+
+        // 3. Open project request
+        let open_req = serde_json::json!({
+            "type": "open_project_request",
+            "requestId": "req-open-1",
+            "cwd": project_dir.to_str().unwrap()
+        });
+        let open_resp = dispatch_session_message(&open_req).await;
+        assert_eq!(open_resp["type"], "open_project_response");
+        assert!(open_resp["payload"]["error"].is_null());
+        let ws = &open_resp["payload"]["workspace"];
+        assert_eq!(ws["name"], "my-test-project");
+        assert_eq!(ws["projectDisplayName"], "my-test-project");
+    }
 }
