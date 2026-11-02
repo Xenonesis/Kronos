@@ -115,12 +115,29 @@ impl ProviderRegistry {
 }
 
 pub fn is_command_available(cmd: &str) -> bool {
-    let check_cmd = if cfg!(windows) { "where" } else { "which" };
-    std::process::Command::new(check_cmd)
-        .arg(cmd)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    let path_cmd = std::path::Path::new(cmd);
+    if path_cmd.is_file() {
+        return true;
+    }
+
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let direct = dir.join(cmd);
+            if direct.is_file() {
+                return true;
+            }
+            #[cfg(windows)]
+            {
+                for ext in &["exe", "cmd", "bat"] {
+                    let with_ext = dir.join(format!("{}.{}", cmd, ext));
+                    if with_ext.is_file() {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -138,5 +155,11 @@ mod tests {
 
         let mock = registry.get("mock").expect("Mock provider");
         assert!(mock.is_installed);
+    }
+
+    #[test]
+    fn test_is_command_available_resolution() {
+        assert!(is_command_available("cmd") || is_command_available("sh"));
+        assert!(!is_command_available("definitely_nonexistent_binary_xyz_12345"));
     }
 }

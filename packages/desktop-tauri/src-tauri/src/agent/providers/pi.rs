@@ -22,6 +22,8 @@ impl PiAgentClient {
         for ext in extension_paths {
             cmd.arg("--extension").arg(ext);
         }
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
 
         let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn Pi CLI: {e}"))?;
         let stdin = child.stdin.take().ok_or("Failed to capture Pi stdin")?;

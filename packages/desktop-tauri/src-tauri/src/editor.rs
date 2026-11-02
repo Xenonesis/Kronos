@@ -12,6 +12,11 @@ pub fn open_in_editor(editor: String, file_path: String, line: Option<u32>) -> R
     } else {
         cmd.arg(&file_path);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
 
     cmd.spawn().map_err(|e| e.to_string())?;
     Ok(())

@@ -179,9 +179,11 @@ impl GitEngine {
     }
 
     pub async fn git_exec(cwd: &Path, args: &[&str]) -> Result<String, String> {
-        let output = tokio::process::Command::new("git")
-            .args(args)
-            .current_dir(cwd)
+        let mut cmd = tokio::process::Command::new("git");
+        cmd.args(args).current_dir(cwd);
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
+        let output = cmd
             .output()
             .await
             .map_err(|e| format!("Failed to spawn git: {e}"))?;

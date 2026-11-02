@@ -18,6 +18,8 @@ impl OmpAgentClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
 
         let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn OMP CLI: {e}"))?;
         let stdin = child.stdin.take().ok_or("Failed to capture OMP stdin")?;

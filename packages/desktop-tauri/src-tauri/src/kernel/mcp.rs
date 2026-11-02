@@ -669,6 +669,11 @@ impl McpHub {
                 cmd.stdin(std::process::Stdio::null());
                 cmd.stdout(std::process::Stdio::piped());
                 cmd.stderr(std::process::Stdio::piped());
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    cmd.creation_flags(0x08000000);
+                }
 
                 let mut child = cmd
                     .spawn()

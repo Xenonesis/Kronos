@@ -335,9 +335,8 @@ fn ensure_port_clean() {
         if let Ok(text) = String::from_utf8(output.stdout) {
             for line in text.lines() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 5
+                if parts.len() >= 4
                     && parts[1].rsplit(':').next() == Some("6767")
-                    && parts.contains(&"LISTENING")
                 {
                     if let Some(pid_str) = parts.last() {
                         if let Ok(pid) = pid_str.parse::<u32>() {

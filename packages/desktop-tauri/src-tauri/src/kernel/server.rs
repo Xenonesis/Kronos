@@ -3765,12 +3765,17 @@ async fn discover_omp_models(cwd: &str) -> Vec<serde_json::Value> {
 /// snapshot carries an empty model list; only binary availability matters here.
 async fn discover_copilot_available() -> bool {
     let binary = std::env::var("COPILOT_COMMAND").unwrap_or_else(|_| "copilot".to_owned());
-    tokio::process::Command::new(&binary)
-        .arg("--version")
+    if !crate::agent::registry::is_command_available(&binary) {
+        return false;
+    }
+    let mut cmd = tokio::process::Command::new(&binary);
+    cmd.arg("--version")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .stdin(std::process::Stdio::null())
-        .status()
+        .stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000);
+    cmd.status()
         .await
         .map(|s| {
             // exit 127 = command not found; treat everything else as "binary exists"
@@ -3786,23 +3791,26 @@ async fn discover_jsonl_cli_models(
     wait_ready: bool,
     parse: fn(&serde_json::Value) -> Vec<serde_json::Value>,
 ) -> Vec<serde_json::Value> {
+    if !crate::agent::registry::is_command_available(binary) {
+        return Vec::new();
+    }
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::process::Command;
 
     let discovery = async {
-        let mut child = Command::new(binary)
-            .args(args)
+        let mut cmd = Command::new(binary);
+        cmd.args(args)
             .current_dir(cwd)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .ok()?;
+            .kill_on_drop(true);
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
+        let mut child = cmd.spawn().ok()?;
         let mut stdin = child.stdin.take()?;
         let stdout = child.stdout.take()?;
         let mut lines = BufReader::new(stdout).lines();
-
         if wait_ready {
             let ready = tokio::time::timeout(Duration::from_secs(2), async {
                 while let Ok(Some(line)) = lines.next_line().await {
@@ -3903,19 +3911,23 @@ async fn invalidate_provider_snapshot_cache() {
 }
 
 async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
+    if !crate::agent::registry::is_command_available("codex") {
+        return Vec::new();
+    }
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::process::Command;
 
     let discovery = async {
-        let mut child = Command::new("codex")
-            .arg("app-server")
+        let mut cmd = Command::new("codex");
+        cmd.arg("app-server")
             .current_dir(cwd)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .ok()?;
+            .kill_on_drop(true);
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
+        let mut child = cmd.spawn().ok()?;
         let mut stdin = child.stdin.take()?;
         let stdout = child.stdout.take()?;
         let mut lines = BufReader::new(stdout).lines();

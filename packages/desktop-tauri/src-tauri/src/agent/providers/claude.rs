@@ -53,6 +53,8 @@ impl ClaudeCliClient {
         if let Some(m) = model {
             cmd.arg("--model").arg(m);
         }
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
 
         let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn Claude CLI: {e}"))?;
         let stdin = child.stdin.take().ok_or("Failed to capture Claude stdin")?;
