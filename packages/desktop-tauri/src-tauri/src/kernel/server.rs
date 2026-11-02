@@ -1348,14 +1348,16 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                         "name": dir_name,
                         "title": null,
                         "pinnedAt": null,
-                        "background": null,
+                        "background": false,
                         "archivingAt": null,
                         "status": "done",
                         "statusEnteredAt": null,
                         "activityAt": null,
                         "createdAt": now_iso,
                         "diffStat": null,
-                        "scripts": { "packageJson": null, "scripts": [] }
+                        "scripts": [],
+                        "gitRuntime": null,
+                        "githubRuntime": null
                     });
 
                     serde_json::json!({
@@ -1468,33 +1470,109 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .trim();
 
             let store = crate::kernel::config_store::get_config_store();
-            let _ = store.remove_project(project_id);
+            let removed = store.remove_project(project_id).ok().flatten();
+            let removed_ws = store.remove_workspaces_for_project(project_id).unwrap_or_default();
+            let ws_ids: Vec<String> = removed_ws.into_iter().map(|w| w.id).collect();
 
             serde_json::json!({
                 "type": "project.remove.response",
+                "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
                     "projectId": project_id,
+                    "accepted": removed.is_some(),
+                    "removedWorkspaceIds": ws_ids,
                     "error": null
                 }
             })
         }
         "project.icon.get.request" => {
+            let payload = msg.get("payload");
+            let p_id = msg.get("projectId")
+                .or_else(|| payload.and_then(|p| p.get("projectId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             serde_json::json!({
                 "type": "project.icon.get.response",
                 "payload": {
                     "requestId": request_id,
+                    "projectId": p_id,
                     "icon": null,
-                    "revision": 1
+                    "error": null
                 }
             })
         }
         "fetch_workspaces_request" => {
+            let payload = msg.get("payload");
+            let sub_id = if msg.get("subscribe").is_some() || payload.and_then(|p| p.get("subscribe")).is_some() {
+                Some(format!("sub-workspaces-{}", request_id))
+            } else {
+                None
+            };
+            let store = crate::kernel::config_store::get_config_store();
+            let workspaces = store.list_workspaces();
+            let projects = store.list_projects();
+            let project_map: std::collections::HashMap<_, _> = projects.iter().map(|p| (p.id.clone(), p.clone())).collect();
+
+            let entries: Vec<serde_json::Value> = workspaces.into_iter().map(|w| {
+                let p_record = project_map.get(&w.project_id);
+                let p_name = p_record.map(|p| p.name.clone()).unwrap_or_else(|| w.name.clone());
+                let p_root = p_record.map(|p| p.path.clone()).unwrap_or_else(|| w.path.clone());
+                serde_json::json!({
+                    "id": w.id,
+                    "projectId": w.project_id,
+                    "projectDisplayName": p_name,
+                    "projectCustomName": null,
+                    "projectCustomIconRevision": null,
+                    "projectRootPath": p_root,
+                    "workspaceDirectory": w.path,
+                    "setupStatus": null,
+                    "projectKind": "directory",
+                    "workspaceKind": if w.kind == "worktree" { "worktree" } else { "directory" },
+                    "name": w.name,
+                    "title": null,
+                    "pinnedAt": null,
+                    "background": false,
+                    "archivingAt": null,
+                    "status": "done",
+                    "statusEnteredAt": null,
+                    "activityAt": null,
+                    "createdAt": null,
+                    "diffStat": null,
+                    "scripts": [],
+                    "gitRuntime": null,
+                    "githubRuntime": null
+                })
+            }).collect();
+
+            let empty_projects: Vec<serde_json::Value> = projects.into_iter().filter(|p| {
+                !entries.iter().any(|e| e.get("projectId").and_then(|v| v.as_str()) == Some(p.id.as_str()))
+            }).map(|p| {
+                serde_json::json!({
+                    "projectId": p.id,
+                    "projectKey": p.id,
+                    "projectDisplayName": p.name,
+                    "projectCustomName": null,
+                    "projectCustomIconRevision": null,
+                    "projectIconRevision": 1,
+                    "projectRootPath": p.path,
+                    "projectKind": "directory"
+                })
+            }).collect();
+
             serde_json::json!({
                 "type": "fetch_workspaces_response",
+                "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
-                    "workspaces": []
+                    "subscriptionId": sub_id,
+                    "entries": entries,
+                    "emptyProjects": empty_projects,
+                    "pageInfo": {
+                        "nextCursor": null,
+                        "prevCursor": null,
+                        "hasMore": false
+                    }
                 }
             })
         }
@@ -1503,7 +1581,402 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "type": "paseo_worktree_list_response",
                 "payload": {
                     "requestId": request_id,
-                    "worktrees": []
+                    "worktrees": [],
+                    "error": null
+                }
+            })
+        }
+        "session.events.set_subscription.request" => {
+            serde_json::json!({
+                "type": "session.events.set_subscription.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "subscriptionId": format!("sub-events-{}", request_id)
+                }
+            })
+        }
+        "subscription.release.request" => {
+            let payload = msg.get("payload");
+            let sub_id = msg.get("subscriptionId")
+                .or_else(|| payload.and_then(|p| p.get("subscriptionId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            serde_json::json!({
+                "type": "subscription.release.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "subscriptionId": sub_id
+                }
+            })
+        }
+        "fetch_agents_request" => {
+            let payload = msg.get("payload");
+            let sub_id = if msg.get("subscribe").is_some() || payload.and_then(|p| p.get("subscribe")).is_some() {
+                Some(format!("sub-agents-{}", request_id))
+            } else {
+                None
+            };
+            serde_json::json!({
+                "type": "fetch_agents_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "subscriptionId": sub_id,
+                    "entries": [],
+                    "pageInfo": {
+                        "nextCursor": null,
+                        "prevCursor": null,
+                        "hasMore": false
+                    }
+                }
+            })
+        }
+        "workspace.label.list.request" => {
+            let payload = msg.get("payload");
+            let sub_id = if msg.get("subscribe").is_some() || payload.and_then(|p| p.get("subscribe")).is_some() {
+                Some(format!("sub-labels-{}", request_id))
+            } else {
+                None
+            };
+            serde_json::json!({
+                "type": "workspace.label.list.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "subscriptionId": sub_id,
+                    "labels": [],
+                    "sync": {
+                        "mode": "snapshot",
+                        "generation": "gen-1",
+                        "headSeq": 0,
+                        "removals": []
+                    }
+                }
+            })
+        }
+        "workspace.setup.subscribe.request" => {
+            let payload = msg.get("payload");
+            let ws_id = msg.get("workspaceId")
+                .or_else(|| payload.and_then(|p| p.get("workspaceId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            serde_json::json!({
+                "type": "workspace.setup.subscribe.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "subscriptionId": format!("sub-ws-setup-{}", request_id),
+                    "workspaceId": ws_id,
+                    "snapshot": null
+                }
+            })
+        }
+        "workspace_setup_status_request" | "workspace.setup.status.request" => {
+            let payload = msg.get("payload");
+            let ws_id = msg.get("workspaceId")
+                .or_else(|| payload.and_then(|p| p.get("workspaceId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            serde_json::json!({
+                "type": "workspace_setup_status_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "workspaceId": ws_id,
+                    "status": null,
+                    "step": null
+                }
+            })
+        }
+        "agent.timeline.set_subscription.request" => {
+            let payload = msg.get("payload");
+            let agent_ids = msg.get("agentIds")
+                .or_else(|| payload.and_then(|p| p.get("agentIds")))
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([]));
+            serde_json::json!({
+                "type": "agent.timeline.set_subscription.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "subscriptionId": format!("sub-timeline-{}", request_id),
+                    "agentIds": agent_ids
+                }
+            })
+        }
+        "subscribe_terminals_request" => {
+            let payload = msg.get("payload");
+            let cwd_str = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            serde_json::json!({
+                "type": "terminals_changed",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "subscriptionId": format!("sub-terms-{}", request_id),
+                    "cwd": cwd_str,
+                    "terminals": []
+                }
+            })
+        }
+        "subscribe_terminal_request" => {
+            let payload = msg.get("payload");
+            let term_id = msg.get("terminalId")
+                .or_else(|| payload.and_then(|p| p.get("terminalId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            serde_json::json!({
+                "type": "subscribe_terminal_response",
+                "requestId": request_id,
+                "payload": {
+                    "terminalId": term_id
+                }
+            })
+        }
+        "creation.subscribe.request" => {
+            serde_json::json!({
+                "type": "creation.subscribe.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "subscriptionId": format!("sub-create-{}", request_id),
+                    "snapshot": null,
+                    "error": null
+                }
+            })
+        }
+        "subscribe_checkout_diff_request" => {
+            let payload = msg.get("payload");
+            let cwd_str = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            serde_json::json!({
+                "type": "subscribe_checkout_diff_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "subscriptionId": format!("sub-diff-{}", request_id),
+                    "cwd": cwd_str,
+                    "files": [],
+                    "error": null
+                }
+            })
+        }
+        "unsubscribe_checkout_diff_request" | "unsubscribe_terminals_request" | "unsubscribe_terminal_request" => {
+            serde_json::json!({
+                "type": "unsubscribe_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "success": true
+                }
+            })
+        }
+        "get_providers_snapshot_request" => {
+            let dur = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default();
+            let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+            serde_json::json!({
+                "type": "get_providers_snapshot_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "entries": [],
+                    "generatedAt": now_iso
+                }
+            })
+        }
+        "list_available_providers_request" => {
+            let dur = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default();
+            let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+            serde_json::json!({
+                "type": "list_available_providers_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "providers": [],
+                    "fetchedAt": now_iso
+                }
+            })
+        }
+        "browser.host.register.request" => {
+            serde_json::json!({
+                "type": "browser.host.register.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "subscriptionId": format!("sub-browser-{}", request_id)
+                }
+            })
+        }
+        "get_daemon_config_request" => {
+            let store = crate::kernel::config_store::get_config_store();
+            let cfg = store.get_config();
+            serde_json::json!({
+                "type": "get_daemon_config_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "config": {
+                        "mcp": {
+                            "enabled": cfg.mcp_enabled,
+                            "injectIntoAgents": false
+                        },
+                        "relay": {
+                            "enabled": cfg.relay_enabled,
+                            "endpoint": cfg.relay_endpoint
+                        },
+                        "providers": {},
+                        "autoArchiveAfterMerge": false,
+                        "enableTerminalAgentHooks": false
+                    }
+                }
+            })
+        }
+        "daemon.get_status.request" => {
+            let server_id = crate::get_or_create_server_id();
+            serde_json::json!({
+                "type": "daemon.get_status.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "serverId": server_id,
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "pid": std::process::id(),
+                    "nodePath": "rust-embedded",
+                    "listen": "127.0.0.1:6767",
+                    "providers": []
+                }
+            })
+        }
+        "plugin.catalog.get.request" => {
+            serde_json::json!({
+                "type": "plugin.catalog.get.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "plugins": []
+                }
+            })
+        }
+        "plugin.list.request" => {
+            serde_json::json!({
+                "type": "plugin.list.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "plugins": []
+                }
+            })
+        }
+        "diagnostics.request" => {
+            serde_json::json!({
+                "type": "diagnostics.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "diagnostic": "ok"
+                }
+            })
+        }
+        "list_terminals_request" => {
+            serde_json::json!({
+                "type": "list_terminals_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "terminals": []
+                }
+            })
+        }
+        "workspace.script.list.request" => {
+            let payload = msg.get("payload");
+            let ws_id = msg.get("workspaceId")
+                .or_else(|| payload.and_then(|p| p.get("workspaceId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            serde_json::json!({
+                "type": "workspace.script.list.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "workspaceId": ws_id,
+                    "scripts": [],
+                    "error": null
+                }
+            })
+        }
+        "checkout_status_request" => {
+            let payload = msg.get("payload");
+            let cwd_str = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            serde_json::json!({
+                "type": "checkout_status_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "cwd": cwd_str,
+                    "error": null,
+                    "isGit": false,
+                    "isPaseoOwnedWorktree": false,
+                    "repoRoot": null,
+                    "currentBranch": null,
+                    "isDirty": null,
+                    "baseRef": null,
+                    "aheadBehind": null,
+                    "aheadOfOrigin": null,
+                    "behindOfOrigin": null,
+                    "hasRemote": false,
+                    "remoteUrl": null
+                }
+            })
+        }
+        "fs.file.subscribe.request" => {
+            let payload = msg.get("payload");
+            let cwd_str = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let path_str = msg.get("path")
+                .or_else(|| payload.and_then(|p| p.get("path")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            serde_json::json!({
+                "type": "fs.file.subscribe.response",
+                "requestId": request_id,
+                "payload": {
+                    "subscriptionId": format!("sub-file-{}", request_id),
+                    "initial": {
+                        "status": "missing",
+                        "cwd": cwd_str,
+                        "path": path_str
+                    },
+                    "requestId": request_id
+                }
+            })
+        }
+        "fs.file.unsubscribe.request" => {
+            let payload = msg.get("payload");
+            let sub_id = msg.get("subscriptionId")
+                .or_else(|| payload.and_then(|p| p.get("subscriptionId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            serde_json::json!({
+                "type": "fs.file.unsubscribe.response",
+                "requestId": request_id,
+                "payload": {
+                    "subscriptionId": sub_id,
+                    "requestId": request_id
                 }
             })
         }
@@ -2013,6 +2486,24 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "payload": resp.data,
                 "data": resp.data,
                 "error": resp.error,
+            })
+        }
+        msg_type if msg_type.contains("subscribe") || msg_type.contains("set_subscription") => {
+            let resp_type = if msg_type.ends_with(".request") {
+                format!("{}.response", &msg_type[..msg_type.len() - 8])
+            } else if msg_type.ends_with("_request") {
+                format!("{}_response", &msg_type[..msg_type.len() - 8])
+            } else {
+                format!("{}_response", msg_type)
+            };
+            serde_json::json!({
+                "type": resp_type,
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "subscriptionId": format!("sub-gen-{}", request_id),
+                    "error": null
+                }
             })
         }
         other => {

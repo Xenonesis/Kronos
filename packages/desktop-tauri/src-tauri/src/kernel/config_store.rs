@@ -140,6 +140,26 @@ impl DaemonConfigStore {
     pub fn get_workspace(&self, id: &str) -> Option<WorkspaceRecord> {
         self.workspaces.read().unwrap().get(id).cloned()
     }
+    pub fn list_workspaces(&self) -> Vec<WorkspaceRecord> {
+        self.workspaces.read().unwrap().values().cloned().collect()
+    }
+
+    pub fn remove_workspaces_for_project(&self, project_id: &str) -> std::io::Result<Vec<WorkspaceRecord>> {
+        let mut map = self.workspaces.write().unwrap();
+        let mut removed = Vec::new();
+        map.retain(|_, ws| {
+            if ws.project_id == project_id {
+                removed.push(ws.clone());
+                false
+            } else {
+                true
+            }
+        });
+        if !removed.is_empty() {
+            Self::save_workspaces_atomic(&self.home_dir, &map)?;
+        }
+        Ok(removed)
+    }
 
     fn load_config(home: &Path) -> Option<DaemonConfig> {
         let file = home.join("config.json");

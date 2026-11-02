@@ -1222,4 +1222,86 @@ mod tests {
         assert_eq!(ws["name"], "my-test-project");
         assert_eq!(ws["projectDisplayName"], "my-test-project");
     }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_subscriptions_and_workspace_wire_protocol() {
+        // 1. session.events.set_subscription.request
+        let sub_events_req = serde_json::json!({
+            "type": "session.events.set_subscription.request",
+            "requestId": "req-sub-events-1",
+            "events": ["project.update", "script_status_update"]
+        });
+        let sub_events_resp = dispatch_session_message(&sub_events_req).await;
+        assert_eq!(sub_events_resp["type"], "session.events.set_subscription.response");
+        assert_eq!(sub_events_resp["payload"]["requestId"], "req-sub-events-1");
+        assert!(sub_events_resp["payload"]["subscriptionId"].as_str().unwrap().starts_with("sub-events-"));
+
+        // 2. fetch_workspaces_request (with subscribe)
+        let ws_req = serde_json::json!({
+            "type": "fetch_workspaces_request",
+            "requestId": "req-fetch-ws-1",
+            "subscribe": {}
+        });
+        let ws_resp = dispatch_session_message(&ws_req).await;
+        assert_eq!(ws_resp["type"], "fetch_workspaces_response");
+        assert_eq!(ws_resp["payload"]["requestId"], "req-fetch-ws-1");
+        assert!(ws_resp["payload"]["subscriptionId"].as_str().is_some());
+        assert!(ws_resp["payload"]["entries"].is_array());
+        assert!(ws_resp["payload"]["emptyProjects"].is_array());
+        assert_eq!(ws_resp["payload"]["pageInfo"]["hasMore"], false);
+
+        // 3. fetch_agents_request (with subscribe)
+        let agents_req = serde_json::json!({
+            "type": "fetch_agents_request",
+            "requestId": "req-fetch-agents-1",
+            "subscribe": {}
+        });
+        let agents_resp = dispatch_session_message(&agents_req).await;
+        assert_eq!(agents_resp["type"], "fetch_agents_response");
+        assert_eq!(agents_resp["payload"]["requestId"], "req-fetch-agents-1");
+        assert!(agents_resp["payload"]["subscriptionId"].as_str().is_some());
+        assert!(agents_resp["payload"]["entries"].is_array());
+
+        // 4. workspace.label.list.request
+        let labels_req = serde_json::json!({
+            "type": "workspace.label.list.request",
+            "requestId": "req-labels-1",
+            "subscribe": {}
+        });
+        let labels_resp = dispatch_session_message(&labels_req).await;
+        assert_eq!(labels_resp["type"], "workspace.label.list.response");
+        assert_eq!(labels_resp["payload"]["requestId"], "req-labels-1");
+        assert!(labels_resp["payload"]["subscriptionId"].as_str().is_some());
+        assert!(labels_resp["payload"]["labels"].is_array());
+        assert_eq!(labels_resp["payload"]["sync"]["mode"], "snapshot");
+
+        // 5. subscription.release.request
+        let release_req = serde_json::json!({
+            "type": "subscription.release.request",
+            "requestId": "req-rel-1",
+            "subscriptionId": "sub-events-1"
+        });
+        let release_resp = dispatch_session_message(&release_req).await;
+        assert_eq!(release_resp["type"], "subscription.release.response");
+        assert_eq!(release_resp["payload"]["requestId"], "req-rel-1");
+        assert_eq!(release_resp["payload"]["subscriptionId"], "sub-events-1");
+
+        // 6. get_daemon_config_request
+        let cfg_req = serde_json::json!({
+            "type": "get_daemon_config_request",
+            "requestId": "req-cfg-1"
+        });
+        let cfg_resp = dispatch_session_message(&cfg_req).await;
+        assert_eq!(cfg_resp["type"], "get_daemon_config_response");
+        assert!(cfg_resp["payload"]["config"]["mcp"].is_object());
+
+        // 7. daemon.get_status.request
+        let status_req = serde_json::json!({
+            "type": "daemon.get_status.request",
+            "requestId": "req-stat-1"
+        });
+        let status_resp = dispatch_session_message(&status_req).await;
+        assert_eq!(status_resp["type"], "daemon.get_status.response");
+        assert_eq!(status_resp["payload"]["listen"], "127.0.0.1:6767");
+    }
 }
