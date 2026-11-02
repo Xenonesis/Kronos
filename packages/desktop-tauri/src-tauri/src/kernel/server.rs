@@ -789,6 +789,8 @@ pub fn agent_record_to_snapshot(record: &crate::agent::types::StoredAgentRecord)
     let mut val = serde_json::json!({
         "id": record.id,
         "provider": record.provider,
+        "cwd": if record.cwd.is_empty() { ".".to_string() } else { record.cwd.clone() },
+        "model": serde_json::Value::Null,
         "createdAt": record.created_at,
         "updatedAt": record.updated_at,
         "lastUserMessageAt": record.last_activity_at,
@@ -2289,6 +2291,37 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             })
         }
         "session.events.set_subscription.request" => {
+            let req_id = request_id.to_owned();
+            let events = msg.get("events")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("events")))
+                .and_then(|v| v.as_array());
+            if let Some(arr) = events {
+                if arr.iter().any(|e| e.as_str() == Some("providers_snapshot_update")) {
+                    tokio::spawn(async move {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(15)).await;
+                        let entries = get_provider_snapshot_entries(".").await;
+                        let dur = std::time::SystemTime::now()
+                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                            .unwrap_or_default();
+                        let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+                        let frame = serde_json::json!({
+                            "type": "session",
+                            "message": {
+                                "type": "providers_snapshot_update",
+                                "payload": {
+                                    "subscriptionId": format!("sub-events-{}", req_id),
+                                    "cwd": ".",
+                                    "entries": entries,
+                                    "generatedAt": now_iso
+                                }
+                            }
+                        });
+                        if let Ok(text) = serde_json::to_string(&frame) {
+                            let _ = get_provider_push_tx().send(text);
+                        }
+                    });
+                }
+            }
             serde_json::json!({
                 "type": "session.events.set_subscription.response",
                 "requestId": request_id,
@@ -2323,9 +2356,23 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             let mgr = get_agent_manager();
             let agents = mgr.list_agents();
             let entries: Vec<serde_json::Value> = agents.into_iter().map(|rec| {
+                let cwd = if rec.cwd.is_empty() { ".".to_string() } else { rec.cwd.clone() };
                 serde_json::json!({
                     "agent": agent_record_to_snapshot(&rec),
-                    "project": null
+                    "project": {
+                        "projectKey": "local",
+                        "projectName": "Local Project",
+                        "workspaceName": null,
+                        "checkout": {
+                            "cwd": cwd,
+                            "isGit": false,
+                            "currentBranch": null,
+                            "remoteUrl": null,
+                            "worktreeRoot": null,
+                            "isPaseoOwnedWorktree": false,
+                            "mainRepoRoot": null
+                        }
+                    }
                 })
             }).collect();
 
@@ -3490,9 +3537,9 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     "type": "session",
                     "message": {
                         "type": "providers_snapshot_update",
-                        "requestId": req_id,
                         "payload": {
-                            "requestId": req_id,
+                            "subscriptionId": format!("sub-providers-{}", req_id),
+                            "cwd": cwd,
                             "entries": entries,
                             "generatedAt": now_iso
                         }
@@ -4067,7 +4114,7 @@ pub(crate) fn get_provider_snapshot_metadata_entries() -> Vec<serde_json::Value>
             "provider": "claude",
             "status": "ready",
             "enabled": true,
-            "source": "runtime",
+            "source": "builtin",
             "label": "Claude",
             "description": "Anthropic Claude with MCP, tools, and reasoning",
             "defaultModeId": "auto",
@@ -4082,7 +4129,7 @@ pub(crate) fn get_provider_snapshot_metadata_entries() -> Vec<serde_json::Value>
             "provider": "codex",
             "status": "ready",
             "enabled": true,
-            "source": "runtime",
+            "source": "builtin",
             "label": "Codex",
             "description": "OpenAI Codex workspace agent",
             "defaultModeId": "auto",
@@ -4096,7 +4143,7 @@ pub(crate) fn get_provider_snapshot_metadata_entries() -> Vec<serde_json::Value>
             "provider": "opencode",
             "status": "ready",
             "enabled": true,
-            "source": "runtime",
+            "source": "builtin",
             "label": "OpenCode",
             "description": "Open-source coding assistant with multi-provider model support",
             "defaultModeId": "build",
@@ -4110,7 +4157,7 @@ pub(crate) fn get_provider_snapshot_metadata_entries() -> Vec<serde_json::Value>
             "provider": "ollama",
             "status": "ready",
             "enabled": true,
-            "source": "runtime",
+            "source": "builtin",
             "label": "Ollama",
             "description": "Local Ollama models",
             "defaultModeId": null,
@@ -4121,7 +4168,7 @@ pub(crate) fn get_provider_snapshot_metadata_entries() -> Vec<serde_json::Value>
             "provider": "pi",
             "status": "ready",
             "enabled": true,
-            "source": "runtime",
+            "source": "builtin",
             "label": "Pi",
             "description": "Minimal terminal-based coding agent",
             "defaultModeId": null,
@@ -4132,7 +4179,7 @@ pub(crate) fn get_provider_snapshot_metadata_entries() -> Vec<serde_json::Value>
             "provider": "omp",
             "status": "ready",
             "enabled": true,
-            "source": "runtime",
+            "source": "builtin",
             "label": "Oh My Pi",
             "description": "Multi-provider coding agent with native approvals and subagents",
             "defaultModeId": "full",
@@ -4147,7 +4194,7 @@ pub(crate) fn get_provider_snapshot_metadata_entries() -> Vec<serde_json::Value>
             "provider": "copilot",
             "status": "ready",
             "enabled": true,
-            "source": "runtime",
+            "source": "builtin",
             "label": "Copilot",
             "description": "GitHub Copilot via Agent Client Protocol",
             "defaultModeId": "https://agentclientprotocol.com/protocol/session-modes#agent",
