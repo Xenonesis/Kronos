@@ -76,6 +76,23 @@ pub fn get_plugin_manager() -> &'static crate::agent::providers::plugins::Native
     PLUGIN_MANAGER.get_or_init(crate::agent::providers::plugins::NativePluginManager::new)
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSessionMeta {
+    pub id: String,
+    pub name: String,
+    pub cwd: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub created_at: u64,
+}
+
+static TERMINAL_REGISTRY: std::sync::LazyLock<
+    tokio::sync::RwLock<std::collections::HashMap<String, TerminalSessionMeta>>,
+> = std::sync::LazyLock::new(|| tokio::sync::RwLock::new(std::collections::HashMap::new()));
+
 fn extract_jsonrpc_request_str(val: &serde_json::Value) -> Option<String> {
     if let Some(req) = val.get("request") {
         if let Some(s) = req.as_str() {
@@ -1057,6 +1074,389 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "requestId": request_id,
                 "id": request_id,
                 "success": true
+            })
+        }
+        "create_terminal_request" => {
+            let payload = msg.get("payload");
+            let cwd = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let workspace_id = msg.get("workspaceId")
+                .or_else(|| payload.and_then(|p| p.get("workspaceId")))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let name = msg.get("name")
+                .or_else(|| payload.and_then(|p| p.get("name")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("Terminal")
+                .to_string();
+            let command = msg.get("command")
+                .or_else(|| payload.and_then(|p| p.get("command")))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let args: Vec<String> = msg.get("args")
+                .or_else(|| payload.and_then(|p| p.get("args")))
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            let size = msg.get("size").or_else(|| payload.and_then(|p| p.get("size")));
+            let rows = size.and_then(|s| s.get("rows")).and_then(|v| v.as_u64()).unwrap_or(24) as u16;
+            let cols = size.and_then(|s| s.get("cols")).and_then(|v| v.as_u64()).unwrap_or(80) as u16;
+
+            let now_dur = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default();
+            let now_ms = now_dur.as_millis() as u64;
+            let terminal_id = format!("term_{:x}_{:x}", now_dur.as_nanos(), std::process::id());
+
+            #[cfg(windows)]
+            let resolved_command = if let Some(cmd) = &command {
+                if let Some(paths) = std::env::var_os("PATH") {
+                    let mut found = None;
+                    for dir in std::env::split_paths(&paths) {
+                        for ext in &["exe", "cmd", "bat"] {
+                            let p = dir.join(format!("{}.{}", cmd, ext));
+                            if p.is_file() {
+                                found = Some(p.to_string_lossy().to_string());
+                                break;
+                            }
+                        }
+                        if found.is_some() { break; }
+                    }
+                    found.or_else(|| Some(cmd.clone()))
+                } else {
+                    Some(cmd.clone())
+                }
+            } else {
+                None
+            };
+            #[cfg(not(windows))]
+            let resolved_command = command.clone();
+
+            let opts = crate::native_pty::TerminalSpawnOptions {
+                command: resolved_command,
+                args,
+                cwd: if cwd.is_empty() { None } else { Some(cwd.to_string()) },
+                cols,
+                rows,
+            };
+
+            let pty = crate::native_pty::get_pty_manager();
+            let spawn_res = pty.spawn_terminal(terminal_id.clone(), opts);
+            if spawn_res.is_err() {
+                let fallback_opts = crate::native_pty::TerminalSpawnOptions {
+                    command: None,
+                    args: vec![],
+                    cwd: if cwd.is_empty() { None } else { Some(cwd.to_string()) },
+                    cols,
+                    rows,
+                };
+                let _ = pty.spawn_terminal(terminal_id.clone(), fallback_opts);
+            }
+
+            let meta = TerminalSessionMeta {
+                id: terminal_id.clone(),
+                name: name.clone(),
+                cwd: cwd.to_string(),
+                workspace_id: workspace_id.clone(),
+                title: Some(name.clone()),
+                created_at: now_ms,
+            };
+            {
+                let mut reg = TERMINAL_REGISTRY.write().await;
+                reg.insert(terminal_id.clone(), meta);
+            }
+
+            let mut term_json = serde_json::json!({
+                "id": terminal_id,
+                "name": name,
+                "cwd": cwd,
+                "title": name,
+                "activity": {
+                    "state": "idle",
+                    "attentionReason": null,
+                    "changedAt": now_ms
+                }
+            });
+            if let Some(ref ws_id) = workspace_id {
+                term_json["workspaceId"] = serde_json::json!(ws_id);
+            }
+
+            serde_json::json!({
+                "type": "create_terminal_response",
+                "requestId": request_id,
+                "payload": {
+                    "terminal": term_json,
+                    "error": null,
+                    "requestId": request_id
+                }
+            })
+        }
+        "list_terminals_request" => {
+            let payload = msg.get("payload");
+            let cwd = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str());
+            let workspace_id = msg.get("workspaceId")
+                .or_else(|| payload.and_then(|p| p.get("workspaceId")))
+                .and_then(|v| v.as_str());
+
+            let reg = TERMINAL_REGISTRY.read().await;
+            let terminals: Vec<serde_json::Value> = reg.values().filter(|t| {
+                if let Some(ws) = workspace_id {
+                    if t.workspace_id.as_deref() != Some(ws) {
+                        return false;
+                    }
+                }
+                if let Some(c) = cwd {
+                    if !t.cwd.is_empty() && t.cwd != c {
+                        return false;
+                    }
+                }
+                true
+            }).map(|t| {
+                let mut v = serde_json::json!({
+                    "id": t.id,
+                    "name": t.name,
+                    "cwd": t.cwd,
+                    "title": t.title,
+                    "activity": {
+                        "state": "idle",
+                        "attentionReason": null,
+                        "changedAt": t.created_at
+                    }
+                });
+                if let Some(ref ws) = t.workspace_id {
+                    v["workspaceId"] = serde_json::json!(ws);
+                }
+                v
+            }).collect();
+
+            let mut resp_payload = serde_json::json!({
+                "terminals": terminals,
+                "requestId": request_id
+            });
+            if let Some(c) = cwd {
+                resp_payload["cwd"] = serde_json::json!(c);
+            }
+
+            serde_json::json!({
+                "type": "list_terminals_response",
+                "requestId": request_id,
+                "payload": resp_payload
+            })
+        }
+        "subscribe_terminals_request" => {
+            let payload = msg.get("payload");
+            let cwd = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let workspace_id = msg.get("workspaceId")
+                .or_else(|| payload.and_then(|p| p.get("workspaceId")))
+                .and_then(|v| v.as_str());
+
+            let reg = TERMINAL_REGISTRY.read().await;
+            let terminals: Vec<serde_json::Value> = reg.values().filter(|t| {
+                if let Some(ws) = workspace_id {
+                    if t.workspace_id.as_deref() != Some(ws) {
+                        return false;
+                    }
+                }
+                if !cwd.is_empty() && !t.cwd.is_empty() && t.cwd != cwd {
+                    return false;
+                }
+                true
+            }).map(|t| {
+                let mut v = serde_json::json!({
+                    "id": t.id,
+                    "name": t.name,
+                    "title": t.title,
+                    "activity": {
+                        "state": "idle",
+                        "attentionReason": null,
+                        "changedAt": t.created_at
+                    }
+                });
+                if let Some(ref ws) = t.workspace_id {
+                    v["workspaceId"] = serde_json::json!(ws);
+                }
+                v
+            }).collect();
+
+            let mut resp_payload = serde_json::json!({
+                "cwd": cwd,
+                "terminals": terminals,
+                "requestId": request_id
+            });
+            if let Some(ws) = workspace_id {
+                resp_payload["workspaceId"] = serde_json::json!(ws);
+            }
+
+            serde_json::json!({
+                "type": "terminals_changed",
+                "requestId": request_id,
+                "payload": resp_payload
+            })
+        }
+        "unsubscribe_terminals_request" => {
+            let payload = msg.get("payload");
+            let cwd = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let workspace_id = msg.get("workspaceId")
+                .or_else(|| payload.and_then(|p| p.get("workspaceId")))
+                .and_then(|v| v.as_str());
+
+            let mut resp_payload = serde_json::json!({
+                "cwd": cwd,
+                "error": null
+            });
+            if let Some(ws) = workspace_id {
+                resp_payload["workspaceId"] = serde_json::json!(ws);
+            }
+
+            serde_json::json!({
+                "type": "unsubscribe_terminals_response",
+                "requestId": request_id,
+                "payload": resp_payload
+            })
+        }
+        "subscribe_terminal_request" => {
+            let payload = msg.get("payload");
+            let terminal_id = msg.get("terminalId")
+                .or_else(|| payload.and_then(|p| p.get("terminalId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            serde_json::json!({
+                "type": "subscribe_terminal_response",
+                "requestId": request_id,
+                "payload": {
+                    "terminalId": terminal_id,
+                    "slot": 1,
+                    "subscriptionId": format!("sub-terminal-{}", terminal_id),
+                    "error": null,
+                    "requestId": request_id
+                }
+            })
+        }
+        "unsubscribe_terminal_request" => {
+            let payload = msg.get("payload");
+            let terminal_id = msg.get("terminalId")
+                .or_else(|| payload.and_then(|p| p.get("terminalId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            serde_json::json!({
+                "type": "unsubscribe_terminal_response",
+                "requestId": request_id,
+                "payload": {
+                    "terminalId": terminal_id,
+                    "error": null
+                }
+            })
+        }
+        "terminal_input" => {
+            let payload = msg.get("payload");
+            let terminal_id = msg.get("terminalId")
+                .or_else(|| payload.and_then(|p| p.get("terminalId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let message = msg.get("message")
+                .or_else(|| payload.and_then(|p| p.get("message")));
+
+            if let Some(m) = message {
+                let msg_type = m.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if msg_type == "input" {
+                    if let Some(data) = m.get("data").and_then(|v| v.as_str()) {
+                        let _ = crate::native_pty::get_pty_manager().write_terminal(terminal_id, data);
+                    }
+                } else if msg_type == "resize" {
+                    let rows = m.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
+                    let cols = m.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
+                    let _ = crate::native_pty::get_pty_manager().resize_terminal(terminal_id, cols, rows);
+                }
+            }
+
+            serde_json::json!({
+                "type": "terminal_input_response",
+                "requestId": request_id,
+                "payload": {
+                    "success": true,
+                    "terminalId": terminal_id
+                }
+            })
+        }
+        "kill_terminal_request" => {
+            let payload = msg.get("payload");
+            let terminal_id = msg.get("terminalId")
+                .or_else(|| payload.and_then(|p| p.get("terminalId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let _ = crate::native_pty::get_pty_manager().kill_terminal(terminal_id);
+            {
+                let mut reg = TERMINAL_REGISTRY.write().await;
+                reg.remove(terminal_id);
+            }
+
+            serde_json::json!({
+                "type": "kill_terminal_response",
+                "requestId": request_id,
+                "payload": {
+                    "terminalId": terminal_id,
+                    "success": true,
+                    "requestId": request_id
+                }
+            })
+        }
+        "terminal.rename.request" | "terminal_rename_request" => {
+            let payload = msg.get("payload");
+            let terminal_id = msg.get("terminalId")
+                .or_else(|| payload.and_then(|p| p.get("terminalId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let title = msg.get("title")
+                .or_else(|| payload.and_then(|p| p.get("title")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            {
+                let mut reg = TERMINAL_REGISTRY.write().await;
+                if let Some(t) = reg.get_mut(terminal_id) {
+                    t.title = Some(title.to_string());
+                }
+            }
+
+            serde_json::json!({
+                "type": "terminal.rename.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "success": true,
+                    "error": null
+                }
+            })
+        }
+        "capture_terminal_request" => {
+            let payload = msg.get("payload");
+            let terminal_id = msg.get("terminalId")
+                .or_else(|| payload.and_then(|p| p.get("terminalId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            serde_json::json!({
+                "type": "capture_terminal_response",
+                "requestId": request_id,
+                "payload": {
+                    "terminalId": terminal_id,
+                    "lines": Vec::<String>::new(),
+                    "totalLines": 0,
+                    "requestId": request_id
+                }
             })
         }
         "agent/create" => {
@@ -2290,37 +2690,6 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }
             })
         }
-        "subscribe_terminals_request" => {
-            let payload = msg.get("payload");
-            let cwd_str = msg.get("cwd")
-                .or_else(|| payload.and_then(|p| p.get("cwd")))
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
-            serde_json::json!({
-                "type": "terminals_changed",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "subscriptionId": format!("sub-terms-{}", request_id),
-                    "cwd": cwd_str,
-                    "terminals": []
-                }
-            })
-        }
-        "subscribe_terminal_request" => {
-            let payload = msg.get("payload");
-            let term_id = msg.get("terminalId")
-                .or_else(|| payload.and_then(|p| p.get("terminalId")))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            serde_json::json!({
-                "type": "subscribe_terminal_response",
-                "requestId": request_id,
-                "payload": {
-                    "terminalId": term_id
-                }
-            })
-        }
         "creation.subscribe.request" => {
             serde_json::json!({
                 "type": "creation.subscribe.response",
@@ -2351,7 +2720,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }
             })
         }
-        "unsubscribe_checkout_diff_request" | "unsubscribe_terminals_request" | "unsubscribe_terminal_request" => {
+        "unsubscribe_checkout_diff_request" => {
             serde_json::json!({
                 "type": "unsubscribe_response",
                 "requestId": request_id,
@@ -2506,16 +2875,6 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "payload": {
                     "requestId": request_id,
                     "diagnostic": "ok"
-                }
-            })
-        }
-        "list_terminals_request" => {
-            serde_json::json!({
-                "type": "list_terminals_response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "terminals": []
                 }
             })
         }
@@ -3328,6 +3687,8 @@ impl DaemonHandle {
 async fn handle_ws(mut socket: WebSocket, mut shutdown_rx: broadcast::Receiver<()>) {
     let mut watcher_rx = get_watcher_engine().subscribe_events();
     let mut crdt_rx = get_crdt_engine().subscribe();
+    let mut term_output_rx = crate::native_pty::get_pty_manager().subscribe_output();
+    let mut subscribed_terminals: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
     let mut watcher_active = true;
     let mut crdt_active = true;
     loop {
@@ -3335,6 +3696,19 @@ async fn handle_ws(mut socket: WebSocket, mut shutdown_rx: broadcast::Receiver<(
             _ = shutdown_rx.recv() => {
                 let _ = socket.send(Message::Close(None)).await;
                 break;
+            }
+            term_chunk = term_output_rx.recv() => {
+                if let Ok(chunk) = term_chunk {
+                    if let Some(&slot) = subscribed_terminals.get(&chunk.terminal_id) {
+                        let mut frame = Vec::with_capacity(2 + chunk.data.len());
+                        frame.push(0x01); // TerminalStreamOpcode::Output
+                        frame.push(slot);
+                        frame.extend_from_slice(&chunk.data);
+                        if socket.send(Message::Binary(frame.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
             }
             events_res = watcher_rx.recv(), if watcher_active => {
                 match events_res {
@@ -3385,6 +3759,24 @@ async fn handle_ws(mut socket: WebSocket, mut shutdown_rx: broadcast::Receiver<(
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                            let inner = if v.get("type").and_then(|t| t.as_str()) == Some("session") {
+                                v.get("message").unwrap_or(&v)
+                            } else {
+                                &v
+                            };
+                            let msg_type = inner.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                            if msg_type == "subscribe_terminal_request" {
+                                if let Some(term_id) = inner.get("terminalId").and_then(|id| id.as_str()) {
+                                    let next_slot = (subscribed_terminals.len() + 1) as u8;
+                                    subscribed_terminals.insert(term_id.to_string(), next_slot);
+                                }
+                            } else if msg_type == "unsubscribe_terminal_request" || msg_type == "kill_terminal_request" {
+                                if let Some(term_id) = inner.get("terminalId").and_then(|id| id.as_str()) {
+                                    subscribed_terminals.remove(term_id);
+                                }
+                            }
+                        }
                         if let Some(reply) = process_incoming_frame(&text).await {
                             if socket.send(Message::Text(reply.into())).await.is_err() {
                                 break;
@@ -3392,11 +3784,30 @@ async fn handle_ws(mut socket: WebSocket, mut shutdown_rx: broadcast::Receiver<(
                         }
                     }
                     Some(Ok(Message::Binary(bytes))) => {
-                        if let Ok(text) = std::str::from_utf8(&bytes) {
+                        if bytes.len() >= 2 && (bytes[0] == 0x02 || bytes[0] == 0x03) {
+                            let opcode = bytes[0];
+                            let slot = bytes[1];
+                            let payload = &bytes[2..];
+                            if opcode == 0x02 {
+                                if let Some((term_id, _)) = subscribed_terminals.iter().find(|(_, &s)| s == slot) {
+                                    if let Ok(text) = std::str::from_utf8(payload) {
+                                        let _ = crate::native_pty::get_pty_manager().write_terminal(term_id, text);
+                                    }
+                                }
+                            } else if opcode == 0x03 {
+                                if let Some((term_id, _)) = subscribed_terminals.iter().find(|(_, &s)| s == slot) {
+                                    if let Ok(resize_val) = serde_json::from_slice::<serde_json::Value>(payload) {
+                                        let rows = resize_val.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
+                                        let cols = resize_val.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
+                                        let _ = crate::native_pty::get_pty_manager().resize_terminal(term_id, cols, rows);
+                                    }
+                                }
+                            }
+                        } else if let Ok(text) = std::str::from_utf8(&bytes) {
                             if let Some(reply) = process_incoming_frame(text).await {
                                 if socket.send(Message::Text(reply.into())).await.is_err() {
                                     break;
-                                }
+                            }
                             }
                         }
                     }

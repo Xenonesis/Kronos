@@ -366,6 +366,81 @@ mod tests {
         assert!(matched, "Expected search.rs in returned suggestions payload");
     }
 
+    #[tokio::test]
+    async fn test_terminal_wire_protocol_full_roundtrip() {
+        let create_req = serde_json::json!({
+            "type": "create_terminal_request",
+            "cwd": ".",
+            "workspaceId": "ws-test-term-1",
+            "name": "Terminal Test",
+            "requestId": "req-term-create-1"
+        });
+        let create_resp = crate::kernel::server::dispatch_session_message(&create_req).await;
+        assert_eq!(create_resp["type"], "create_terminal_response");
+        assert_eq!(create_resp["requestId"], "req-term-create-1");
+        assert!(create_resp["payload"]["error"].is_null());
+        let terminal = &create_resp["payload"]["terminal"];
+        let term_id = terminal["id"].as_str().expect("terminal id");
+        assert!(term_id.starts_with("term_"));
+        assert_eq!(terminal["name"], "Terminal Test");
+        assert_eq!(terminal["workspaceId"], "ws-test-term-1");
+        assert_eq!(terminal["activity"]["state"], "idle");
+
+        // List terminals
+        let list_req = serde_json::json!({
+            "type": "list_terminals_request",
+            "workspaceId": "ws-test-term-1",
+            "requestId": "req-term-list-1"
+        });
+        let list_resp = crate::kernel::server::dispatch_session_message(&list_req).await;
+        assert_eq!(list_resp["type"], "list_terminals_response");
+        let terms = list_resp["payload"]["terminals"].as_array().expect("terminals array");
+        assert!(terms.iter().any(|t| t["id"] == term_id));
+
+        // Subscribe terminals
+        let sub_terms_req = serde_json::json!({
+            "type": "subscribe_terminals_request",
+            "cwd": ".",
+            "workspaceId": "ws-test-term-1",
+            "requestId": "req-term-sub-1"
+        });
+        let sub_terms_resp = crate::kernel::server::dispatch_session_message(&sub_terms_req).await;
+        assert_eq!(sub_terms_resp["type"], "terminals_changed");
+
+        // Terminal input
+        let input_req = serde_json::json!({
+            "type": "terminal_input",
+            "terminalId": term_id,
+            "message": {
+                "type": "input",
+                "data": "echo test\r\n"
+            }
+        });
+        let input_resp = crate::kernel::server::dispatch_session_message(&input_req).await;
+        assert_eq!(input_resp["type"], "terminal_input_response");
+
+        // Rename terminal
+        let rename_req = serde_json::json!({
+            "type": "terminal.rename.request",
+            "terminalId": term_id,
+            "title": "Renamed Terminal",
+            "requestId": "req-term-rename-1"
+        });
+        let rename_resp = crate::kernel::server::dispatch_session_message(&rename_req).await;
+        assert_eq!(rename_resp["type"], "terminal.rename.response");
+        assert_eq!(rename_resp["payload"]["success"], true);
+
+        // Kill terminal
+        let kill_req = serde_json::json!({
+            "type": "kill_terminal_request",
+            "terminalId": term_id,
+            "requestId": "req-term-kill-1"
+        });
+        let kill_resp = crate::kernel::server::dispatch_session_message(&kill_req).await;
+        assert_eq!(kill_resp["type"], "kill_terminal_response");
+        assert_eq!(kill_resp["payload"]["success"], true);
+    }
+
     #[cfg(windows)]
     #[tokio::test]
     async fn test_embedded_daemon_named_pipe_ipc() {

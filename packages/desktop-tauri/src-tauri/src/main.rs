@@ -101,7 +101,6 @@ use attachments::{
 use native_diff::compute_file_diff;
 use native_pty::{
     kill_native_terminal, resize_native_terminal, spawn_native_terminal, write_native_terminal,
-    NativePtyManager,
 };
 
 use daemon::{start_daemon, stop_daemon, wait_for_daemon_health, DaemonState};
@@ -1627,7 +1626,7 @@ try {{
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
         .manage(std::sync::Arc::new(crate::process_job::JobSupervisor::new().ok()))
-        .manage(NativePtyManager::new())
+        .manage(crate::native_pty::get_pty_manager().clone())
         .manage(UpdateState::default())
         .invoke_handler(tauri::generate_handler![
             open_in_editor,

@@ -29,11 +29,17 @@ pub struct ActiveTerminal {
     pub child: Box<dyn Child + Send + Sync>,
     pub writer: Box<dyn Write + Send>,
 }
+#[derive(Clone, Debug)]
+pub struct TerminalOutputChunk {
+    pub terminal_id: String,
+    pub data: Vec<u8>,
+}
 
 #[derive(Clone)]
 pub struct NativePtyManager {
     sessions: Arc<Mutex<HashMap<String, ActiveTerminal>>>,
     job_supervisor: Option<Arc<crate::process_job::JobSupervisor>>,
+    output_broadcaster: tokio::sync::broadcast::Sender<TerminalOutputChunk>,
 }
 
 impl Default for NativePtyManager {
@@ -82,17 +88,25 @@ fn split_incomplete_utf8(bytes: &[u8]) -> usize {
 impl NativePtyManager {
     pub fn new() -> Self {
         let job_supervisor = crate::process_job::JobSupervisor::new().ok().map(Arc::new);
+        let (output_broadcaster, _) = tokio::sync::broadcast::channel(2048);
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             job_supervisor,
+            output_broadcaster,
         }
     }
 
     pub fn with_job_supervisor(supervisor: Arc<crate::process_job::JobSupervisor>) -> Self {
+        let (output_broadcaster, _) = tokio::sync::broadcast::channel(2048);
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             job_supervisor: Some(supervisor),
+            output_broadcaster,
         }
+    }
+
+    pub fn subscribe_output(&self) -> tokio::sync::broadcast::Receiver<TerminalOutputChunk> {
+        self.output_broadcaster.subscribe()
     }
 
     pub fn spawn_terminal(&self, id: String, options: TerminalSpawnOptions) -> Result<(), String> {
@@ -149,6 +163,34 @@ impl NativePtyManager {
             .take_writer()
             .map_err(|e| format!("Failed to take master writer: {}", e))?;
 
+        let reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|e| format!("Failed to clone master reader: {}", e))?;
+
+        let broadcaster = self.output_broadcaster.clone();
+        let term_id = id.clone();
+        let sessions_for_exit = self.sessions.clone();
+
+        std::thread::spawn(move || {
+            let mut reader = reader;
+            let mut buf = [0u8; 16384];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let _ = broadcaster.send(TerminalOutputChunk {
+                            terminal_id: term_id.clone(),
+                            data: buf[..n].to_vec(),
+                        });
+                    }
+                    Err(_) => break,
+                }
+            }
+            let mut lock = sessions_for_exit.lock().unwrap();
+            lock.remove(&term_id);
+        });
+
         let mut sessions = self.sessions.lock().unwrap();
         sessions.insert(
             id,
@@ -167,19 +209,18 @@ impl NativePtyManager {
         id: String,
         channel: Channel<TerminalEvent>,
     ) -> Result<(), String> {
-        let mut sessions = self.sessions.lock().unwrap();
-        let term = sessions
-            .get_mut(&id)
-            .ok_or_else(|| "Session not found".to_string())?;
+        {
+            let sessions = self.sessions.lock().unwrap();
+            if !sessions.contains_key(&id) {
+                return Err("Session not found".to_string());
+            }
+        }
 
-        let mut reader = term
-            .master
-            .try_clone_reader()
-            .map_err(|e| format!("Failed to clone reader: {}", e))?;
-
+        let mut broadcast_rx = self.output_broadcaster.subscribe();
         let sessions_clone = self.sessions.clone();
         let session_id = id.clone();
 
+        #[allow(dead_code)]
         enum RawPtyMsg {
             Data(Vec<u8>),
             Exit(Option<u32>),
@@ -188,29 +229,24 @@ impl NativePtyManager {
 
         let (tx, rx) = std::sync::mpsc::channel::<RawPtyMsg>();
         let tx_reader = tx.clone();
+        let target_id = id.clone();
 
-        // Background thread reading raw ConPTY output pipe
         thread::spawn(move || {
-            let mut buf = [0u8; 65536];
             loop {
-                match reader.read(&mut buf) {
-                    Ok(0) => {
+                match broadcast_rx.blocking_recv() {
+                    Ok(chunk) => {
+                        if chunk.terminal_id == target_id {
+                            if tx_reader.send(RawPtyMsg::Data(chunk.data)).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         let _ = tx_reader.send(RawPtyMsg::Exit(None));
                         break;
                     }
-                    Ok(n) => {
-                        if tx_reader.send(RawPtyMsg::Data(buf[..n].to_vec())).is_err() {
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        if e.kind() == std::io::ErrorKind::BrokenPipe || e.raw_os_error() == Some(5)
-                        {
-                            let _ = tx_reader.send(RawPtyMsg::Exit(None));
-                        } else {
-                            let _ = tx_reader.send(RawPtyMsg::Error(e.to_string()));
-                        }
-                        break;
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        continue;
                     }
                 }
             }
@@ -362,6 +398,12 @@ impl NativePtyManager {
         }
         Ok(())
     }
+}
+
+static PTY_MANAGER: std::sync::OnceLock<NativePtyManager> = std::sync::OnceLock::new();
+
+pub fn get_pty_manager() -> &'static NativePtyManager {
+    PTY_MANAGER.get_or_init(NativePtyManager::new)
 }
 
 #[tauri::command]
