@@ -1,6 +1,84 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[macro_export]
+macro_rules! println {
+    () => {{
+        use std::io::Write;
+        let _ = writeln!(std::io::stdout());
+    }};
+    ($($arg:tt)*) => {{
+        use std::io::Write;
+        let _ = writeln!(std::io::stdout(), $($arg)*);
+    }};
+}
+
+#[macro_export]
+macro_rules! eprintln {
+    () => {{
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr());
+    }};
+    ($($arg:tt)*) => {{
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
+
+#[cfg(target_os = "windows")]
+fn sanitize_windows_stdio() {
+    use windows_sys::Win32::Foundation::{GetLastError, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, WriteFile, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+    };
+
+    let nul_name: Vec<u16> = "NUL\0".encode_utf16().collect();
+    let open_nul = || unsafe {
+        CreateFileW(
+            nul_name.as_ptr(),
+            GENERIC_WRITE | GENERIC_READ,
+            FILE_SHARE_WRITE | FILE_SHARE_READ,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+
+    let check_and_fix = |std_handle_id: u32| {
+        unsafe {
+            let handle = GetStdHandle(std_handle_id);
+            if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+                let nul = open_nul();
+                if nul != INVALID_HANDLE_VALUE {
+                    SetStdHandle(std_handle_id, nul);
+                }
+            } else {
+                let mut written: u32 = 0;
+                let ok = WriteFile(handle, std::ptr::null(), 0, &mut written, std::ptr::null_mut());
+                if ok == 0 {
+                    let err = GetLastError();
+                    // 109 = ERROR_BROKEN_PIPE, 232 = ERROR_NO_DATA, 6 = ERROR_INVALID_HANDLE
+                    if err == 109 || err == 232 || err == 6 {
+                        let nul = open_nul();
+                        if nul != INVALID_HANDLE_VALUE {
+                            SetStdHandle(std_handle_id, nul);
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    check_and_fix(STD_OUTPUT_HANDLE);
+    check_and_fix(STD_ERROR_HANDLE);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn sanitize_windows_stdio() {}
 mod daemon;
 mod editor;
 
@@ -941,7 +1019,7 @@ fn setup_panic_hook() {
         {
             let _ = f.write_all(entry.as_bytes());
         }
-        eprintln!("{}", entry);
+        let _ = writeln!(std::io::stderr(), "{}", entry);
     }));
 }
 
@@ -992,6 +1070,7 @@ fn check_and_log_crashpad_dumps() {
 }
 
 fn main() {
+    sanitize_windows_stdio();
     detect_and_configure_portable_mode();
 
     if let Some(code) = kernel::cli::parse_and_dispatch() {
@@ -1771,6 +1850,27 @@ mod tests {
         assert!(res.is_dir);
         assert!(res.readable);
         assert!(res.error.is_none());
+    }
+
+    #[test]
+    fn test_sanitize_windows_stdio_and_safe_print_macros() {
+        sanitize_windows_stdio();
+        println!("Safe println test: integer={}, string={}", 42, "hello");
+        eprintln!("Safe eprintln test: flag={}", true);
+
+        #[cfg(target_os = "windows")]
+        unsafe {
+            use windows_sys::Win32::System::Console::{SetStdHandle, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+            use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+            // Temporarily set handles to invalid to verify no panic
+            SetStdHandle(STD_OUTPUT_HANDLE, INVALID_HANDLE_VALUE);
+            SetStdHandle(STD_ERROR_HANDLE, INVALID_HANDLE_VALUE);
+            println!("This should never panic even with invalid handle");
+            eprintln!("This should never panic even with invalid handle");
+            // Sanitize again recovers valid NUL handle
+            sanitize_windows_stdio();
+            println!("Recovered handle via sanitize_windows_stdio");
+        }
     }
 
     #[test]

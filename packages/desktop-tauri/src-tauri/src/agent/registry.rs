@@ -23,12 +23,6 @@ impl ProviderRegistry {
                 id: "claude".to_string(),
                 label: "Claude Code".to_string(),
                 description: "Anthropic Claude CLI agent with tools and sidechains".to_string(),
-                models: vec![
-                    "claude-3-7-sonnet-20250219".to_string(),
-                    "claude-3-5-sonnet-20241022".to_string(),
-                    "claude-3-5-haiku-20241022".to_string(),
-                ],
-                default_model: Some("claude-3-7-sonnet-20250219".to_string()),
                 is_installed: is_command_available("claude"),
             },
         );
@@ -40,12 +34,6 @@ impl ProviderRegistry {
                 id: "codex".to_string(),
                 label: "OpenAI Codex".to_string(),
                 description: "OpenAI Codex App Server agent".to_string(),
-                models: vec![
-                    "o3-mini".to_string(),
-                    "o1".to_string(),
-                    "gpt-4o".to_string(),
-                ],
-                default_model: Some("o3-mini".to_string()),
                 is_installed: is_command_available("codex"),
             },
         );
@@ -57,11 +45,6 @@ impl ProviderRegistry {
                 id: "opencode".to_string(),
                 label: "OpenCode".to_string(),
                 description: "Local OpenCode agent runtime over HTTP/SSE".to_string(),
-                models: vec![
-                    "deepseek-coder-v2".to_string(),
-                    "qwen2.5-coder".to_string(),
-                ],
-                default_model: Some("deepseek-coder-v2".to_string()),
                 is_installed: is_command_available("opencode"),
             },
         );
@@ -73,10 +56,6 @@ impl ProviderRegistry {
                 id: "pi".to_string(),
                 label: "Pi Agent".to_string(),
                 description: "Pi CLI tool-use runtime".to_string(),
-                models: vec![
-                    "pi-default".to_string(),
-                ],
-                default_model: Some("pi-default".to_string()),
                 is_installed: is_command_available("pi"),
             },
         );
@@ -88,10 +67,6 @@ impl ProviderRegistry {
                 id: "omp".to_string(),
                 label: "Open Model Protocol".to_string(),
                 description: "OMP stdio and native Model Context Protocol bridge".to_string(),
-                models: vec![
-                    "omp-default".to_string(),
-                ],
-                default_model: Some("omp-default".to_string()),
                 is_installed: is_command_available("omp"),
             },
         );
@@ -103,10 +78,6 @@ impl ProviderRegistry {
                 id: "acp".to_string(),
                 label: "Agent Client Protocol".to_string(),
                 description: "ACP stdio agent protocol runner (Cursor, Copilot, Trae)".to_string(),
-                models: vec![
-                    "acp-model".to_string(),
-                ],
-                default_model: Some("acp-model".to_string()),
                 is_installed: true,
             },
         );
@@ -118,8 +89,6 @@ impl ProviderRegistry {
                 id: "mock".to_string(),
                 label: "Mock Agent".to_string(),
                 description: "Mock agent for testing, benchmarking, and development".to_string(),
-                models: vec!["mock-default".to_string()],
-                default_model: Some("mock-default".to_string()),
                 is_installed: true,
             },
         );
@@ -166,7 +135,6 @@ mod tests {
 
         let claude = registry.get("claude").expect("Claude provider");
         assert_eq!(claude.id, "claude");
-        assert!(claude.models.contains(&"claude-3-7-sonnet-20250219".to_string()));
 
         let mock = registry.get("mock").expect("Mock provider");
         assert!(mock.is_installed);

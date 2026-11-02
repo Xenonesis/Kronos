@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Populate native-daemon model snapshots from live Codex, Pi, OMP, OpenCode, and Ollama catalogs plus the configured Claude model instead of shipping a stale built-in model list.
+
 ## 0.15.0-beta.1 - 2026-11-01
 
 Daemon restarts now keep terminal programs running and automatically resume interrupted agents in their existing conversations.

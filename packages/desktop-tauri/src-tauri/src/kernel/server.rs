@@ -1,14 +1,18 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     routing::get,
     Router,
 };
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, Mutex};
+
 use crate::kernel::protocol::{RpcEnvelope, RpcResponse};
 
+static PROVIDER_SNAPSHOT_CACHE: std::sync::LazyLock<
+    tokio::sync::Mutex<Option<(Instant, String, Vec<serde_json::Value>)>>,
+> = std::sync::LazyLock::new(|| tokio::sync::Mutex::new(None));
 static MCP_HUB: std::sync::OnceLock<crate::kernel::mcp::McpHub> = std::sync::OnceLock::new();
 
 pub fn get_mcp_hub() -> &'static crate::kernel::mcp::McpHub {
@@ -756,6 +760,121 @@ fn canonicalize_path(path: &std::path::Path) -> std::path::PathBuf {
         }
         Err(_) => path.to_path_buf(),
     }
+}
+
+pub fn agent_record_to_snapshot(record: &crate::agent::types::StoredAgentRecord) -> serde_json::Value {
+    let mut val = serde_json::json!({
+        "id": record.id,
+        "provider": record.provider,
+        "createdAt": record.created_at,
+        "updatedAt": record.updated_at,
+        "lastUserMessageAt": record.last_activity_at,
+        "status": match record.last_status {
+            crate::agent::types::AgentStatus::Idle => "idle",
+            crate::agent::types::AgentStatus::Running => "running",
+            crate::agent::types::AgentStatus::Paused => "paused",
+            crate::agent::types::AgentStatus::Closed => "closed",
+            crate::agent::types::AgentStatus::Error => "error",
+        },
+        "capabilities": {
+            "canInterrupt": true,
+            "canSendInput": true,
+            "canSpawnTerminals": true,
+            "supportsStreaming": true,
+            "supportsSessionPersistence": false,
+            "supportsDynamicModes": false,
+            "supportsMcpServers": true,
+            "supportsReasoningStream": false,
+            "supportsToolInvocations": true
+        },
+        "currentModeId": null,
+        "availableModes": [],
+        "pendingPermissions": [],
+        "persistence": null,
+        "title": record.title,
+        "labels": record.labels,
+    });
+    if let Some(ref ws_id) = record.workspace_id {
+        val["workspaceId"] = serde_json::json!(ws_id);
+    }
+    if let Some(ref cfg) = record.config {
+        if let Some(m) = cfg.get("model") {
+            val["model"] = m.clone();
+        }
+    }
+    val
+}
+
+pub fn timeline_item_to_entry(
+    provider: &str,
+    item: &crate::agent::types::AgentTimelineItem,
+    seq: u64,
+) -> serde_json::Value {
+    let (item_json, ts) = match item {
+        crate::agent::types::AgentTimelineItem::UserMessage { id, text, timestamp } => (
+            serde_json::json!({
+                "type": "user_message",
+                "text": text,
+                "messageId": id,
+            }),
+            timestamp.clone(),
+        ),
+        crate::agent::types::AgentTimelineItem::AssistantMessage { id, text, timestamp } => (
+            serde_json::json!({
+                "type": "assistant_message",
+                "text": text,
+                "messageId": id,
+            }),
+            timestamp.clone(),
+        ),
+        crate::agent::types::AgentTimelineItem::Thinking { text, timestamp, .. } => (
+            serde_json::json!({
+                "type": "reasoning",
+                "text": text,
+            }),
+            timestamp.clone(),
+        ),
+        crate::agent::types::AgentTimelineItem::ToolCall { name, input, timestamp, call_id, .. } => (
+            serde_json::json!({
+                "type": "tool_call",
+                "callId": call_id,
+                "name": name,
+                "status": "completed",
+                "input": input,
+                "error": null,
+            }),
+            timestamp.clone(),
+        ),
+        crate::agent::types::AgentTimelineItem::ToolResult { output, timestamp, is_error, call_id, .. } => (
+            serde_json::json!({
+                "type": "tool_call",
+                "callId": call_id,
+                "name": "result",
+                "status": if *is_error { "failed" } else { "completed" },
+                "output": output,
+                "error": if *is_error { serde_json::json!({ "message": output }) } else { serde_json::Value::Null },
+            }),
+            timestamp.clone(),
+        ),
+        crate::agent::types::AgentTimelineItem::ErrorNotice { message, timestamp, .. } => (
+            serde_json::json!({
+                "type": "notification",
+                "level": "error",
+                "message": message,
+            }),
+            timestamp.clone(),
+        ),
+    };
+
+    serde_json::json!({
+        "provider": provider,
+        "item": item_json,
+        "timestamp": ts,
+        "seqStart": seq,
+        "seqEnd": seq,
+        "sourceSeqRanges": [{ "startSeq": seq, "endSeq": seq }],
+        "collapsed": []
+    })
 }
 
 
@@ -1694,68 +1813,64 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             })
         }
         "agent.create.request" | "create_agent_request" => {
-            let dur = std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .unwrap_or_default();
-            let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
-            let agent_id = format!("ag_{:016x}", dur.as_nanos() as u64);
             let payload = msg.get("payload");
             let provider = msg.get("provider")
                 .or_else(|| payload.and_then(|p| p.get("provider")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("codex");
-            let model = msg.get("model")
-                .or_else(|| payload.and_then(|p| p.get("model")))
-                .and_then(|v| v.as_str())
-                .unwrap_or("gpt-5.4");
             let cwd = msg.get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
+            let title = msg.get("title")
+                .or_else(|| payload.and_then(|p| p.get("title")))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             let ws_id = msg.get("workspaceId")
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let model = msg.get("model")
+                .or_else(|| payload.and_then(|p| p.get("model")))
                 .and_then(|v| v.as_str());
 
-            let mut agent_snapshot = serde_json::json!({
-                "id": agent_id,
-                "provider": provider,
-                "cwd": cwd,
-                "model": model,
-                "createdAt": now_iso,
-                "updatedAt": now_iso,
-                "lastUserMessageAt": null,
-                "status": "idle",
-                "capabilities": {
-                    "canInterrupt": true,
-                    "canSendInput": true,
-                    "canSpawnTerminals": true,
-                    "supportsStreaming": true,
-                    "supportsSessionPersistence": false,
-                    "supportsDynamicModes": false,
-                    "supportsMcpServers": true,
-                    "supportsReasoningStream": false,
-                    "supportsToolInvocations": true
-                },
-                "currentModeId": null,
-                "availableModes": [],
-                "pendingPermissions": [],
-                "persistence": null,
-                "title": null,
-                "labels": {}
-            });
-            if let Some(w) = ws_id {
-                agent_snapshot["workspaceId"] = serde_json::json!(w);
+            let mut config = msg.get("config")
+                .or_else(|| payload.and_then(|p| p.get("config")))
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+
+            if let Some(m) = model {
+                if let Some(obj) = config.as_object_mut() {
+                    obj.insert("model".to_string(), serde_json::json!(m));
+                }
             }
 
-            serde_json::json!({
-                "type": "agent.create.response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "agent": agent_snapshot,
-                    "error": null
+            let mgr = get_agent_manager();
+            match mgr.create_agent(provider, cwd, title, ws_id, Some(config)) {
+                Ok(record) => {
+                    let snapshot = agent_record_to_snapshot(&record);
+                    serde_json::json!({
+                        "type": "agent.create.response",
+                        "requestId": request_id,
+                        "payload": {
+                            "requestId": request_id,
+                            "agent": snapshot,
+                            "error": null
+                        }
+                    })
                 }
-            })
+                Err(err) => {
+                    serde_json::json!({
+                        "type": "agent.create.response",
+                        "requestId": request_id,
+                        "payload": {
+                            "requestId": request_id,
+                            "agent": null,
+                            "error": err
+                        }
+                    })
+                }
+            }
         }
         "paseo_worktree_list_request" => {
             serde_json::json!({
@@ -1799,18 +1914,306 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             } else {
                 None
             };
+            let mgr = get_agent_manager();
+            let agents = mgr.list_agents();
+            let entries: Vec<serde_json::Value> = agents.into_iter().map(|rec| {
+                serde_json::json!({
+                    "agent": agent_record_to_snapshot(&rec),
+                    "project": null
+                })
+            }).collect();
+
             serde_json::json!({
                 "type": "fetch_agents_response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
                     "subscriptionId": sub_id,
-                    "entries": [],
+                    "entries": entries,
                     "pageInfo": {
                         "nextCursor": null,
                         "prevCursor": null,
                         "hasMore": false
                     }
+                }
+            })
+        }
+        "fetch_agent_request" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("agentId")
+                .or_else(|| payload.and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let mgr = get_agent_manager();
+            let agent_opt = mgr.get_agent(agent_id).map(|r| agent_record_to_snapshot(&r));
+            serde_json::json!({
+                "type": "fetch_agent_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "agent": agent_opt,
+                    "project": null
+                }
+            })
+        }
+        "send_agent_message_request" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("agentId")
+                .or_else(|| payload.and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let text = msg.get("text")
+                .or_else(|| payload.and_then(|p| p.get("text")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let mgr = get_agent_manager();
+            match mgr.send_message(agent_id, text) {
+                Ok(()) => {
+                    serde_json::json!({
+                        "type": "send_agent_message_response",
+                        "requestId": request_id,
+                        "payload": {
+                            "requestId": request_id,
+                            "agentId": agent_id,
+                            "accepted": true
+                        }
+                    })
+                }
+                Err(err) => {
+                    serde_json::json!({
+                        "type": "send_agent_message_response",
+                        "requestId": request_id,
+                        "payload": {
+                            "requestId": request_id,
+                            "agentId": agent_id,
+                            "accepted": false,
+                            "error": err
+                        }
+                    })
+                }
+            }
+        }
+        "fetch_agent_timeline_request" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("agentId")
+                .or_else(|| payload.and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let mgr = get_agent_manager();
+            let agent_opt = mgr.get_agent(agent_id);
+            let provider = agent_opt.as_ref().map(|a| a.provider.as_str()).unwrap_or("codex");
+            let snapshot = agent_opt.as_ref().map(agent_record_to_snapshot);
+            let raw_items = mgr.get_timeline(agent_id);
+            let total = raw_items.len() as u64;
+
+            let entries: Vec<serde_json::Value> = raw_items
+                .into_iter()
+                .enumerate()
+                .map(|(idx, item)| timeline_item_to_entry(provider, &item, (idx + 1) as u64))
+                .collect();
+
+            let (min_seq, max_seq, next_seq, start_cursor, end_cursor) = if total > 0 {
+                (
+                    1u64,
+                    total,
+                    total + 1,
+                    Some(serde_json::json!({ "epoch": "epoch-1", "seq": 1 })),
+                    Some(serde_json::json!({ "epoch": "epoch-1", "seq": total })),
+                )
+            } else {
+                (0u64, 0u64, 1u64, None, None)
+            };
+
+            serde_json::json!({
+                "type": "fetch_agent_timeline_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "agentId": agent_id,
+                    "agent": snapshot,
+                    "direction": "tail",
+                    "projection": "projected",
+                    "epoch": "epoch-1",
+                    "reset": false,
+                    "staleCursor": false,
+                    "gap": false,
+                    "window": {
+                        "minSeq": min_seq,
+                        "maxSeq": max_seq,
+                        "nextSeq": next_seq
+                    },
+                    "startCursor": start_cursor,
+                    "endCursor": end_cursor,
+                    "hasOlder": false,
+                    "hasNewer": false,
+                    "entries": entries,
+                    "error": null
+                }
+            })
+        }
+        "cancel_agent_request" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("agentId")
+                .or_else(|| payload.and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let mgr = get_agent_manager();
+            let res = mgr.cancel_agent(agent_id);
+            serde_json::json!({
+                "type": "cancel_agent_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "agentId": agent_id,
+                    "accepted": res.is_ok(),
+                    "error": res.err()
+                }
+            })
+        }
+        "delete_agent_request" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("agentId")
+                .or_else(|| payload.and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let mgr = get_agent_manager();
+            let _ = mgr.delete_agent(agent_id);
+            serde_json::json!({
+                "type": "agent_deleted",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "agentId": agent_id
+                }
+            })
+        }
+        "archive_agent_request" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("agentId")
+                .or_else(|| payload.and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let dur = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default();
+            let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+
+            serde_json::json!({
+                "type": "agent_archived",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "agentId": agent_id,
+                    "archivedAt": now_iso
+                }
+            })
+        }
+        "clear_agent_attention" => {
+            serde_json::json!({
+                "type": "clear_agent_attention_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "cleared": true
+                }
+            })
+        }
+        "agent.config.apply.request" => {
+            serde_json::json!({
+                "type": "agent.config.apply.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "accepted": true,
+                    "notice": null
+                }
+            })
+        }
+        "set_agent_mode_request" => {
+            serde_json::json!({
+                "type": "set_agent_mode_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "accepted": true,
+                    "notice": null
+                }
+            })
+        }
+        "set_agent_model_request" => {
+            serde_json::json!({
+                "type": "set_agent_model_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "accepted": true
+                }
+            })
+        }
+        "set_agent_feature_request" => {
+            serde_json::json!({
+                "type": "set_agent_feature_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "accepted": true
+                }
+            })
+        }
+        "set_agent_thinking_request" => {
+            serde_json::json!({
+                "type": "set_agent_thinking_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "accepted": true,
+                    "notice": null
+                }
+            })
+        }
+        "list_commands_request" => {
+            serde_json::json!({
+                "type": "list_commands_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "commands": []
+                }
+            })
+        }
+        "agent.skills.get_status.request" => {
+            serde_json::json!({
+                "type": "agent.skills.get_status.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "skills": []
+                }
+            })
+        }
+        "agent.skills.reconcile.request" => {
+            serde_json::json!({
+                "type": "agent.skills.reconcile.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "success": true
+                }
+            })
+        }
+        "agent.skills.uninstall.request" => {
+            serde_json::json!({
+                "type": "agent.skills.uninstall.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "success": true
                 }
             })
         }
@@ -1963,7 +2366,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
                 .unwrap_or_default();
             let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
-            let entries = get_default_provider_snapshot_entries();
+            let cwd = msg.get("cwd").and_then(|value| value.as_str()).unwrap_or(".");
+            let entries = get_provider_snapshot_entries(cwd).await;
             serde_json::json!({
                 "type": "get_providers_snapshot_response",
                 "requestId": request_id,
@@ -1979,24 +2383,27 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
                 .unwrap_or_default();
             let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+            let entries = get_provider_snapshot_entries(".").await;
+            let providers: Vec<serde_json::Value> = entries
+                .iter()
+                .filter_map(|entry| {
+                    let provider = entry.get("provider")?.as_str()?;
+                    let available = entry.get("models")?.as_array().is_some_and(|models| !models.is_empty());
+                    Some(serde_json::json!({ "provider": provider, "available": available }))
+                })
+                .collect();
             serde_json::json!({
                 "type": "list_available_providers_response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
-                    "providers": [
-                        { "provider": "codex", "available": true },
-                        { "provider": "claude", "available": true },
-                        { "provider": "opencode", "available": true },
-                        { "provider": "pi", "available": true },
-                        { "provider": "omp", "available": true },
-                        { "provider": "copilot", "available": true }
-                    ],
+                    "providers": providers,
                     "fetchedAt": now_iso
                 }
             })
         }
         "refresh_providers_snapshot_request" => {
+            invalidate_provider_snapshot_cache().await;
             serde_json::json!({
                 "type": "refresh_providers_snapshot_response",
                 "requestId": request_id,
@@ -3190,13 +3597,13 @@ async fn run_unix_socket(sock_path: String, mut shutdown_rx: broadcast::Receiver
     safe_remove_socket_file(p);
 }
 
-pub fn get_default_provider_snapshot_entries() -> Vec<serde_json::Value> {
+pub(crate) fn get_provider_snapshot_metadata_entries() -> Vec<serde_json::Value> {
     vec![
         serde_json::json!({
             "provider": "claude",
             "status": "ready",
             "enabled": true,
-            "source": "builtin",
+            "source": "runtime",
             "label": "Claude",
             "description": "Anthropic Claude with MCP, tools, and reasoning",
             "defaultModeId": "auto",
@@ -3205,41 +3612,13 @@ pub fn get_default_provider_snapshot_entries() -> Vec<serde_json::Value> {
                 { "id": "plan", "label": "Plan Mode", "description": "Analyze codebase without executing tools or edits", "colorTier": "planning" },
                 { "id": "bypassPermissions", "label": "Bypass", "description": "Skip all permission prompts", "colorTier": "dangerous" }
             ],
-            "models": [
-                {
-                    "provider": "claude",
-                    "id": "claude-opus-5",
-                    "label": "Opus 5",
-                    "description": "Opus 5 · Anthropic flagship reasoning model",
-                    "isDefault": true,
-                    "isSelectable": true,
-                    "contextWindowMaxTokens": 1000000
-                },
-                {
-                    "provider": "claude",
-                    "id": "claude-3-7-sonnet-20250219",
-                    "label": "Claude 3.7 Sonnet",
-                    "description": "Hybrid thinking and coding model",
-                    "isDefault": false,
-                    "isSelectable": true,
-                    "contextWindowMaxTokens": 200000
-                },
-                {
-                    "provider": "claude",
-                    "id": "claude-3-5-haiku-20241022",
-                    "label": "Claude 3.5 Haiku",
-                    "description": "Fast lightweight model",
-                    "isDefault": false,
-                    "isSelectable": true,
-                    "contextWindowMaxTokens": 200000
-                }
-            ]
+            "models": []
         }),
         serde_json::json!({
             "provider": "codex",
             "status": "ready",
             "enabled": true,
-            "source": "builtin",
+            "source": "runtime",
             "label": "Codex",
             "description": "OpenAI Codex workspace agent",
             "defaultModeId": "auto",
@@ -3247,50 +3626,13 @@ pub fn get_default_provider_snapshot_entries() -> Vec<serde_json::Value> {
                 { "id": "auto", "label": "Default Permissions", "description": "Edit files and run commands with Codex default approval flow", "colorTier": "moderate" },
                 { "id": "full-access", "label": "Full Access", "description": "Edit files, run commands, and access network without prompts", "colorTier": "dangerous" }
             ],
-            "models": [
-                {
-                    "provider": "codex",
-                    "id": "gpt-5.4",
-                    "label": "GPT-5.4",
-                    "description": "OpenAI flagship coding model",
-                    "isDefault": true,
-                    "isSelectable": true,
-                    "contextWindowMaxTokens": 272000
-                },
-                {
-                    "provider": "codex",
-                    "id": "gpt-5.4-mini",
-                    "label": "GPT-5.4 Mini",
-                    "description": "Fast coding and review model",
-                    "isDefault": false,
-                    "isSelectable": true,
-                    "contextWindowMaxTokens": 272000
-                },
-                {
-                    "provider": "codex",
-                    "id": "o3-mini",
-                    "label": "o3-mini",
-                    "description": "Reasoning model for complex logic",
-                    "isDefault": false,
-                    "isSelectable": true,
-                    "contextWindowMaxTokens": 200000
-                },
-                {
-                    "provider": "codex",
-                    "id": "gpt-4o",
-                    "label": "GPT-4o",
-                    "description": "Multimodal general purpose model",
-                    "isDefault": false,
-                    "isSelectable": true,
-                    "contextWindowMaxTokens": 128000
-                }
-            ]
+            "models": []
         }),
         serde_json::json!({
             "provider": "opencode",
             "status": "ready",
             "enabled": true,
-            "source": "builtin",
+            "source": "runtime",
             "label": "OpenCode",
             "description": "Open-source coding assistant with multi-provider model support",
             "defaultModeId": "build",
@@ -3298,53 +3640,35 @@ pub fn get_default_provider_snapshot_entries() -> Vec<serde_json::Value> {
                 { "id": "build", "label": "Build", "description": "Allows edits and tool execution", "colorTier": "moderate" },
                 { "id": "plan", "label": "Plan", "description": "Read-only planning mode that avoids edits", "colorTier": "planning" }
             ],
-            "models": [
-                {
-                    "provider": "opencode",
-                    "id": "deepseek-coder-v2",
-                    "label": "DeepSeek Coder V2",
-                    "description": "High capability open code model",
-                    "isDefault": true,
-                    "isSelectable": true,
-                    "contextWindowMaxTokens": 128000
-                },
-                {
-                    "provider": "opencode",
-                    "id": "qwen2.5-coder",
-                    "label": "Qwen 2.5 Coder",
-                    "description": "Alibaba Qwen coding model",
-                    "isDefault": false,
-                    "isSelectable": true,
-                    "contextWindowMaxTokens": 128000
-                }
-            ]
+            "models": []
+        }),
+        serde_json::json!({
+            "provider": "ollama",
+            "status": "ready",
+            "enabled": true,
+            "source": "runtime",
+            "label": "Ollama",
+            "description": "Local Ollama models",
+            "defaultModeId": null,
+            "modes": [],
+            "models": []
         }),
         serde_json::json!({
             "provider": "pi",
             "status": "ready",
             "enabled": true,
-            "source": "builtin",
+            "source": "runtime",
             "label": "Pi",
             "description": "Minimal terminal-based coding agent",
             "defaultModeId": null,
             "modes": [],
-            "models": [
-                {
-                    "provider": "pi",
-                    "id": "pi-default",
-                    "label": "Pi Default",
-                    "description": "Pi CLI coding model",
-                    "isDefault": true,
-                    "isSelectable": true,
-                    "contextWindowMaxTokens": 128000
-                }
-            ]
+            "models": []
         }),
         serde_json::json!({
             "provider": "omp",
             "status": "ready",
             "enabled": true,
-            "source": "builtin",
+            "source": "runtime",
             "label": "Oh My Pi",
             "description": "Multi-provider coding agent with native approvals and subagents",
             "defaultModeId": "full",
@@ -3353,23 +3677,13 @@ pub fn get_default_provider_snapshot_entries() -> Vec<serde_json::Value> {
                 { "id": "write", "label": "Write Approval", "description": "Reads are free, writes require approval", "colorTier": "moderate" },
                 { "id": "ask", "label": "Always Ask", "description": "Always ask approval for write and exec tools", "colorTier": "safe" }
             ],
-            "models": [
-                {
-                    "provider": "omp",
-                    "id": "omp-default",
-                    "label": "OMP Default",
-                    "description": "Default Oh My Pi model configuration",
-                    "isDefault": true,
-                    "isSelectable": true,
-                    "contextWindowMaxTokens": 200000
-                }
-            ]
+            "models": []
         }),
         serde_json::json!({
             "provider": "copilot",
             "status": "ready",
             "enabled": true,
-            "source": "builtin",
+            "source": "runtime",
             "label": "Copilot",
             "description": "GitHub Copilot via Agent Client Protocol",
             "defaultModeId": "https://agentclientprotocol.com/protocol/session-modes#agent",
@@ -3378,26 +3692,506 @@ pub fn get_default_provider_snapshot_entries() -> Vec<serde_json::Value> {
                 { "id": "https://agentclientprotocol.com/protocol/session-modes#plan", "label": "Plan", "description": "Plan mode", "colorTier": "planning" },
                 { "id": "allow-all", "label": "Allow All", "description": "Approve all Copilot tool requests", "colorTier": "dangerous" }
             ],
-            "models": [
-                {
-                    "provider": "copilot",
-                    "id": "claude-3.5-sonnet",
-                    "label": "Claude 3.5 Sonnet",
-                    "description": "GitHub Copilot Claude 3.5 Sonnet",
-                    "isDefault": true,
-                    "isSelectable": true,
-                    "contextWindowMaxTokens": 200000
-                },
-                {
-                    "provider": "copilot",
-                    "id": "gpt-4o",
-                    "label": "GPT-4o",
-                    "description": "GitHub Copilot GPT-4o",
-                    "isDefault": false,
-                    "isSelectable": true,
-                    "contextWindowMaxTokens": 128000
-                }
-            ]
+            "models": []
         })
     ]
+}
+
+async fn get_provider_snapshot_entries(cwd: &str) -> Vec<serde_json::Value> {
+    let mut cache = PROVIDER_SNAPSHOT_CACHE.lock().await;
+    if let Some((generated_at, cached_cwd, entries)) = cache.as_ref() {
+        if cached_cwd == cwd && generated_at.elapsed() < Duration::from_secs(60) {
+            return entries.clone();
+        }
+    }
+
+    let (codex_models, claude_models, opencode_models, ollama_models, pi_models, omp_models, copilot_available) = tokio::join!(
+        discover_codex_models(cwd),
+        discover_claude_configured_model(),
+        discover_opencode_models(cwd),
+        discover_ollama_models(),
+        discover_pi_models(cwd),
+        discover_omp_models(cwd),
+        discover_copilot_available()
+    );
+    let models_by_provider = [
+        ("codex", codex_models),
+        ("claude", claude_models),
+        ("opencode", opencode_models),
+        ("ollama", ollama_models),
+        ("pi", pi_models),
+        ("omp", omp_models),
+    ];
+    let mut entries = get_provider_snapshot_metadata_entries();
+
+    for entry in &mut entries {
+        let provider = entry.get("provider").and_then(serde_json::Value::as_str).unwrap_or("");
+        // ACP-binary providers (copilot) get availability from binary check, not model count.
+        // Their model list is populated dynamically at session time via ACP session/new.
+        if provider == "copilot" {
+            if !copilot_available {
+                entry["status"] = serde_json::json!("unavailable");
+            }
+            continue;
+        }
+        let models = models_by_provider
+            .iter()
+            .find(|(candidate, _)| *candidate == provider)
+            .map(|(_, models)| models.clone())
+            .unwrap_or_default();
+        entry["models"] = serde_json::Value::Array(models);
+        if entry["models"].as_array().is_some_and(Vec::is_empty) {
+            entry["status"] = serde_json::json!("unavailable");
+        }
+    }
+    *cache = Some((Instant::now(), cwd.to_owned(), entries.clone()));
+    entries
+}
+
+async fn discover_pi_models(cwd: &str) -> Vec<serde_json::Value> {
+    let binary = std::env::var("PI_COMMAND")
+        .or_else(|_| std::env::var("PI_ACP_PI_COMMAND"))
+        .unwrap_or_else(|_| "pi".to_owned());
+    discover_jsonl_cli_models(&binary, &["--mode", "rpc"], cwd, false, pi_models_from_response).await
+}
+
+async fn discover_omp_models(cwd: &str) -> Vec<serde_json::Value> {
+    let binary = std::env::var("OMP_COMMAND").unwrap_or_else(|_| "omp".to_owned());
+    discover_jsonl_cli_models(&binary, &["--mode", "rpc-ui"], cwd, true, omp_models_from_response).await
+}
+
+/// Returns `true` when the Copilot ACP binary is on PATH and exits without error.
+/// Copilot populates its model list via ACP `session/new` at session time, so the
+/// snapshot carries an empty model list; only binary availability matters here.
+async fn discover_copilot_available() -> bool {
+    let binary = std::env::var("COPILOT_COMMAND").unwrap_or_else(|_| "copilot".to_owned());
+    tokio::process::Command::new(&binary)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
+        .status()
+        .await
+        .map(|s| {
+            // exit 127 = command not found; treat everything else as "binary exists"
+            s.code().map(|c| c != 127).unwrap_or(true)
+        })
+        .unwrap_or(false)
+}
+
+async fn discover_jsonl_cli_models(
+    binary: &str,
+    args: &[&str],
+    cwd: &str,
+    wait_ready: bool,
+    parse: fn(&serde_json::Value) -> Vec<serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::process::Command;
+
+    let discovery = async {
+        let mut child = Command::new(binary)
+            .args(args)
+            .current_dir(cwd)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .ok()?;
+        let mut stdin = child.stdin.take()?;
+        let stdout = child.stdout.take()?;
+        let mut lines = BufReader::new(stdout).lines();
+
+        if wait_ready {
+            let ready = tokio::time::timeout(Duration::from_secs(2), async {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if serde_json::from_str::<serde_json::Value>(&line)
+                        .ok()
+                        .and_then(|value| value.get("type").and_then(serde_json::Value::as_str).map(str::to_owned))
+                        .as_deref() == Some("ready")
+                    {
+                        return true;
+                    }
+                }
+                false
+            })
+            .await
+            .unwrap_or(false);
+            if !ready {
+                let _ = child.kill().await;
+                return None;
+            }
+        }
+
+        let request = serde_json::json!({
+            "id": "kronos-model-catalog",
+            "type": "get_available_models"
+        });
+        if stdin.write_all(format!("{request}\n").as_bytes()).await.is_err() {
+            let _ = child.kill().await;
+            return None;
+        }
+        let response = tokio::time::timeout(Duration::from_secs(3), async {
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+                    if value.get("type").and_then(serde_json::Value::as_str) == Some("response")
+                        && value.get("id").and_then(serde_json::Value::as_str)
+                            == Some("kronos-model-catalog")
+                    {
+                        return Some(value);
+                    }
+                }
+            }
+            None
+        })
+        .await
+        .ok()
+        .flatten();
+        let _ = child.kill().await;
+        Some(response
+            .filter(|value| value.get("success").and_then(serde_json::Value::as_bool) == Some(true))
+            .map(|value| parse(&value["data"]))
+            .unwrap_or_default())
+    };
+
+    tokio::time::timeout(Duration::from_secs(5), discovery)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+pub(crate) fn pi_models_from_response(data: &serde_json::Value) -> Vec<serde_json::Value> {
+    runtime_cli_models(data, "pi")
+}
+
+pub(crate) fn omp_models_from_response(data: &serde_json::Value) -> Vec<serde_json::Value> {
+    runtime_cli_models(data, "omp")
+}
+
+fn runtime_cli_models(data: &serde_json::Value, provider_name: &str) -> Vec<serde_json::Value> {
+    let mut seen = std::collections::HashSet::new();
+    data.get("models")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|model| {
+            let provider = model.get("provider").and_then(serde_json::Value::as_str)?;
+            let model_id = model.get("id").and_then(serde_json::Value::as_str)?;
+            if provider.trim().is_empty() || model_id.trim().is_empty() {
+                return None;
+            }
+            let id = format!("{provider}/{model_id}");
+            if !seen.insert(id.clone()) {
+                return None;
+            }
+            Some(dynamic_model(
+                provider_name,
+                &id,
+                model.get("name").and_then(serde_json::Value::as_str),
+                None,
+                false,
+                model.get("contextWindow").and_then(serde_json::Value::as_u64),
+            ))
+        })
+        .collect()
+}
+
+async fn invalidate_provider_snapshot_cache() {
+    *PROVIDER_SNAPSHOT_CACHE.lock().await = None;
+}
+
+async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::process::Command;
+
+    let discovery = async {
+        let mut child = Command::new("codex")
+            .arg("app-server")
+            .current_dir(cwd)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .ok()?;
+        let mut stdin = child.stdin.take()?;
+        let stdout = child.stdout.take()?;
+        let mut lines = BufReader::new(stdout).lines();
+
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "clientInfo": { "name": "kronos", "title": "Kronos", "version": env!("CARGO_PKG_VERSION") },
+                "capabilities": {
+                    "experimentalApi": true,
+                    "mcpServerOpenaiFormElicitation": true
+                }
+            }
+        });
+        if stdin.write_all(format!("{initialize}\n").as_bytes()).await.is_err() {
+            let _ = child.kill().await;
+            return None;
+        }
+
+        let initialized = tokio::time::timeout(Duration::from_secs(2), async {
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+                    if value.get("id") == Some(&serde_json::json!(1)) {
+                        return Some(());
+                    }
+                }
+            }
+            None
+        })
+        .await
+        .ok()
+        .flatten()
+        .is_some();
+
+        if !initialized {
+            let _ = child.kill().await;
+            return None;
+        }
+
+        let notification = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "initialized",
+            "params": {}
+        });
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "model/list",
+            "params": {}
+        });
+        if stdin.write_all(format!("{notification}\n{request}\n").as_bytes()).await.is_err() {
+            let _ = child.kill().await;
+            return None;
+        }
+
+        let response = tokio::time::timeout(Duration::from_secs(2), async {
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+                    if value.get("id") == Some(&serde_json::json!(2)) {
+                        return Some(value);
+                    }
+                }
+            }
+            None
+        })
+        .await
+        .ok()
+        .flatten();
+        let _ = child.kill().await;
+        Some(response.map(|value| codex_models_from_response(&value)).unwrap_or_default())
+    };
+
+    tokio::time::timeout(Duration::from_secs(5), discovery)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+pub(crate) fn codex_models_from_response(response: &serde_json::Value) -> Vec<serde_json::Value> {
+    let mut seen = std::collections::HashSet::new();
+    response
+        .pointer("/result/data")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|model| {
+            let id = model.get("id")?.as_str()?;
+            if id.trim().is_empty() || !seen.insert(id) {
+                return None;
+            }
+            Some(dynamic_model(
+                "codex",
+                id,
+                model.get("displayName").and_then(serde_json::Value::as_str),
+                model.get("description").and_then(serde_json::Value::as_str),
+                model.get("isDefault").and_then(serde_json::Value::as_bool).unwrap_or(false),
+                model.get("contextWindow").and_then(serde_json::Value::as_u64),
+            ))
+        })
+        .collect()
+}
+
+async fn discover_claude_configured_model() -> Vec<serde_json::Value> {
+    let configured_model = std::env::var("ANTHROPIC_MODEL")
+        .ok()
+        .map(|model| model.trim().to_owned())
+        .filter(|model| !model.is_empty());
+    let model = if configured_model.is_some() {
+        configured_model
+    } else if let Ok(config_dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+        read_claude_settings_model(std::path::Path::new(&config_dir)).await
+    } else if let Some(home) = dirs::home_dir() {
+        read_claude_settings_model(&home.join(".claude")).await
+    } else {
+        None
+    };
+
+    model
+        .into_iter()
+        .map(|id| dynamic_model("claude", &id, None, None, true, None))
+        .collect()
+}
+
+pub(crate) async fn read_claude_settings_model(config_dir: &std::path::Path) -> Option<String> {
+    let settings_path = config_dir.join("settings.json");
+    let raw = tokio::fs::read_to_string(settings_path).await.ok()?;
+    let settings: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let model = settings.get("model").and_then(serde_json::Value::as_str)
+        .or_else(|| settings.pointer("/env/ANTHROPIC_MODEL").and_then(serde_json::Value::as_str))?;
+    let model = model.trim();
+    (!model.is_empty()).then(|| model.to_owned())
+}
+
+async fn discover_opencode_models(cwd: &str) -> Vec<serde_json::Value> {
+    let base_url = normalize_http_endpoint(
+        std::env::var("OPENCODE_SERVER_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:4096".to_owned()),
+    );
+    let client = match reqwest::Client::builder().timeout(Duration::from_secs(2)).build() {
+        Ok(client) => client,
+        Err(_) => return Vec::new(),
+    };
+    let response = match client
+        .get(format!("{base_url}/provider"))
+        .header("x-opencode-directory", cwd)
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => response,
+        _ => return Vec::new(),
+    };
+    let value = match response.json::<serde_json::Value>().await {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    opencode_models_from_response(&value)
+}
+
+
+pub(crate) fn opencode_models_from_response(value: &serde_json::Value) -> Vec<serde_json::Value> {
+    let providers = value.pointer("/all").and_then(serde_json::Value::as_array);
+    let connected_ids: std::collections::HashSet<&str> = value
+        .pointer("/connected")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+
+    providers
+        .into_iter()
+        .flatten()
+        .filter(|provider| {
+            let id = provider.get("id").and_then(serde_json::Value::as_str).unwrap_or("");
+            connected_ids.contains(id)
+                || provider.get("source").and_then(serde_json::Value::as_str) == Some("api")
+        })
+        .flat_map(|provider| {
+            let provider_id = provider.get("id").and_then(serde_json::Value::as_str).unwrap_or("");
+            provider.get("models").and_then(serde_json::Value::as_object)
+                .into_iter()
+                .flat_map(move |models| models.iter().filter_map(move |(model_id, details)| {
+                    let id = format!("{provider_id}/{model_id}");
+                    Some(dynamic_model(
+                        "opencode",
+                        &id,
+                        details.get("name").and_then(serde_json::Value::as_str),
+                        details.get("description").and_then(serde_json::Value::as_str),
+                        details.get("default").and_then(serde_json::Value::as_bool).unwrap_or(false),
+                        details.pointer("/limit/context").and_then(serde_json::Value::as_u64),
+                    ))
+                }))
+        })
+        .collect()
+}
+async fn discover_ollama_models() -> Vec<serde_json::Value> {
+    let endpoint = normalize_http_endpoint(
+        std::env::var("OLLAMA_HOST")
+            .unwrap_or_else(|_| "http://127.0.0.1:11434".to_owned()),
+    );
+    let client = match reqwest::Client::builder().timeout(Duration::from_secs(2)).build() {
+        Ok(client) => client,
+        Err(_) => return Vec::new(),
+    };
+    let response = match client.get(format!("{endpoint}/api/tags")).send().await {
+        Ok(response) if response.status().is_success() => response,
+        _ => return Vec::new(),
+    };
+    match response.json::<serde_json::Value>().await {
+        Ok(value) => ollama_models_from_response(&value),
+        Err(_) => Vec::new(),
+    }
+}
+
+pub(crate) fn ollama_models_from_response(response: &serde_json::Value) -> Vec<serde_json::Value> {
+    let mut seen = std::collections::HashSet::new();
+    response
+        .get("models")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|model| {
+            let name = model.get("name")?.as_str()?;
+            if name.trim().is_empty() || !seen.insert(name) {
+                return None;
+            }
+            let parameter_size = model.pointer("/details/parameter_size")
+                .and_then(serde_json::Value::as_str);
+            let label = parameter_size
+                .map(|size| format!("{name} ({size})"))
+                .unwrap_or_else(|| name.to_owned());
+            let family = model.pointer("/details/family")
+                .and_then(serde_json::Value::as_str);
+            Some(dynamic_model(
+                "ollama",
+                &format!("ollama/{name}"),
+                Some(&label),
+                family.map(|value| format!("Local Ollama model from the {value} family")).as_deref(),
+                false,
+                None,
+            ))
+        })
+        .collect()
+}
+
+pub(crate) fn normalize_http_endpoint(endpoint: String) -> String {
+    let endpoint = endpoint.trim().trim_end_matches('/');
+    if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+        endpoint.to_owned()
+    } else {
+        format!("http://{endpoint}")
+    }
+}
+
+fn dynamic_model(
+    provider: &str,
+    id: &str,
+    label: Option<&str>,
+    description: Option<&str>,
+    is_default: bool,
+    context_window: Option<u64>,
+) -> serde_json::Value {
+    let label = label.filter(|value| !value.trim().is_empty()).unwrap_or(id);
+    let mut model = serde_json::json!({
+        "provider": provider,
+        "id": id,
+        "label": label,
+        "description": description.unwrap_or(""),
+        "isDefault": is_default,
+        "isSelectable": true
+    });
+    if let Some(context_window) = context_window {
+        model["contextWindowMaxTokens"] = serde_json::json!(context_window);
+    }
+    model
 }

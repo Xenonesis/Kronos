@@ -8,12 +8,13 @@ const targetDir = path.join(__dirname, "server-dist");
 
 console.log("Preparing lean server-dist for Tauri bundle...");
 
-const withoutNode =
-  process.argv.includes("--without-node") || process.env.KRONOS_WITHOUT_NODE === "1";
+const withNode =
+  process.argv.includes("--with-node") || process.env.KRONOS_WITH_NODE === "1";
+const withoutNode = !withNode;
 
 if (withoutNode) {
   console.log(
-    "⚡ Standalone Native Mode active (--without-node): omitting node.exe and node_modules...",
+    "⚡ Standalone Native Mode active (default pure Rust): omitting node.exe and node_modules...",
   );
   if (fs.existsSync(targetDir)) {
     fs.rmSync(targetDir, { recursive: true, force: true });

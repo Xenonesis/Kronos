@@ -62,4 +62,27 @@ describe("prepare-dist --without-node", () => {
       `standalone server-dist size should be <500KB, got ${totalBytes} bytes`,
     );
   });
+  it("defaults to standalone native mode without any arguments", () => {
+    const scriptPath = path.join(__dirname, "prepare-dist.mjs");
+    const output = execFileSync(process.execPath, [scriptPath], {
+      cwd: __dirname,
+      encoding: "utf8",
+    });
+
+    assert.match(output, /Standalone Native Mode active/i);
+
+    const nodeExe = path.join(serverDist, "node.exe");
+    assert.strictEqual(
+      fs.existsSync(nodeExe),
+      false,
+      "server-dist/node.exe must not exist in default standalone mode",
+    );
+
+    const standaloneJson = path.join(serverDist, "dist", "standalone.json");
+    assert.strictEqual(
+      fs.existsSync(standaloneJson),
+      true,
+      "server-dist/dist/standalone.json marker must exist in default mode",
+    );
+  });
 });

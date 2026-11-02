@@ -5,6 +5,7 @@
   "description": "Paseo desktop app (Tauri v2 wrapper)",
   "scripts": {
     "prepare-dist": "node prepare-dist.mjs",
+    "prepare-dist:with-node": "node prepare-dist.mjs --with-node",
     "prebuild": "node prepare-dist.mjs",
     "pretauri": "node prepare-dist.mjs",
     "dev": "tauri dev",

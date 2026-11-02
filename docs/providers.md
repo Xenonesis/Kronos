@@ -3,6 +3,23 @@
 Add new providers through the plugin SDK. The core adapter patterns below describe the existing
 server integrations.
 
+## Native Daemon Dynamic Model Discovery
+
+The Rust desktop daemon does not ship a fallback model list. Its provider snapshot uses live
+catalog data from Codex app-server (`model/list`), Pi (`pi --mode rpc`, `get_available_models`,
+command override `PI_COMMAND` or `PI_ACP_PI_COMMAND`), OMP (`omp --mode rpc-ui`,
+`get_available_models`, command override `OMP_COMMAND`), a reachable OpenCode server
+(`GET /provider`, default `http://127.0.0.1:4096`, override with `OPENCODE_SERVER_URL`), and local
+Ollama (`GET /api/tags`, default `http://127.0.0.1:11434`, override with `OLLAMA_HOST`). Claude
+contributes the model explicitly selected in `ANTHROPIC_MODEL` or Claude `settings.json`; this is a
+configured model, not a full Anthropic catalog. Snapshot discovery is cached for 60 seconds and
+refreshed by `refresh_providers_snapshot_request`. Pi and OMP subprocess probes are bounded by a
+five-second deadline and are terminated after their catalog response.
+
+Providers without an available runtime catalog remain in the snapshot with an empty model list and
+an unavailable status. The Rust daemon currently does not perform model discovery for generic
+ACP/Copilot. It does not infer that a provider is usable from a built-in model ID.
+
 ## Plugin providers
 
 Keep a bundled provider in `plugins/<id>/` and register it through

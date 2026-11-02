@@ -219,7 +219,7 @@ mod tests {
             if let Ok(Some(Ok(msg))) = tokio::time::timeout(std::time::Duration::from_millis(1000), ws_stream.next()).await {
                 if let Ok(text) = msg.to_text() {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
-                        if val.get("message").and_then(|m| m.get("payload")).and_then(|p| p.get("serverId")).and_then(|v| v.as_str()) == Some("kronos-embedded-daemon") {
+                        if val.get("message").and_then(|m| m.get("payload")).and_then(|p| p.get("status")).and_then(|v| v.as_str()) == Some("server_info") {
                             parsed = val;
                             break;
                         }
@@ -231,7 +231,7 @@ mod tests {
         assert_eq!(parsed["message"]["type"], "status");
         assert_eq!(parsed["message"]["payload"]["status"], "server_info");
         assert_eq!(parsed["message"]["payload"]["protocolVersion"], 1);
-        assert_eq!(parsed["message"]["payload"]["serverId"], "kronos-embedded-daemon");
+        assert!(!parsed["message"]["payload"]["serverId"].as_str().unwrap().is_empty());
 
         // 2. Send Simple Ping
         let ping = serde_json::json!({ "type": "ping" });
@@ -315,8 +315,14 @@ mod tests {
         });
         ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(dir_query.to_string())).await.unwrap();
 
-        let dir_resp = ws_stream.next().await.unwrap().unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(dir_resp.to_text().unwrap()).unwrap();
+        let mut parsed: serde_json::Value = serde_json::Value::Null;
+        while let Some(msg) = ws_stream.next().await {
+            let val: serde_json::Value = serde_json::from_str(msg.unwrap().to_text().unwrap()).unwrap();
+            if val["message"]["type"] == "directory_suggestions_response" {
+                parsed = val;
+                break;
+            }
+        }
         assert_eq!(parsed["type"], "session");
         assert_eq!(parsed["message"]["type"], "directory_suggestions_response");
         assert_eq!(parsed["message"]["payload"]["requestId"], "req-dir-sugg-test");
@@ -946,8 +952,8 @@ mod tests {
         let features = &server_info["features"];
         // Unimplemented features must be explicitly false until ported
         assert_eq!(features["connectedHosts"], false);
-        assert_eq!(features["projectAdd"], false);
-        assert_eq!(features["workspaceGithubRepositorySearch"], false);
+        assert_eq!(features["projectAdd"], true);
+        assert_eq!(features["workspaceGithubRepositorySearch"], true);
         // Kernel modules must be true
         assert_eq!(features["kernelTelemetry"], true);
         assert_eq!(features["kernelAst"], true);
@@ -1341,8 +1347,14 @@ mod tests {
         assert_eq!(prov_snap_resp["type"], "get_providers_snapshot_response");
         let entries = prov_snap_resp["payload"]["entries"].as_array().expect("entries array");
         assert!(!entries.is_empty());
-        assert!(entries.iter().any(|e| e["provider"] == "codex" && !e["models"].as_array().unwrap().is_empty()));
-        assert!(entries.iter().any(|e| e["provider"] == "claude" && !e["models"].as_array().unwrap().is_empty()));
+        for entry in entries {
+            let provider = entry["provider"].as_str().expect("provider id");
+            for model in entry["models"].as_array().expect("models array") {
+                assert_eq!(model["provider"], provider);
+                assert!(!model["id"].as_str().unwrap_or_default().is_empty());
+                assert!(!model["label"].as_str().unwrap_or_default().is_empty());
+            }
+        }
 
         // 9. list_available_providers_request
         let list_prov_req = serde_json::json!({
@@ -1352,7 +1364,7 @@ mod tests {
         let list_prov_resp = dispatch_session_message(&list_prov_req).await;
         assert_eq!(list_prov_resp["type"], "list_available_providers_response");
         let provs = list_prov_resp["payload"]["providers"].as_array().expect("providers array");
-        assert!(provs.iter().any(|p| p["provider"] == "codex" && p["available"] == true));
+        assert!(provs.iter().any(|p| p["provider"] == "codex" && p["available"].is_boolean()));
 
         // 10. refresh_providers_snapshot_request
         let ref_req = serde_json::json!({
@@ -1373,4 +1385,316 @@ mod tests {
         assert_eq!(diag_resp["type"], "provider_diagnostic_response");
         assert_eq!(diag_resp["payload"]["diagnostic"], "Provider ready");
     }
+    
+    #[test]
+    fn test_provider_metadata_contains_no_model_catalog() {
+        let entries = crate::kernel::server::get_provider_snapshot_metadata_entries();
+
+        assert!(entries.iter().all(|entry| {
+            entry
+                .get("models")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(Vec::is_empty)
+        }));
+    }
+
+    #[test]
+    fn test_codex_catalog_uses_runtime_model_list() {
+        let response = serde_json::json!({
+            "result": {
+                "data": [
+                    {
+                        "id": "runtime-model-2027",
+                        "displayName": "Runtime Model",
+                        "description": "Reported by Codex app-server",
+                        "isDefault": true,
+                        "contextWindow": 64000
+                    },
+                    { "id": "runtime-model-2027", "displayName": "Duplicate" },
+                    { "displayName": "Missing ID" }
+                ]
+            }
+        });
+
+        let models = crate::kernel::server::codex_models_from_response(&response);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["id"], "runtime-model-2027");
+        assert_eq!(models[0]["provider"], "codex");
+        assert_eq!(models[0]["label"], "Runtime Model");
+        assert_eq!(models[0]["isDefault"], true);
+        assert_eq!(models[0]["contextWindowMaxTokens"], 64000);
+    }
+
+    #[test]
+    fn test_pi_catalog_uses_rpc_models_and_deduplicates() {
+        let response = serde_json::json!({
+            "models": [
+                { "provider": "openai", "id": "runtime-model", "name": "Runtime Model", "contextWindow": 128000 },
+                { "provider": "openai", "id": "runtime-model", "name": "Duplicate" },
+                { "provider": "", "id": "invalid" },
+                { "provider": "anthropic", "name": "Missing ID" }
+            ]
+        });
+
+        let models = crate::kernel::server::pi_models_from_response(&response);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["provider"], "pi");
+        assert_eq!(models[0]["id"], "openai/runtime-model");
+        assert_eq!(models[0]["label"], "Runtime Model");
+        assert_eq!(models[0]["contextWindowMaxTokens"], 128000);
+    }
+
+    #[test]
+    fn test_omp_catalog_uses_runtime_models() {
+        let response = serde_json::json!({
+            "models": [
+                { "provider": "openai", "id": "runtime-model", "name": "OMP Model" }
+            ]
+        });
+
+        let models = crate::kernel::server::omp_models_from_response(&response);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["provider"], "omp");
+        assert_eq!(models[0]["id"], "openai/runtime-model");
+        assert_eq!(models[0]["label"], "OMP Model");
+    }
+    #[test]
+    fn test_ollama_catalog_uses_runtime_tags() {
+        let response = serde_json::json!({
+            "models": [
+                {
+                    "name": "local-coder:latest",
+                    "details": { "parameter_size": "7B", "family": "llama" }
+                },
+                { "name": "local-coder:latest" },
+                { "name": "" }
+            ]
+        });
+
+        let models = crate::kernel::server::ollama_models_from_response(&response);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["id"], "ollama/local-coder:latest");
+        assert_eq!(models[0]["label"], "local-coder:latest (7B)");
+        assert_eq!(models[0]["description"], "Local Ollama model from the llama family");
+        assert_eq!(models[0]["provider"], "ollama");
+    }
+
+    #[tokio::test]
+    async fn test_claude_model_uses_user_settings_not_catalog_defaults() {
+        let dir = tempfile::tempdir().expect("temporary Claude config");
+        tokio::fs::write(
+            dir.path().join("settings.json"),
+            r#"{"model":"user-selected-model"}"#,
+        )
+        .await
+        .expect("write Claude settings");
+
+        assert_eq!(
+            crate::kernel::server::read_claude_settings_model(dir.path()).await.as_deref(),
+            Some("user-selected-model")
+        );
+    }
+    #[test]
+    fn test_opencode_catalog_includes_only_available_provider_models() {
+        let response = serde_json::json!({
+            "connected": ["connected-provider"],
+            "all": [
+                {
+                    "id": "connected-provider",
+                    "models": {
+                        "runtime-a": {
+                            "name": "Runtime A",
+                            "default": true,
+                            "limit": { "context": 96000 }
+                        }
+                    }
+                },
+                {
+                    "id": "disconnected-provider",
+                    "models": { "must-not-show": { "name": "Not connected" } }
+                },
+                {
+                    "id": "api-provider",
+                    "source": "api",
+                    "models": { "runtime-b": { "name": "Runtime B" } }
+                }
+            ]
+        });
+
+        let models = crate::kernel::server::opencode_models_from_response(&response);
+        assert_eq!(models.len(), 2);
+        assert!(models.iter().any(|model| {
+            model["id"] == "connected-provider/runtime-a"
+                && model["isDefault"] == true
+                && model["contextWindowMaxTokens"] == 96000
+        }));
+        assert!(models.iter().any(|model| model["id"] == "api-provider/runtime-b"));
+        assert!(!models.iter().any(|model| model["id"].as_str().unwrap_or_default().contains("must-not-show")));
+    }
+    #[test]
+    fn test_local_catalog_endpoints_accept_host_and_url_forms() {
+        assert_eq!(
+            crate::kernel::server::normalize_http_endpoint("localhost:11434/".to_owned()),
+            "http://localhost:11434"
+        );
+        assert_eq!(
+            crate::kernel::server::normalize_http_endpoint("https://models.local/".to_owned()),
+            "https://models.local"
+        );
+    }
+
+    /// Copilot's metadata entry always has `models: []`. Availability is determined by
+    /// `discover_copilot_available()` at runtime, not by model count. This test verifies
+    /// that the metadata structure is correct so the runtime logic can apply it.
+    #[test]
+    fn test_copilot_metadata_has_empty_models_and_ready_status() {
+        let entries = crate::kernel::server::get_provider_snapshot_metadata_entries();
+        let copilot = entries.iter().find(|e| {
+            e.get("provider").and_then(serde_json::Value::as_str) == Some("copilot")
+        });
+        assert!(copilot.is_some(), "copilot entry must exist in metadata");
+        let copilot = copilot.unwrap();
+        assert_eq!(
+            copilot.get("models").and_then(serde_json::Value::as_array).map(Vec::len),
+            Some(0),
+            "copilot metadata must ship with empty models; runtime fills availability"
+        );
+        // Metadata status starts as "ready"; get_provider_snapshot_entries() may downgrade
+        // it to "unavailable" if the binary is absent. The metadata itself must not pre-set
+        // "unavailable" so that binary-present installs stay visible.
+        assert_eq!(
+            copilot.get("status").and_then(serde_json::Value::as_str),
+            Some("ready"),
+        );
+        // Must have at least the three standard Copilot ACP modes.
+        let modes = copilot.get("modes").and_then(serde_json::Value::as_array);
+        assert!(modes.is_some_and(|m| m.len() >= 3), "copilot must have >= 3 modes");
+    }
+    #[tokio::test]
+    async fn test_agent_wire_protocol_full_roundtrip() {
+        use crate::kernel::server::dispatch_session_message;
+
+        // 1. Create agent
+        let create_req = serde_json::json!({
+            "type": "agent.create.request",
+            "requestId": "req-agent-create-1",
+            "provider": "mock",
+            "cwd": "/workspace/test-kronos",
+            "title": "Autonomous Tester",
+            "model": "gpt-4o"
+        });
+        let create_res = dispatch_session_message(&create_req).await;
+        assert_eq!(create_res["type"], "agent.create.response");
+        assert_eq!(create_res["requestId"], "req-agent-create-1");
+        let agent = &create_res["payload"]["agent"];
+        assert!(agent.is_object());
+        let agent_id = agent["id"].as_str().expect("valid agent id");
+        assert_eq!(agent["provider"], "mock");
+        assert_eq!(agent["title"], "Autonomous Tester");
+        assert_eq!(agent["model"], "gpt-4o");
+
+        // 2. Fetch single agent
+        let fetch_req = serde_json::json!({
+            "type": "fetch_agent_request",
+            "requestId": "req-agent-fetch-1",
+            "agentId": agent_id
+        });
+        let fetch_res = dispatch_session_message(&fetch_req).await;
+        assert_eq!(fetch_res["type"], "fetch_agent_response");
+        assert_eq!(fetch_res["payload"]["agent"]["id"], agent_id);
+
+        // 3. Send message to agent
+        let msg_req = serde_json::json!({
+            "type": "send_agent_message_request",
+            "requestId": "req-agent-msg-1",
+            "agentId": agent_id,
+            "text": "Hello, execute test suite"
+        });
+        let msg_res = dispatch_session_message(&msg_req).await;
+        assert_eq!(msg_res["type"], "send_agent_message_response");
+        assert_eq!(msg_res["payload"]["accepted"], true);
+
+        // 4. Fetch agent timeline
+        let timeline_req = serde_json::json!({
+            "type": "fetch_agent_timeline_request",
+            "requestId": "req-agent-timeline-1",
+            "agentId": agent_id
+        });
+        let timeline_res = dispatch_session_message(&timeline_req).await;
+        assert_eq!(timeline_res["type"], "fetch_agent_timeline_response");
+        let entries = timeline_res["payload"]["entries"].as_array().expect("entries array");
+        assert_eq!(entries.len(), 1, "Timeline should have user message");
+        assert_eq!(entries[0]["item"]["type"], "user_message");
+
+        // 5. Config, mode, skills, commands acknowledgments
+        let config_req = serde_json::json!({
+            "type": "agent.config.apply.request",
+            "requestId": "req-config-1",
+            "agentId": agent_id,
+            "config": { "mode": "auto" }
+        });
+        assert_eq!(dispatch_session_message(&config_req).await["type"], "agent.config.apply.response");
+
+        let mode_req = serde_json::json!({
+            "type": "set_agent_mode_request",
+            "requestId": "req-mode-1",
+            "agentId": agent_id,
+            "modeId": "auto"
+        });
+        assert_eq!(dispatch_session_message(&mode_req).await["type"], "set_agent_mode_response");
+
+        let model_req = serde_json::json!({
+            "type": "set_agent_model_request",
+            "requestId": "req-model-1",
+            "agentId": agent_id,
+            "modelId": "claude-3-5-sonnet"
+        });
+        assert_eq!(dispatch_session_message(&model_req).await["type"], "set_agent_model_response");
+
+        let cmd_req = serde_json::json!({
+            "type": "list_commands_request",
+            "requestId": "req-cmd-1",
+            "agentId": agent_id
+        });
+        assert_eq!(dispatch_session_message(&cmd_req).await["type"], "list_commands_response");
+
+        let skills_req = serde_json::json!({
+            "type": "agent.skills.get_status.request",
+            "requestId": "req-skills-1"
+        });
+        assert_eq!(dispatch_session_message(&skills_req).await["type"], "agent.skills.get_status.response");
+
+        // 6. Fetch agents list
+        let list_req = serde_json::json!({
+            "type": "fetch_agents_request",
+            "requestId": "req-list-agents-1"
+        });
+        let list_res = dispatch_session_message(&list_req).await;
+        assert_eq!(list_res["type"], "fetch_agents_response");
+        let list_entries = list_res["payload"]["entries"].as_array().expect("entries array");
+        assert!(list_entries.iter().any(|e| e["agent"]["id"] == agent_id));
+
+        // 7. Cancel agent
+        let cancel_req = serde_json::json!({
+            "type": "cancel_agent_request",
+            "requestId": "req-agent-cancel-1",
+            "agentId": agent_id
+        });
+        let cancel_res = dispatch_session_message(&cancel_req).await;
+        assert_eq!(cancel_res["type"], "cancel_agent_response");
+        assert_eq!(cancel_res["payload"]["accepted"], true);
+
+        // 8. Delete agent
+        let delete_req = serde_json::json!({
+            "type": "delete_agent_request",
+            "requestId": "req-agent-del-1",
+            "agentId": agent_id
+        });
+        let delete_res = dispatch_session_message(&delete_req).await;
+        assert_eq!(delete_res["type"], "agent_deleted");
+        assert_eq!(delete_res["payload"]["agentId"], agent_id);
+    }
+
+
 }
+

@@ -89,7 +89,5 @@ pub struct ProviderDescriptor {
     pub id: String,
     pub label: String,
     pub description: String,
-    pub models: Vec<String>,
-    pub default_model: Option<String>,
     pub is_installed: bool,
 }

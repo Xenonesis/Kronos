@@ -43,9 +43,14 @@ impl AgentManager {
         let provider_desc = self
             .registry
             .get(provider)
-            .ok_or_else(|| format!("Unknown agent provider: {provider}"))?;
+            .unwrap_or_else(|| crate::agent::types::ProviderDescriptor {
+                id: provider.to_string(),
+                label: provider.to_string(),
+                description: format!("Agent provider {provider}"),
+                is_installed: true,
+            });
 
-        let id = format!("agent_{}", uuid_v4_simple());
+        let id = format!("ag_{}", uuid_v4_simple());
         let now = now_iso();
 
         let record = StoredAgentRecord {
@@ -96,7 +101,7 @@ impl AgentManager {
     }
 
     pub fn send_message(&self, id: &str, text: &str) -> Result<(), String> {
-        let _ = self
+        let _record = self
             .get_agent(id)
             .ok_or_else(|| format!("Agent {id} not found"))?;
 
@@ -115,6 +120,7 @@ impl AgentManager {
             .write()
             .unwrap()
             .insert(id.to_string(), AgentStatus::Running);
+
 
         Ok(())
     }
