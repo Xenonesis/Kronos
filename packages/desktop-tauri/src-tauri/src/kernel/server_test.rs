@@ -1318,8 +1318,8 @@ mod tests {
         assert!(ws_create_resp["payload"]["error"].is_null());
         let created_ws = &ws_create_resp["payload"]["workspace"];
         assert_eq!(created_ws["name"], "my-test-project");
-
-        // 5. Agent create request
+        assert!(ws_create_resp["payload"]["agent"].is_object(), "agent must be returned in workspace.create.response");
+        assert!(ws_create_resp["payload"]["agent"]["id"].as_str().unwrap().starts_with("ag_"));
         let ag_create_req = serde_json::json!({
             "type": "agent.create.request",
             "requestId": "req-ag-create-1",

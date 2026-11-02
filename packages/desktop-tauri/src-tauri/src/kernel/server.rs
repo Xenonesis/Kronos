@@ -2184,7 +2184,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             let project_kind = if is_git { "git" } else { "directory" };
 
             let workspace_descriptor = serde_json::json!({
-                "id": ws_id,
+                "id": ws_id.clone(),
                 "projectId": project_id,
                 "projectDisplayName": dir_name,
                 "projectCustomName": null,
@@ -2209,15 +2209,77 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "githubRuntime": null
             });
 
+            let agent_opt = msg.get("agent")
+                .or_else(|| payload.and_then(|p| p.get("agent")));
+
+            let idempotency_key = msg.get("idempotencyKey")
+                .or_else(|| payload.and_then(|p| p.get("idempotencyKey")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(request_id);
+
+            let mgr = get_agent_manager();
+            let created_agent_snapshot = if let Some(agent_val) = agent_opt {
+                let agent_cfg = agent_val.get("config");
+                let provider = agent_cfg.and_then(|c| c.get("provider")).and_then(|v| v.as_str())
+                    .or_else(|| agent_val.get("provider").and_then(|v| v.as_str()))
+                    .unwrap_or("codex");
+                let agent_cwd = agent_cfg.and_then(|c| c.get("cwd")).and_then(|v| v.as_str())
+                    .unwrap_or(&abs_path);
+                let agent_title = agent_val.get("title").and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                let mut config = agent_cfg.cloned().unwrap_or_else(|| serde_json::json!({}));
+                if let Some(m) = agent_cfg.and_then(|c| c.get("model")).and_then(|v| v.as_str())
+                    .or_else(|| agent_val.get("model").and_then(|v| v.as_str())) {
+                    if let Some(obj) = config.as_object_mut() {
+                        obj.insert("model".to_string(), serde_json::json!(m));
+                    }
+                }
+
+                match mgr.create_agent(provider, agent_cwd, agent_title, Some(ws_id.clone()), Some(config)) {
+                    Ok(rec) => {
+                        if let Some(prompt) = agent_val.get("initialPrompt").and_then(|v| v.as_str()) {
+                            if !prompt.trim().is_empty() {
+                                let _ = mgr.send_message(&rec.id, prompt);
+                            }
+                        }
+                        Some(agent_record_to_snapshot(&rec))
+                    }
+                    Err(_) => None,
+                }
+            } else {
+                // Default agent so workspace creation always provides an agent
+                match mgr.create_agent("codex", &abs_path, None, Some(ws_id.clone()), None) {
+                    Ok(rec) => Some(agent_record_to_snapshot(&rec)),
+                    Err(_) => None,
+                }
+            };
+
+            let mut resp_payload = serde_json::json!({
+                "requestId": request_id,
+                "workspace": workspace_descriptor,
+                "setupTerminalId": null,
+                "error": null
+            });
+
+            if let Some(ref agent_snap) = created_agent_snapshot {
+                resp_payload["agent"] = agent_snap.clone();
+                let agent_id = agent_snap.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                resp_payload["creation"] = serde_json::json!({
+                    "kind": "workspace",
+                    "idempotencyKey": idempotency_key,
+                    "revision": 1,
+                    "phase": "completed",
+                    "workspaceId": ws_id,
+                    "agentId": agent_id,
+                    "error": null
+                });
+            }
+
             serde_json::json!({
                 "type": "workspace.create.response",
                 "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "workspace": workspace_descriptor,
-                    "setupTerminalId": null,
-                    "error": null
-                }
+                "payload": resp_payload
             })
         }
         "agent.create.request" | "create_agent_request" => {
@@ -2252,9 +2314,13 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     obj.insert("model".to_string(), serde_json::json!(m));
                 }
             }
+            let idempotency_key = msg.get("idempotencyKey")
+                .or_else(|| payload.and_then(|p| p.get("idempotencyKey")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(request_id);
 
             let mgr = get_agent_manager();
-            match mgr.create_agent(provider, cwd, title, ws_id, Some(config)) {
+            match mgr.create_agent(provider, cwd, title, ws_id.clone(), Some(config)) {
                 Ok(record) => {
                     let snapshot = agent_record_to_snapshot(&record);
                     serde_json::json!({
@@ -2262,7 +2328,16 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                         "requestId": request_id,
                         "payload": {
                             "requestId": request_id,
-                            "agent": snapshot,
+                            "agent": snapshot.clone(),
+                            "creation": {
+                                "kind": "agent",
+                                "idempotencyKey": idempotency_key,
+                                "revision": 1,
+                                "phase": "completed",
+                                "agentId": &record.id,
+                                "workspaceId": ws_id,
+                                "error": null
+                            },
                             "error": null
                         }
                     })
