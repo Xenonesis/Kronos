@@ -114,30 +114,60 @@ impl ProviderRegistry {
     }
 }
 
-pub fn is_command_available(cmd: &str) -> bool {
+pub fn resolve_command(cmd: &str) -> Option<std::path::PathBuf> {
     let path_cmd = std::path::Path::new(cmd);
     if path_cmd.is_file() {
-        return true;
+        return Some(path_cmd.to_path_buf());
     }
 
     if let Some(paths) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&paths) {
             let direct = dir.join(cmd);
             if direct.is_file() {
-                return true;
+                return Some(direct);
             }
             #[cfg(windows)]
             {
                 for ext in &["exe", "cmd", "bat"] {
                     let with_ext = dir.join(format!("{}.{}", cmd, ext));
                     if with_ext.is_file() {
-                        return true;
+                        return Some(with_ext);
                     }
                 }
             }
         }
     }
-    false
+
+    #[cfg(windows)]
+    {
+        if let Some(home) = dirs::home_dir() {
+            let candidate_dirs = [
+                home.join(".bun").join("bin"),
+                home.join("AppData").join("Local").join("Programs").join("OpenAI").join("Codex").join("bin"),
+                home.join(".cargo").join("bin"),
+                home.join("AppData").join("Roaming").join("npm"),
+                home.join(".local").join("bin"),
+            ];
+            for dir in &candidate_dirs {
+                let direct = dir.join(cmd);
+                if direct.is_file() {
+                    return Some(direct);
+                }
+                for ext in &["exe", "cmd", "bat"] {
+                    let with_ext = dir.join(format!("{}.{}", cmd, ext));
+                    if with_ext.is_file() {
+                        return Some(with_ext);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+pub fn is_command_available(cmd: &str) -> bool {
+    resolve_command(cmd).is_some()
 }
 
 #[cfg(test)]

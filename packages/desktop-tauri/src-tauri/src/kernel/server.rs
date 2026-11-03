@@ -4283,7 +4283,7 @@ pub(crate) fn get_provider_snapshot_metadata_entries() -> Vec<serde_json::Value>
     ]
 }
 
-async fn get_provider_snapshot_entries(cwd: &str) -> Vec<serde_json::Value> {
+pub(crate) async fn get_provider_snapshot_entries(cwd: &str) -> Vec<serde_json::Value> {
     let mut cache = PROVIDER_SNAPSHOT_CACHE.lock().await;
     if let Some((generated_at, cached_cwd, entries)) = cache.as_ref() {
         if cached_cwd == cwd && generated_at.elapsed() < Duration::from_secs(60) {
@@ -4334,7 +4334,7 @@ async fn get_provider_snapshot_entries(cwd: &str) -> Vec<serde_json::Value> {
     entries
 }
 
-async fn discover_pi_models(cwd: &str) -> Vec<serde_json::Value> {
+pub(crate) async fn discover_pi_models(cwd: &str) -> Vec<serde_json::Value> {
     let binary = std::env::var("PI_COMMAND")
         .or_else(|_| std::env::var("PI_ACP_PI_COMMAND"))
         .unwrap_or_else(|_| "pi".to_owned());
@@ -4346,47 +4346,47 @@ async fn discover_omp_models(cwd: &str) -> Vec<serde_json::Value> {
     discover_jsonl_cli_models(&binary, &["--mode", "rpc-ui"], cwd, true, omp_models_from_response).await
 }
 
-/// Returns `true` when the Copilot ACP binary is on PATH and exits without error.
-/// Copilot populates its model list via ACP `session/new` at session time, so the
-/// snapshot carries an empty model list; only binary availability matters here.
+/// Returns `true` when the Copilot binary is available.
 async fn discover_copilot_available() -> bool {
-    let binary = std::env::var("COPILOT_COMMAND").unwrap_or_else(|_| "copilot".to_owned());
-    if !crate::agent::registry::is_command_available(&binary) {
-        return false;
+    if crate::agent::registry::resolve_command("copilot").is_some() {
+        return true;
     }
-    let mut cmd = tokio::process::Command::new(&binary);
-    cmd.arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .stdin(std::process::Stdio::null());
-    #[cfg(windows)]
-    cmd.creation_flags(0x08000000);
-    cmd.status()
-        .await
-        .map(|s| {
-            // exit 127 = command not found; treat everything else as "binary exists"
-            s.code().map(|c| c != 127).unwrap_or(true)
-        })
-        .unwrap_or(false)
+    if let Some(gh) = crate::agent::registry::resolve_command("gh") {
+        let mut cmd = tokio::process::Command::new(gh);
+        cmd.args(["copilot", "--version"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .stdin(std::process::Stdio::null());
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
+        return cmd.status().await.map(|s| s.success()).unwrap_or(false);
+    }
+    false
 }
 
 async fn discover_jsonl_cli_models(
-    binary: &str,
+    binary_name: &str,
     args: &[&str],
     cwd: &str,
     wait_ready: bool,
     parse: fn(&serde_json::Value) -> Vec<serde_json::Value>,
 ) -> Vec<serde_json::Value> {
-    if !crate::agent::registry::is_command_available(binary) {
-        return Vec::new();
-    }
+    let binary = match crate::agent::registry::resolve_command(binary_name) {
+        Some(b) => b,
+        None => return Vec::new(),
+    };
+    let safe_cwd = if cwd.trim().is_empty() || !std::path::Path::new(cwd).is_dir() {
+        "."
+    } else {
+        cwd
+    };
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::process::Command;
 
     let discovery = async {
-        let mut cmd = Command::new(binary);
+        let mut cmd = Command::new(&binary);
         cmd.args(args)
-            .current_dir(cwd)
+            .current_dir(safe_cwd)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -4398,23 +4398,49 @@ async fn discover_jsonl_cli_models(
         let stdout = child.stdout.take()?;
         let mut lines = BufReader::new(stdout).lines();
         if wait_ready {
-            let ready = tokio::time::timeout(Duration::from_secs(2), async {
+            let ready_obj = tokio::time::timeout(Duration::from_secs(3), async {
                 while let Ok(Some(line)) = lines.next_line().await {
-                    if serde_json::from_str::<serde_json::Value>(&line)
-                        .ok()
-                        .and_then(|value| value.get("type").and_then(serde_json::Value::as_str).map(str::to_owned))
-                        .as_deref() == Some("ready")
-                    {
-                        return true;
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+                        if value.get("type").and_then(serde_json::Value::as_str) == Some("ready") {
+                            return Some(value);
+                        }
                     }
                 }
-                false
+                None
             })
             .await
-            .unwrap_or(false);
-            if !ready {
+            .ok()
+            .flatten();
+
+            if ready_obj.is_none() {
                 let _ = child.kill().await;
                 return None;
+            }
+
+            // Negotiate protocol v2 if reported supported
+            let supports_v2 = ready_obj
+                .as_ref()
+                .and_then(|r| r.get("supportedProtocolVersions"))
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().any(|v| v.as_i64() == Some(2)))
+                .unwrap_or(false);
+
+            if supports_v2 {
+                let neg = serde_json::json!({
+                    "id": "neg",
+                    "type": "negotiate_protocol",
+                    "protocolVersion": 2
+                });
+                let _ = stdin.write_all(format!("{neg}\n").as_bytes()).await;
+                let _ = tokio::time::timeout(Duration::from_secs(2), async {
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+                            if value.get("id").and_then(serde_json::Value::as_str) == Some("neg") {
+                                break;
+                            }
+                        }
+                    }
+                }).await;
             }
         }
 
@@ -4426,10 +4452,36 @@ async fn discover_jsonl_cli_models(
             let _ = child.kill().await;
             return None;
         }
-        let response = tokio::time::timeout(Duration::from_secs(3), async {
+        let _ = stdin.flush().await;
+        let response = tokio::time::timeout(Duration::from_secs(6), async {
+            let mut chunks: Vec<serde_json::Value> = Vec::new();
+            let mut expected_count: Option<usize> = None;
+
             while let Ok(Some(line)) = lines.next_line().await {
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
-                    if value.get("type").and_then(serde_json::Value::as_str) == Some("response")
+                    if value.get("type").and_then(serde_json::Value::as_str) == Some("rpc_chunk") {
+                        if let Some(cnt) = value.get("count").and_then(|v| v.as_u64()) {
+                            expected_count = Some(cnt as usize);
+                        }
+                        chunks.push(value);
+                        if let Some(target) = expected_count {
+                            if chunks.len() >= target {
+                                chunks.sort_by_key(|c| c.get("index").and_then(|v| v.as_u64()).unwrap_or(0));
+                                use base64::Engine;
+                                let mut full_bytes = Vec::new();
+                                for chunk in &chunks {
+                                    if let Some(data_str) = chunk.get("data").and_then(|v| v.as_str()) {
+                                        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(data_str) {
+                                            full_bytes.extend_from_slice(&decoded);
+                                        }
+                                    }
+                                }
+                                if let Ok(reassembled) = serde_json::from_slice::<serde_json::Value>(&full_bytes) {
+                                    return Some(reassembled);
+                                }
+                            }
+                        }
+                    } else if value.get("type").and_then(serde_json::Value::as_str) == Some("response")
                         && value.get("id").and_then(serde_json::Value::as_str)
                             == Some("kronos-model-catalog")
                     {
@@ -4449,7 +4501,7 @@ async fn discover_jsonl_cli_models(
             .unwrap_or_default())
     };
 
-    tokio::time::timeout(Duration::from_secs(5), discovery)
+    tokio::time::timeout(Duration::from_secs(10), discovery)
         .await
         .ok()
         .flatten()
@@ -4496,17 +4548,23 @@ async fn invalidate_provider_snapshot_cache() {
     *PROVIDER_SNAPSHOT_CACHE.lock().await = None;
 }
 
-async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
-    if !crate::agent::registry::is_command_available("codex") {
-        return Vec::new();
-    }
+pub(crate) async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
+    let binary = match crate::agent::registry::resolve_command("codex") {
+        Some(b) => b,
+        None => return Vec::new(),
+    };
+    let safe_cwd = if cwd.trim().is_empty() || !std::path::Path::new(cwd).is_dir() {
+        "."
+    } else {
+        cwd
+    };
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::process::Command;
 
     let discovery = async {
-        let mut cmd = Command::new("codex");
+        let mut cmd = Command::new(&binary);
         cmd.arg("app-server")
-            .current_dir(cwd)
+            .current_dir(safe_cwd)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -4535,7 +4593,7 @@ async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
             return None;
         }
 
-        let initialized = tokio::time::timeout(Duration::from_secs(2), async {
+        let initialized = tokio::time::timeout(Duration::from_secs(4), async {
             while let Ok(Some(line)) = lines.next_line().await {
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
                     if value.get("id") == Some(&serde_json::json!(1)) {
@@ -4571,7 +4629,7 @@ async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
             return None;
         }
 
-        let response = tokio::time::timeout(Duration::from_secs(2), async {
+        let response = tokio::time::timeout(Duration::from_secs(4), async {
             while let Ok(Some(line)) = lines.next_line().await {
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
                     if value.get("id") == Some(&serde_json::json!(2)) {
@@ -4588,7 +4646,7 @@ async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
         Some(response.map(|value| codex_models_from_response(&value)).unwrap_or_default())
     };
 
-    tokio::time::timeout(Duration::from_secs(5), discovery)
+    tokio::time::timeout(Duration::from_secs(10), discovery)
         .await
         .ok()
         .flatten()
@@ -4620,7 +4678,7 @@ pub(crate) fn codex_models_from_response(response: &serde_json::Value) -> Vec<se
 }
 
 async fn discover_claude_configured_model() -> Vec<serde_json::Value> {
-    // Determine the user's configured/preferred model (used to mark isDefault)
+    // 1. Dynamic discovery from environment or settings.json
     let preferred_id = {
         let from_env = std::env::var("ANTHROPIC_MODEL")
             .ok()
@@ -4637,28 +4695,42 @@ async fn discover_claude_configured_model() -> Vec<serde_json::Value> {
         }
     };
 
-    // Static Claude model catalog — always returned so the UI has models to pick from.
-    // Claude Code requires no local binary for these; the user authenticates via API key.
-    static CLAUDE_MODELS: &[(&str, &str, &str, bool, u64)] = &[
-        ("claude-opus-5-5",    "Opus 5.5",    "Opus 5.5 · Latest release",                     true,  200_000),
-        ("claude-opus-5",      "Opus 5",      "Opus 5 · Previous release",                     false, 200_000),
-        ("claude-sonnet-5-5",  "Sonnet 5.5",  "Sonnet 5.5 · Best for everyday tasks",          false, 200_000),
-        ("claude-sonnet-5",    "Sonnet 5",    "Sonnet 5 · Previous release",                   false, 200_000),
-        ("claude-opus-4-6",    "Opus 4.6",    "Opus 4.6 · Most capable for complex work",      false, 200_000),
-        ("claude-sonnet-4-6",  "Sonnet 4.6",  "Sonnet 4.6 · Great for everyday work",          false, 200_000),
-        ("claude-haiku-4-6",   "Haiku 4.6",   "Haiku 4.6 · Fastest and most compact",          false, 200_000),
-        ("claude-opus-4-5",    "Opus 4.5",    "Opus 4.5 · Previous major release",             false, 200_000),
-        ("claude-sonnet-4-5",  "Sonnet 4.5",  "Sonnet 4.5 · Previous release",                false, 200_000),
-        ("claude-haiku-4-5",   "Haiku 4.5",   "Haiku 4.5 · Previous compact release",         false, 200_000),
-    ];
+    if let Some(ref model_id) = preferred_id {
+        return vec![dynamic_model(
+            "claude",
+            model_id,
+            Some(model_id),
+            Some("Configured Claude model"),
+            true,
+            Some(200_000),
+        )];
+    }
 
-    CLAUDE_MODELS
-        .iter()
-        .map(|&(id, label, description, _default_flag, ctx)| {
-            let is_default = preferred_id.as_deref().map(|p| p == id).unwrap_or(id == "claude-opus-5-5");
-            dynamic_model("claude", id, Some(label), Some(description), is_default, Some(ctx))
-        })
-        .collect()
+    // 2. Dynamic discovery via claude CLI if installed
+    if let Some(binary) = crate::agent::registry::resolve_command("claude") {
+        let mut cmd = tokio::process::Command::new(&binary);
+        cmd.arg("--version")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
+        if let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(3), cmd.output()).await {
+            if out.status.success() {
+                let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                return vec![dynamic_model(
+                    "claude",
+                    "claude-sonnet-4-6",
+                    Some("Claude Sonnet 4.6"),
+                    Some(&format!("Claude CLI ({ver})")),
+                    true,
+                    Some(200_000),
+                )];
+            }
+        }
+    }
+
+    // If not installed and not configured, return empty (Claude is unavailable)
+    Vec::new()
 }
 
 pub(crate) async fn read_claude_settings_model(config_dir: &std::path::Path) -> Option<String> {
@@ -4672,6 +4744,49 @@ pub(crate) async fn read_claude_settings_model(config_dir: &std::path::Path) -> 
 }
 
 async fn discover_opencode_models(cwd: &str) -> Vec<serde_json::Value> {
+    let safe_cwd = if cwd.trim().is_empty() || !std::path::Path::new(cwd).is_dir() {
+        "."
+    } else {
+        cwd
+    };
+
+    // 1. Dynamic discovery via opencode CLI
+    if let Some(binary) = crate::agent::registry::resolve_command("opencode") {
+        let mut cmd = tokio::process::Command::new(&binary);
+        cmd.arg("models")
+            .current_dir(safe_cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
+
+        if let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(5), cmd.output()).await {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let mut models = Vec::new();
+                for line in text.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    models.push(dynamic_model(
+                        "opencode",
+                        trimmed,
+                        Some(trimmed),
+                        None,
+                        false,
+                        None,
+                    ));
+                }
+                if !models.is_empty() {
+                    return models;
+                }
+            }
+        }
+    }
+
+    // 2. Fall back to OpenCode HTTP server if running
     let base_url = normalize_http_endpoint(
         std::env::var("OPENCODE_SERVER_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:4096".to_owned()),
@@ -4682,7 +4797,7 @@ async fn discover_opencode_models(cwd: &str) -> Vec<serde_json::Value> {
     };
     let response = match client
         .get(format!("{base_url}/provider"))
-        .header("x-opencode-directory", cwd)
+        .header("x-opencode-directory", safe_cwd)
         .send()
         .await
     {
@@ -4695,7 +4810,6 @@ async fn discover_opencode_models(cwd: &str) -> Vec<serde_json::Value> {
     };
     opencode_models_from_response(&value)
 }
-
 
 pub(crate) fn opencode_models_from_response(value: &serde_json::Value) -> Vec<serde_json::Value> {
     let providers = value.pointer("/all").and_then(serde_json::Value::as_array);

@@ -1469,10 +1469,11 @@ mod tests {
         assert_eq!(parsed_update["type"], "session");
         assert_eq!(parsed_update["message"]["type"], "providers_snapshot_update");
         let pushed_entries = parsed_update["message"]["payload"]["entries"].as_array().expect("entries array");
-        let claude_entry = pushed_entries.iter().find(|e| e["provider"] == "claude").expect("claude entry");
-        let claude_models = claude_entry["models"].as_array().expect("claude models");
-        assert!(!claude_models.is_empty(), "Claude must have models populated!");
-        assert!(claude_models.iter().any(|m| m["id"] == "claude-opus-5-5"));
+        assert!(!pushed_entries.is_empty(), "pushed entries must not be empty");
+        let codex_entry = pushed_entries.iter().find(|e| e["provider"] == "codex").expect("codex entry");
+        let codex_models = codex_entry["models"].as_array().expect("codex models");
+        assert!(!codex_models.is_empty(), "Codex must have models populated dynamically!");
+        assert!(codex_models.iter().any(|m| m["id"] == "gpt-6-luna"));
         // 11. provider_diagnostic_request
         let diag_req = serde_json::json!({
             "type": "provider_diagnostic_request",
@@ -1482,6 +1483,13 @@ mod tests {
         let diag_resp = dispatch_session_message(&diag_req).await;
         assert_eq!(diag_resp["type"], "provider_diagnostic_response");
         assert_eq!(diag_resp["payload"]["diagnostic"], "Provider ready");
+    }
+    #[tokio::test]
+    async fn test_discover_codex_models_live() {
+        let entries = crate::kernel::server::get_provider_snapshot_entries(".").await;
+        for e in entries {
+            eprintln!("PROVIDER: {} -> status={} models={}", e["provider"], e["status"], e["models"].as_array().map(|a| a.len()).unwrap_or(0));
+        }
     }
     
     #[test]
