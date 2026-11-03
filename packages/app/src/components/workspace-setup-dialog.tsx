@@ -222,6 +222,7 @@ export function WorkspaceSetupDialog() {
         navigateToAgent({
           serverId: pendingWorkspaceSetup.serverId,
           agentId: target.agentId,
+          workspaceId,
         });
         return;
       }

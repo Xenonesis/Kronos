@@ -134,6 +134,20 @@ function renderLiveAuxiliaryNode(input: {
     </>
   );
 }
+function safeTimestampMs(dateOrString: unknown): number {
+  if (dateOrString instanceof Date) {
+    const t = dateOrString.getTime();
+    return Number.isFinite(t) ? t : Date.now();
+  }
+  if (typeof dateOrString === "number" && Number.isFinite(dateOrString)) {
+    return dateOrString;
+  }
+  if (typeof dateOrString === "string") {
+    const parsed = Date.parse(dateOrString);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Date.now();
+}
 
 function BottomOverlayInset({ height }: { height: number }) {
   const style = useMemo(() => ({ height }), [height]);
@@ -726,7 +740,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             sender={item.sender}
             images={item.images}
             attachments={item.attachments}
-            timestamp={item.timestamp.getTime()}
+            timestamp={safeTimestampMs(item.timestamp)}
             capabilities={context.capabilities}
             client={client}
             isFirstInGroup={layoutItem.isFirstInUserGroup}
@@ -774,7 +788,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
                   renderFullContent={renderFullContent}
                   occurrenceKey={createAssistantImageOccurrenceKey({ agentId, itemId: item.id })}
                   message={item.text}
-                  timestamp={item.timestamp.getTime()}
+                  timestamp={safeTimestampMs(item.timestamp)}
                   workspaceRoot={workspaceRoot}
                   serverId={resolvedServerId}
                   client={client}
@@ -823,7 +837,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             data.detail.input.trim()
           ) {
             return (
-              <SpeakMessage message={data.detail.input} timestamp={item.timestamp.getTime()} />
+              <SpeakMessage
+                message={data.detail.input}
+                timestamp={safeTimestampMs(item.timestamp)}
+              />
             );
           }
 

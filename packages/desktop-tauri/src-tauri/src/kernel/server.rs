@@ -2252,19 +2252,25 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "error": null
             });
 
+            let mut creation_obj = serde_json::json!({
+                "kind": "workspace",
+                "idempotencyKey": idempotency_key,
+                "revision": 1,
+                "phase": "completed",
+                "workspaceId": ws_id,
+                "workspace": workspace_descriptor,
+                "agentId": null,
+                "agent": null,
+                "error": null
+            });
+
             if let Some(ref agent_snap) = created_agent_snapshot {
                 resp_payload["agent"] = agent_snap.clone();
                 let agent_id = agent_snap.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                resp_payload["creation"] = serde_json::json!({
-                    "kind": "workspace",
-                    "idempotencyKey": idempotency_key,
-                    "revision": 1,
-                    "phase": "completed",
-                    "workspaceId": ws_id,
-                    "agentId": agent_id,
-                    "error": null
-                });
+                creation_obj["agentId"] = serde_json::json!(agent_id);
+                creation_obj["agent"] = agent_snap.clone();
             }
+            resp_payload["creation"] = creation_obj;
 
             serde_json::json!({
                 "type": "workspace.create.response",
@@ -2325,6 +2331,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                                 "revision": 1,
                                 "phase": "completed",
                                 "agentId": &record.id,
+                                "agent": snapshot.clone(),
                                 "workspaceId": ws_id,
                                 "error": null
                             },

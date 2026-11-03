@@ -62,6 +62,8 @@ pub fn broadcast_agent_stream_event(agent_id: &str, provider: &str, item: &serde
             "payload": {
                 "agentId": agent_id,
                 "timestamp": timestamp,
+                "epoch": "epoch-1",
+                "seq": 2,
                 "event": {
                     "type": "timeline",
                     "provider": provider,
