@@ -124,6 +124,72 @@ impl AgentManager {
 
         Ok(())
     }
+    pub fn append_assistant_message(&self, id: &str, text: &str) -> Result<(), String> {
+        let msg_id = format!("msg_{}", uuid_v4_simple());
+        let item = AgentTimelineItem::AssistantMessage {
+            id: msg_id,
+            text: text.to_string(),
+            timestamp: now_iso(),
+        };
+        self.storage
+            .append_timeline_item(id, item)
+            .map_err(|e| format!("Failed to append assistant message: {e}"))
+    }
+
+    pub fn append_thinking(&self, id: &str, text: &str) -> Result<(), String> {
+        let thk_id = format!("thk_{}", uuid_v4_simple());
+        let item = AgentTimelineItem::Thinking {
+            id: thk_id,
+            text: text.to_string(),
+            timestamp: now_iso(),
+        };
+        self.storage
+            .append_timeline_item(id, item)
+            .map_err(|e| format!("Failed to append thinking: {e}"))
+    }
+
+    pub fn append_error_notice(&self, id: &str, message: &str) -> Result<(), String> {
+        let err_id = format!("err_{}", uuid_v4_simple());
+        let item = AgentTimelineItem::ErrorNotice {
+            id: err_id,
+            message: message.to_string(),
+            timestamp: now_iso(),
+        };
+        self.storage
+            .append_timeline_item(id, item)
+            .map_err(|e| format!("Failed to append error notice: {e}"))
+    }
+
+    pub fn set_agent_status(&self, id: &str, status: AgentStatus) -> Result<(), String> {
+        let mut record = self
+            .get_agent(id)
+            .ok_or_else(|| format!("Agent {id} not found"))?;
+        record.last_status = status;
+        record.updated_at = now_iso();
+        self.active_statuses
+            .write()
+            .unwrap()
+            .insert(id.to_string(), status);
+        self.storage
+            .save_record(record)
+            .map_err(|e| format!("Failed to save status: {e}"))
+    }
+
+    pub fn set_agent_model(&self, id: &str, model: &str) -> Result<StoredAgentRecord, String> {
+        let mut record = self
+            .get_agent(id)
+            .ok_or_else(|| format!("Agent {id} not found"))?;
+        let mut config = record.config.unwrap_or_else(|| serde_json::json!({}));
+        if let Some(obj) = config.as_object_mut() {
+            obj.insert("model".to_string(), serde_json::json!(model));
+        }
+        record.config = Some(config);
+        record.updated_at = now_iso();
+        self.storage
+            .save_record(record.clone())
+            .map_err(|e| format!("Failed to save record: {e}"))?;
+        Ok(record)
+    }
 
     pub fn get_timeline(&self, id: &str) -> Vec<AgentTimelineItem> {
         self.storage.get_timeline(id)
@@ -201,6 +267,30 @@ mod tests {
 
         let updated = manager.get_agent(&created.id).unwrap();
         assert_eq!(updated.last_status, AgentStatus::Running);
+        manager
+            .append_thinking(&created.id, "Analyzing project structure...")
+            .expect("Append thinking");
+        manager
+            .append_assistant_message(&created.id, "Hello! I can help you with this project.")
+            .expect("Append assistant message");
+        manager
+            .append_error_notice(&created.id, "Minor warning: cache cold")
+            .expect("Append error notice");
+
+        let timeline = manager.get_timeline(&created.id);
+        assert_eq!(timeline.len(), 4);
+
+        let updated_record = manager
+            .set_agent_model(&created.id, "gpt-6-luna")
+            .expect("Set agent model");
+        assert_eq!(
+            updated_record
+                .config
+                .as_ref()
+                .and_then(|c| c.get("model"))
+                .and_then(|v| v.as_str()),
+            Some("gpt-6-luna")
+        );
 
         manager.cancel_agent(&created.id).expect("Cancel agent");
         let cancelled = manager.get_agent(&created.id).unwrap();

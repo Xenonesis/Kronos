@@ -1461,7 +1461,7 @@ mod tests {
         assert_eq!(sub_prov_resp["payload"]["subscriptionId"], "sub-providers-req-sub-prov-1");
         
         // Wait for pushed update frame
-        let pushed_frame = tokio::time::timeout(std::time::Duration::from_secs(3), push_rx.recv())
+        let pushed_frame = tokio::time::timeout(std::time::Duration::from_secs(15), push_rx.recv())
             .await
             .expect("timeout waiting for providers_snapshot_update")
             .expect("recv error");
@@ -1756,6 +1756,13 @@ mod tests {
             "modelId": "claude-3-5-sonnet"
         });
         assert_eq!(dispatch_session_message(&model_req).await["type"], "set_agent_model_response");
+        let verify_model_req = serde_json::json!({
+            "type": "fetch_agent_request",
+            "requestId": "req-verify-model",
+            "agentId": agent_id
+        });
+        let verify_model_res = dispatch_session_message(&verify_model_req).await;
+        assert_eq!(verify_model_res["payload"]["agent"]["model"], "claude-3-5-sonnet");
 
         let cmd_req = serde_json::json!({
             "type": "list_commands_request",

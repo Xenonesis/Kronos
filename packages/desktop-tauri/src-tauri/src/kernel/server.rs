@@ -2241,6 +2241,11 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                         if let Some(prompt) = agent_val.get("initialPrompt").and_then(|v| v.as_str()) {
                             if !prompt.trim().is_empty() {
                                 let _ = mgr.send_message(&rec.id, prompt);
+                                let aid = rec.id.clone();
+                                let p = prompt.to_string();
+                                tokio::spawn(async move {
+                                    crate::agent::runner::run_agent_turn(aid, p).await;
+                                });
                             }
                         }
                         Some(agent_record_to_snapshot(&rec))
@@ -2499,6 +2504,11 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             let mgr = get_agent_manager();
             match mgr.send_message(agent_id, text) {
                 Ok(()) => {
+                    let aid = agent_id.to_string();
+                    let prompt = text.to_string();
+                    tokio::spawn(async move {
+                        crate::agent::runner::run_agent_turn(aid, prompt).await;
+                    });
                     serde_json::json!({
                         "type": "send_agent_message_response",
                         "requestId": request_id,
@@ -2675,12 +2685,36 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             })
         }
         "set_agent_model_request" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("agentId")
+                .or_else(|| payload.and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let model_id = msg.get("modelId")
+                .or_else(|| payload.and_then(|p| p.get("modelId")))
+                .or_else(|| msg.get("model"))
+                .or_else(|| payload.and_then(|p| p.get("model")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let mgr = get_agent_manager();
+            let res = if !agent_id.is_empty() && !model_id.is_empty() {
+                mgr.set_agent_model(agent_id, model_id)
+            } else {
+                Err("Missing agentId or modelId".to_string())
+            };
+
+            if res.is_ok() {
+                crate::agent::runner::broadcast_agent_status_update(agent_id);
+            }
+
             serde_json::json!({
                 "type": "set_agent_model_response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
-                    "accepted": true
+                    "accepted": res.is_ok(),
+                    "error": res.err()
                 }
             })
         }
