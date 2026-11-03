@@ -1812,6 +1812,43 @@ mod tests {
         assert_eq!(delete_res["payload"]["agentId"], agent_id);
     }
 
+    #[tokio::test]
+    async fn test_fetch_recent_provider_sessions_and_import() {
+        let fetch_req = serde_json::json!({
+            "type": "fetch_recent_provider_sessions_request",
+            "requestId": "req-sessions-test-1",
+            "providers": ["opencode", "codex", "pi", "omp", "claude"],
+            "limit": 10
+        });
+
+        let fetch_res = dispatch_session_message(&fetch_req).await;
+        assert_eq!(fetch_res["type"], "fetch_recent_provider_sessions_response");
+        assert_eq!(fetch_res["requestId"], "req-sessions-test-1");
+        assert_eq!(fetch_res["payload"]["requestId"], "req-sessions-test-1");
+        assert!(fetch_res["payload"]["entries"].is_array());
+        assert_eq!(fetch_res["payload"]["filteredAlreadyImportedCount"], 0);
+        assert_eq!(fetch_res["payload"]["providerErrors"].as_array().map(|a| a.len()), Some(0));
+
+        // Test import_agent_request
+        let import_req = serde_json::json!({
+            "type": "import_agent_request",
+            "requestId": "req-import-test-1",
+            "providerId": "opencode",
+            "providerHandleId": "ses_mock_test_123",
+            "cwd": "C:/tmp/test",
+            "workspaceId": "ws_test_import"
+        });
+
+        let import_res = dispatch_session_message(&import_req).await;
+        assert_eq!(import_res["type"], "status");
+        assert_eq!(import_res["requestId"], "req-import-test-1");
+        assert_eq!(import_res["payload"]["status"], "agent_resumed");
+        assert_eq!(import_res["payload"]["requestId"], "req-import-test-1");
+        assert!(import_res["payload"]["agent"]["id"].is_string());
+        let imported_agent_id = import_res["payload"]["agent"]["id"].as_str().unwrap();
+        assert!(!imported_agent_id.is_empty());
+    }
+
 
 }
 

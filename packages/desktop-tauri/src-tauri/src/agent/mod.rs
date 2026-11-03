@@ -4,3 +4,4 @@ pub mod registry;
 pub mod manager;
 pub mod providers;
 pub mod runner;
+pub mod sessions;

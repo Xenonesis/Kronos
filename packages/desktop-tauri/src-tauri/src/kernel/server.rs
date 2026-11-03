@@ -2638,6 +2638,115 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }
             })
         }
+        "fetch_recent_provider_sessions_request" => {
+            let payload = msg.get("payload");
+            let providers_list: Vec<String> = msg.get("providers")
+                .or_else(|| payload.and_then(|p| p.get("providers")))
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                })
+                .unwrap_or_else(|| vec![
+                    "opencode".to_string(),
+                    "codex".to_string(),
+                    "pi".to_string(),
+                    "omp".to_string(),
+                    "claude".to_string(),
+                ]);
+
+            let filter_cwd = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str());
+
+            let query = msg.get("query")
+                .or_else(|| payload.and_then(|p| p.get("query")))
+                .and_then(|v| v.as_str());
+
+            let limit = msg.get("limit")
+                .or_else(|| payload.and_then(|p| p.get("limit")))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(20) as usize;
+
+            let entries = crate::agent::sessions::discover_recent_provider_sessions(
+                &providers_list,
+                limit,
+                filter_cwd,
+                query,
+            ).await;
+
+            serde_json::json!({
+                "type": "fetch_recent_provider_sessions_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "entries": entries,
+                    "filteredAlreadyImportedCount": 0,
+                    "providerErrors": []
+                }
+            })
+        }
+        "import_agent_request" => {
+            let payload = msg.get("payload");
+            let provider = msg.get("providerId")
+                .or_else(|| msg.get("provider"))
+                .or_else(|| payload.and_then(|p| p.get("providerId")))
+                .or_else(|| payload.and_then(|p| p.get("provider")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("opencode");
+
+            let handle_id = msg.get("providerHandleId")
+                .or_else(|| msg.get("sessionId"))
+                .or_else(|| payload.and_then(|p| p.get("providerHandleId")))
+                .or_else(|| payload.and_then(|p| p.get("sessionId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let cwd = msg.get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+
+            let ws_id = msg.get("workspaceId")
+                .or_else(|| payload.and_then(|p| p.get("workspaceId")))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            let title = if handle_id.is_empty() { None } else { Some(format!("Imported {}", handle_id)) };
+            let mgr = get_agent_manager();
+            let config = serde_json::json!({
+                "provider": provider,
+                "providerHandleId": handle_id,
+                "cwd": cwd
+            });
+
+            match mgr.create_agent(provider, cwd, title, ws_id, Some(config)) {
+                Ok(record) => {
+                    crate::agent::runner::broadcast_agent_status_update(&record.id);
+                    let snapshot = agent_record_to_snapshot(&record);
+                    serde_json::json!({
+                        "type": "status",
+                        "requestId": request_id,
+                        "payload": {
+                            "status": "agent_resumed",
+                            "requestId": request_id,
+                            "agent": snapshot,
+                            "timelineSize": 0
+                        }
+                    })
+                }
+                Err(err) => {
+                    serde_json::json!({
+                        "type": "status",
+                        "requestId": request_id,
+                        "payload": {
+                            "status": "agent_create_failed",
+                            "requestId": request_id,
+                            "error": err
+                        }
+                    })
+                }
+            }
+        }
         "clear_agent_attention" => {
             let payload = msg.get("payload");
             let agent_id = msg.get("agentId")
