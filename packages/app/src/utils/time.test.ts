@@ -7,6 +7,7 @@ import {
   formatDuration,
   formatMessageTimestamp,
   formatTimeAgo,
+  parseSafeDate,
 } from "./time";
 
 describe("formatTimeAgo", () => {
@@ -151,5 +152,23 @@ describe("formatMessageTimestamp", () => {
     const formatted = formatMessageTimestamp(date, now);
     expect(formatted).toMatch(/Apr|April/);
     expect(formatted).toMatch(/2026/);
+  });
+  it("parseSafeDate safely extracts dates from varied inputs", () => {
+    expect(Number.isNaN(parseSafeDate("invalid").getTime())).toBe(true);
+    expect(parseSafeDate("1793688145.123Z").getTime()).toBeGreaterThan(0);
+    expect(parseSafeDate(new Date(1793688145123)).getTime()).toBe(1793688145123);
+  });
+
+  it("handles invalid Date and corrupted time strings gracefully without throwing", () => {
+    expect(formatMessageTimestamp(new Date(NaN))).toBe("");
+    expect(formatMessageTimestamp("invalid-date-string")).toBe("");
+    expect(formatMessageTimestamp("")).toBe("");
+  });
+
+  it("safely handles unix epoch seconds strings with trailing Z", () => {
+    // e.g. "1793688145.123Z"
+    const formatted = formatMessageTimestamp("1793688145.123Z");
+    expect(formatted).not.toBe("");
+    expect(formatted.length).toBeGreaterThan(0);
   });
 });

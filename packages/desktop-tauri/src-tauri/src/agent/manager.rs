@@ -1,6 +1,6 @@
 use crate::agent::registry::ProviderRegistry;
 use crate::agent::storage::AgentStorage;
-use crate::agent::types::{AgentStatus, AgentTimelineItem, StoredAgentRecord};
+use crate::agent::types::{now_iso, AgentStatus, AgentTimelineItem, StoredAgentRecord};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -216,13 +216,6 @@ impl AgentManager {
     }
 }
 
-fn now_iso() -> String {
-    // Basic UTC ISO-8601 formatting
-    let dur = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis())
-}
 
 fn uuid_v4_simple() -> String {
     let now = SystemTime::now()

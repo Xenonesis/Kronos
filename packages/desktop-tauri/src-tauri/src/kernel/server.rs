@@ -1755,10 +1755,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     let hash_val = std::hash::Hasher::finish(&hasher);
                     let project_id = format!("prj_{:016x}", hash_val);
 
-                    let dur = std::time::SystemTime::now()
-                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                        .unwrap_or_default();
-                    let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+                    let now_iso = crate::agent::types::now_iso();
 
                     let store = crate::kernel::config_store::get_config_store();
                     let record = crate::kernel::config_store::ProjectRecord {
@@ -1837,10 +1834,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     let project_id = format!("prj_{:016x}", hash_val);
                     let workspace_id = format!("ws_{:016x}", hash_val);
 
-                    let dur = std::time::SystemTime::now()
-                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                        .unwrap_or_default();
-                    let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+                    let now_iso = crate::agent::types::now_iso();
 
                     let store = crate::kernel::config_store::get_config_store();
                     let record = crate::kernel::config_store::ProjectRecord {
@@ -1936,10 +1930,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                         let hash_val = std::hash::Hasher::finish(&hasher);
                         let project_id = format!("prj_{:016x}", hash_val);
 
-                        let dur = std::time::SystemTime::now()
-                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                            .unwrap_or_default();
-                        let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+                        let now_iso = crate::agent::types::now_iso();
 
                         let store = crate::kernel::config_store::get_config_store();
                         let record = crate::kernel::config_store::ProjectRecord {
@@ -2036,10 +2027,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             } else {
                 None
             };
-            let dur = std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .unwrap_or_default();
-            let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+            let now_iso = crate::agent::types::now_iso();
             let store = crate::kernel::config_store::get_config_store();
             let workspaces = store.list_workspaces();
             let projects = store.list_projects();
@@ -2166,10 +2154,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 format!("wks_{:016x}", dur.as_nanos() as u64)
             };
 
-            let dur = std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .unwrap_or_default();
-            let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+            let now_iso = crate::agent::types::now_iso();
 
             let ws_record = crate::kernel::config_store::WorkspaceRecord {
                 id: ws_id.clone(),
@@ -2380,10 +2365,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     tokio::spawn(async move {
                         tokio::time::sleep(tokio::time::Duration::from_millis(15)).await;
                         let entries = get_provider_snapshot_entries(".").await;
-                        let dur = std::time::SystemTime::now()
-                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                            .unwrap_or_default();
-                        let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+                        let now_iso = crate::agent::types::now_iso();
                         let frame = serde_json::json!({
                             "type": "session",
                             "message": {
@@ -2637,10 +2619,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
-            let dur = std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .unwrap_or_default();
-            let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+            let now_iso = crate::agent::types::now_iso();
 
             serde_json::json!({
                 "type": "agent_archived",
@@ -2893,10 +2872,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             })
         }
         "get_providers_snapshot_request" => {
-            let dur = std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .unwrap_or_default();
-            let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+            let now_iso = crate::agent::types::now_iso();
             let cwd = msg.get("cwd").and_then(|value| value.as_str()).unwrap_or(".");
             let entries = get_provider_snapshot_entries(cwd).await;
             serde_json::json!({
@@ -2910,10 +2886,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             })
         }
         "list_available_providers_request" => {
-            let dur = std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .unwrap_or_default();
-            let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+            let now_iso = crate::agent::types::now_iso();
             let entries = get_provider_snapshot_entries(".").await;
             let providers: Vec<serde_json::Value> = entries
                 .iter()
@@ -3638,10 +3611,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             let push_tx = get_provider_push_tx();
             tokio::spawn(async move {
                 let entries = get_provider_snapshot_entries(&cwd).await;
-                let dur = std::time::SystemTime::now()
-                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                    .unwrap_or_default();
-                let now_iso = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+                let now_iso = crate::agent::types::now_iso();
                 let update = serde_json::json!({
                     "type": "session",
                     "message": {

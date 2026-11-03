@@ -53,10 +53,7 @@ pub fn broadcast_agent_status_update(agent_id: &str) {
 /// Broadcasts a live agent_stream event.
 pub fn broadcast_agent_stream_event(agent_id: &str, provider: &str, item: &serde_json::Value) {
     let tx = get_provider_push_tx();
-    let dur = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    let timestamp = format!("{}.{:03}Z", dur.as_secs(), dur.subsec_millis());
+    let timestamp = crate::agent::types::now_iso();
 
     let msg = serde_json::json!({
         "type": "session",

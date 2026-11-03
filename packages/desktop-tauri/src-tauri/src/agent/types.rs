@@ -91,3 +91,9 @@ pub struct ProviderDescriptor {
     pub description: String,
     pub is_installed: bool,
 }
+
+/// Returns the current UTC time formatted as an RFC-3339 / ISO-8601 string with millisecond precision,
+/// e.g. "2026-11-03T06:33:05.123Z".
+pub fn now_iso() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}

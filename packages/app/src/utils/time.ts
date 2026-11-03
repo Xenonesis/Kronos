@@ -124,9 +124,40 @@ function getTimeFormatter(): Intl.DateTimeFormat {
   });
   return cachedTimeFormatter;
 }
+/**
+ * Safely parse a date input (Date instance, ISO-8601 string, or unix timestamp number/string).
+ * If input is invalid, returns new Date(NaN) instead of throwing.
+ */
+export function parseSafeDate(input: unknown): Date {
+  if (input instanceof Date) {
+    return Number.isFinite(input.getTime()) ? input : new Date(NaN);
+  }
+  if (typeof input === "number") {
+    return Number.isFinite(input) ? new Date(input) : new Date(NaN);
+  }
+  if (typeof input === "string") {
+    const trimmed = input.trim();
+    if (!trimmed) return new Date(NaN);
+    const direct = new Date(trimmed);
+    if (Number.isFinite(direct.getTime())) {
+      return direct;
+    }
+    // Handle unix epoch timestamp strings like "1793688145.123Z" or "1793688145"
+    const parsedNum = Number.parseFloat(trimmed);
+    if (Number.isFinite(parsedNum) && parsedNum > 0) {
+      const ms = parsedNum > 1e11 ? parsedNum : parsedNum * 1000;
+      const fallback = new Date(ms);
+      if (Number.isFinite(fallback.getTime())) {
+        return fallback;
+      }
+    }
+  }
+  return new Date(NaN);
+}
 
 /** A clock time in the device's 12h/24h preference: "3:00 PM" or "15:00". */
 export function formatTimeOfDay(date: Date): string {
+  if (!Number.isFinite(date.getTime())) return "";
   return getTimeFormatter().format(date);
 }
 
@@ -136,10 +167,17 @@ export function formatTimeOfDay(date: Date): string {
  * - The previous 6 calendar days: "Wednesday 10:11 PM"
  * - Older, including today's weekday last week: "14 May 2026, 10:11 PM"
  */
-export function formatMessageTimestamp(date: Date, now: Date = new Date()): string {
+export function formatMessageTimestamp(
+  dateInput: Date | string | number,
+  now: Date = new Date(),
+): string {
+  const date = parseSafeDate(dateInput);
+  if (!Number.isFinite(date.getTime())) {
+    return "";
+  }
   const time = formatTimeOfDay(date);
+  if (!time) return "";
   const daysAgo = localCalendarDaysBetween(date, now);
-
   if (daysAgo === 0) {
     return time;
   }
