@@ -1755,7 +1755,11 @@ mod tests {
             "agentId": agent_id,
             "modelId": "claude-3-5-sonnet"
         });
-        assert_eq!(dispatch_session_message(&model_req).await["type"], "set_agent_model_response");
+        let model_res = dispatch_session_message(&model_req).await;
+        assert_eq!(model_res["type"], "set_agent_model_response");
+        assert_eq!(model_res["payload"]["agentId"], agent_id);
+        assert_eq!(model_res["payload"]["accepted"], true);
+        assert_eq!(model_res["payload"]["error"], serde_json::Value::Null);
         let verify_model_req = serde_json::json!({
             "type": "fetch_agent_request",
             "requestId": "req-verify-model",

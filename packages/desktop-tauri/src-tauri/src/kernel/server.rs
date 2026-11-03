@@ -2639,33 +2639,53 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             })
         }
         "clear_agent_attention" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("agentId")
+                .or_else(|| payload.and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             serde_json::json!({
                 "type": "clear_agent_attention_response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
+                    "agentId": agent_id,
                     "cleared": true
                 }
             })
         }
         "agent.config.apply.request" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("agentId")
+                .or_else(|| payload.and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             serde_json::json!({
                 "type": "agent.config.apply.response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
+                    "agentId": agent_id,
                     "accepted": true,
+                    "error": null,
                     "notice": null
                 }
             })
         }
         "set_agent_mode_request" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("agentId")
+                .or_else(|| payload.and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             serde_json::json!({
                 "type": "set_agent_mode_response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
+                    "agentId": agent_id,
                     "accepted": true,
+                    "error": null,
                     "notice": null
                 }
             })
@@ -2699,28 +2719,81 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
+                    "agentId": agent_id,
                     "accepted": res.is_ok(),
-                    "error": res.err()
+                    "error": res.err(),
+                    "notice": null
                 }
             })
         }
         "set_agent_feature_request" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("agentId")
+                .or_else(|| payload.and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             serde_json::json!({
                 "type": "set_agent_feature_response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
-                    "accepted": true
+                    "agentId": agent_id,
+                    "accepted": true,
+                    "error": null,
+                    "notice": null
                 }
             })
         }
         "set_agent_thinking_request" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("agentId")
+                .or_else(|| payload.and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             serde_json::json!({
                 "type": "set_agent_thinking_response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
+                    "agentId": agent_id,
                     "accepted": true,
+                    "error": null,
+                    "notice": null
+                }
+            })
+        }
+        "update_agent_request" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("agentId")
+                .or_else(|| payload.and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            serde_json::json!({
+                "type": "update_agent_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "agentId": agent_id,
+                    "accepted": true,
+                    "error": null,
+                    "notice": null
+                }
+            })
+        }
+        "agent.detach.request" => {
+            let payload = msg.get("payload");
+            let agent_id = msg.get("agentId")
+                .or_else(|| payload.and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            serde_json::json!({
+                "type": "agent.detach.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "agentId": agent_id,
+                    "accepted": true,
+                    "error": null,
                     "notice": null
                 }
             })
