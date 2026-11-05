@@ -68,6 +68,7 @@ const PNG_1X1 = Buffer.from([
 ]);
 
 interface ProjectsSettingsProject {
+  projectId: string;
   name: string;
   path: string;
 }
@@ -102,6 +103,7 @@ const test = base.extend<ProjectsSettingsFixtures>({
     });
 
     await provide({
+      projectId: workspace.projectId,
       name: workspace.projectDisplayName,
       path: workspace.repoPath,
     });
@@ -121,6 +123,7 @@ const test = base.extend<ProjectsSettingsFixtures>({
     });
 
     await provide({
+      projectId: workspace.projectId,
       name: workspace.projectDisplayName,
       path: workspace.repoPath,
     });
@@ -262,6 +265,125 @@ test.describe("Projects settings", () => {
       await clickSaveProjectSettings(page);
       await expectNoUncommittedSetupWarning(page);
     });
+  });
+
+  test("script errors appear on blur and cancel discards only an empty new script", async ({
+    page,
+    editableProject,
+  }) => {
+    await openProjects(page);
+    await openProjectSettings(page, editableProject.name);
+    await page.getByTestId("scripts-add-button").click();
+
+    const name = page.getByRole("textbox", { name: "Script name", exact: true });
+    const command = page.getByRole("textbox", { name: "Script command", exact: true });
+    const nameError = page.getByTestId("script-edit-name-error");
+    const commandError = page.getByTestId("script-edit-command-error");
+    await expect(nameError).toHaveCount(0);
+    await expect(commandError).toHaveCount(0);
+
+    await name.focus();
+    await command.focus();
+    await expect(nameError).toHaveText("Name is required");
+    await expect(commandError).toHaveCount(0);
+    await name.focus();
+    await expect(commandError).toHaveText("Command is required");
+
+    await page.getByTestId("script-edit-cancel").click();
+    await expect(page.getByTestId("script-edit-modal")).toHaveCount(0);
+    await expectScriptRowCount(page, 1);
+    await expect(page.getByTestId("save-button")).toBeEnabled();
+
+    await page.getByTestId("scripts-add-button").click();
+    await expect(nameError).toHaveCount(0);
+    await expect(commandError).toHaveCount(0);
+    await page.getByTestId("script-edit-save").click();
+    await expect(nameError).toHaveText("Name is required");
+    await expect(commandError).toHaveText("Command is required");
+    await expect(page.getByTestId("script-edit-modal")).toBeVisible();
+
+    await name.fill("draft");
+    await page.getByTestId("script-edit-cancel").click();
+    await expectScriptRowCount(page, 2);
+    await expectSaveButtonDisabled(page);
+
+    await page.getByTestId("scripts-list").getByText("draft", { exact: true }).click();
+    await expect(name).toHaveValue("draft");
+    await expect(command).toHaveValue("");
+    await expect(nameError).toHaveCount(0);
+    await expect(commandError).toHaveCount(0);
+    await command.fill("echo retained draft");
+    await page.getByTestId("script-edit-save").click();
+    await expect(page.getByTestId("script-edit-modal")).toHaveCount(0);
+    await expect(page.getByTestId("scripts-list")).toContainText("echo retained draft");
+    await clickSaveProjectSettings(page);
+    await expect
+      .poll(async () => JSON.parse(await readProjectConfigFile(editableProject)) as unknown)
+      .toMatchObject({
+        scripts: {
+          dev: initialPaseoConfig.scripts.dev,
+          draft: { command: "echo retained draft" },
+        },
+        customTopLevelField: initialPaseoConfig.customTopLevelField,
+      });
+  });
+
+  test("worktree and script typing keep focus and draft text during project updates", async ({
+    page,
+    editableProject,
+  }) => {
+    const client = await connectSeedClient();
+    try {
+      await openProjects(page);
+      await openProjectSettings(page, editableProject.name);
+      const setup = page.getByRole("textbox", { name: "Worktree setup commands" });
+      await setup.fill("");
+      await setup.pressSequentially("echo unsaved");
+
+      await client.renameProject(editableProject.projectId, "Renamed while typing setup");
+      await expectProjectTitle(page, "Renamed while typing setup");
+      await expect(setup).toBeFocused();
+      await expect(setup).toHaveValue("echo unsaved");
+      await page.keyboard.type(" setup");
+      await expect(setup).toHaveValue("echo unsaved setup");
+
+      await page.getByTestId("scripts-list").getByText("dev", { exact: true }).click();
+      const command = page.getByRole("textbox", { name: "Script command", exact: true });
+      await expect(command).toHaveValue(initialPaseoConfig.scripts.dev.command);
+      await command.fill("");
+      await command.pressSequentially("npm run");
+
+      await client.renameProject(editableProject.projectId, "Renamed while typing script");
+      await expect(
+        page
+          .getByRole("main", { includeHidden: true })
+          .getByText("Renamed while typing script", { exact: true }),
+      ).toHaveText("Renamed while typing script");
+      await expect(command).toBeFocused();
+      await expect(command).toHaveValue("npm run");
+      await page.keyboard.type(" preview");
+      await expect(command).toHaveValue("npm run preview");
+      await page.getByTestId("script-edit-save").click();
+      await expect(setup).toHaveValue("echo unsaved setup");
+      await clickSaveProjectSettings(page);
+      await expect
+        .poll(async () => JSON.parse(await readProjectConfigFile(editableProject)) as unknown)
+        .toMatchObject({
+          worktree: {
+            ...initialPaseoConfig.worktree,
+            setup: ["echo unsaved setup"],
+          },
+          scripts: {
+            dev: {
+              ...initialPaseoConfig.scripts.dev,
+              command: "npm run preview",
+            },
+          },
+          customTopLevelField: initialPaseoConfig.customTopLevelField,
+        });
+    } finally {
+      await client.close().catch(() => undefined);
+    }
   });
 
   test("user edits worktree setup on a non-GitHub remote project", async ({

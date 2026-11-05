@@ -32,6 +32,19 @@ bounded item is used for runtime timeline rows and live stream events. Provider 
 applies the same rule so reopening an agent cannot restore an oversized payload. Fetches apply it
 again to assistant and reasoning rows the projection merges from many chunks.
 
+## Native desktop live prefixes
+
+The native CLI runner commits ordered reasoning and answer rows when the provider invocation
+ends. Before that commit, send actual text deltas with stable turn and message identities, without
+claiming canonical sequence positions. A constant sequence drops subsequent chunks; cumulative
+text duplicates already-rendered prefixes.
+
+Publish `turn_completed` or `turn_failed` before the final timeline replacement, including
+reasoning-only failures. The client flushes queued stream events before installing the full
+`reset: true` history response. Without the terminal event, same-epoch continuity can retain a
+cursorless loading thought beside its committed copy. Replacement notifications and history
+responses must use the same epoch.
+
 ## Presence is not delivery
 
 Client heartbeat reports presence:
@@ -188,7 +201,7 @@ Live rows received between cache paint and catch-up stay in the separate live he
 the authoritative range through the existing forward-page path. The cache does not persist sync
 generation or unreconciled local submissions.
 
-Every daemon-derived live item carries its timeline epoch and sequence position. Bootstrap
+Every canonical daemon-derived live item carries its timeline epoch and sequence position. Bootstrap
 replacement keeps only positioned rows newer than the page it installs, while unresolved local
 user presentations identify themselves by having client identity without a timeline position. This
 prevents a page from duplicating rows it already covers without coupling display continuity to the

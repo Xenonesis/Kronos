@@ -73,7 +73,14 @@ static PLUGIN_MANAGER: std::sync::OnceLock<crate::agent::providers::plugins::Nat
 
 pub fn get_agent_manager() -> &'static crate::agent::manager::AgentManager {
     AGENT_MANAGER.get_or_init(|| {
-        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(".paseo");
+        #[cfg(test)]
+        let home = {
+            static HOME: std::sync::LazyLock<tempfile::TempDir> =
+                std::sync::LazyLock::new(|| tempfile::tempdir().expect("Create isolated agent test home"));
+            HOME.path().to_path_buf()
+        };
+        #[cfg(not(test))]
+        let home = crate::get_data_dir();
         crate::agent::manager::AgentManager::new(home)
     })
 }
@@ -791,6 +798,7 @@ pub fn agent_record_to_snapshot(record: &crate::agent::types::StoredAgentRecord)
         "provider": record.provider,
         "cwd": if record.cwd.is_empty() { ".".to_string() } else { record.cwd.clone() },
         "model": serde_json::Value::Null,
+        "thinkingOptionId": null,
         "createdAt": record.created_at,
         "updatedAt": record.updated_at,
         "lastUserMessageAt": record.last_activity_at,
@@ -809,7 +817,7 @@ pub fn agent_record_to_snapshot(record: &crate::agent::types::StoredAgentRecord)
             "supportsSessionPersistence": false,
             "supportsDynamicModes": false,
             "supportsMcpServers": true,
-            "supportsReasoningStream": false,
+            "supportsReasoningStream": matches!(record.provider.as_str(), "omp" | "pi" | "opencode" | "codex" | "claude"),
             "supportsToolInvocations": true
         },
         "currentModeId": null,
@@ -825,6 +833,9 @@ pub fn agent_record_to_snapshot(record: &crate::agent::types::StoredAgentRecord)
     if let Some(ref cfg) = record.config {
         if let Some(m) = cfg.get("model") {
             val["model"] = m.clone();
+        }
+        if let Some(thinking) = cfg.get("thinkingOptionId") {
+            val["thinkingOptionId"] = thinking.clone();
         }
     }
     val
@@ -2280,12 +2291,16 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "agent.create.request" | "create_agent_request" => {
             let payload = msg.get("payload");
+            let source_config = msg.get("config")
+                .or_else(|| payload.and_then(|p| p.get("config")));
             let provider = msg.get("provider")
                 .or_else(|| payload.and_then(|p| p.get("provider")))
+                .or_else(|| source_config.and_then(|config| config.get("provider")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("codex");
             let cwd = msg.get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .or_else(|| source_config.and_then(|config| config.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
             let title = msg.get("title")
@@ -2300,15 +2315,18 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("model")))
                 .and_then(|v| v.as_str());
 
-            let mut config = msg.get("config")
-                .or_else(|| payload.and_then(|p| p.get("config")))
-                .cloned()
+            let mut config = source_config.cloned()
                 .unwrap_or_else(|| serde_json::json!({}));
 
             if let Some(m) = model {
                 if let Some(obj) = config.as_object_mut() {
                     obj.insert("model".to_string(), serde_json::json!(m));
                 }
+            }
+            if let Some(thinking) = msg.get("thinkingOptionId")
+                .or_else(|| payload.and_then(|p| p.get("thinkingOptionId")))
+            {
+                config["thinkingOptionId"] = thinking.clone();
             }
             let idempotency_key = msg.get("idempotencyKey")
                 .or_else(|| payload.and_then(|p| p.get("idempotencyKey")))
@@ -2475,7 +2493,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "payload": {
                     "requestId": request_id,
                     "agent": agent_opt,
-                    "project": null
+                    "project": null,
+                    "error": null
                 }
             })
         }
@@ -2504,7 +2523,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                         "payload": {
                             "requestId": request_id,
                             "agentId": agent_id,
-                            "accepted": true
+                            "accepted": true,
+                            "error": null
                         }
                     })
                 }
@@ -2564,7 +2584,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     "direction": "tail",
                     "projection": "projected",
                     "epoch": "epoch-1",
-                    "reset": false,
+                    "reset": true,
                     "staleCursor": false,
                     "gap": false,
                     "window": {
@@ -2769,14 +2789,27 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let thinking = msg.get("config")
+                .or_else(|| payload.and_then(|p| p.get("config")))
+                .and_then(|config| config.get("thinkingOptionId"));
+            let mgr = get_agent_manager();
+            let result = match thinking {
+                Some(serde_json::Value::Null) => mgr.set_agent_thinking(agent_id, None),
+                Some(serde_json::Value::String(option)) => mgr.set_agent_thinking(agent_id, Some(option)),
+                Some(_) => Err("Invalid thinkingOptionId".to_string()),
+                None => mgr.get_agent(agent_id).ok_or_else(|| format!("Agent {agent_id} not found")),
+            };
+            if result.is_ok() {
+                crate::agent::runner::broadcast_agent_status_update(agent_id);
+            }
             serde_json::json!({
                 "type": "agent.config.apply.response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
                     "agentId": agent_id,
-                    "accepted": true,
-                    "error": null,
+                    "accepted": result.is_ok(),
+                    "error": result.as_ref().err(),
                     "notice": null
                 }
             })
@@ -2859,15 +2892,31 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let thinking = msg.get("thinkingOptionId")
+                .or_else(|| payload.and_then(|p| p.get("thinkingOptionId")));
+            let result = match thinking {
+                Some(serde_json::Value::Null) => get_agent_manager().set_agent_thinking(agent_id, None),
+                Some(serde_json::Value::String(option)) => {
+                    get_agent_manager().set_agent_thinking(agent_id, Some(option))
+                }
+                _ => Err("Missing or invalid thinkingOptionId".to_string()),
+            };
+            if result.is_ok() {
+                crate::agent::runner::broadcast_agent_status_update(agent_id);
+            }
             serde_json::json!({
                 "type": "set_agent_thinking_response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
                     "agentId": agent_id,
-                    "accepted": true,
-                    "error": null,
-                    "notice": null
+                    "accepted": result.is_ok(),
+                    "error": result.as_ref().err(),
+                    "notice": if result.as_ref().is_ok_and(|record| record.last_status == crate::agent::types::AgentStatus::Running) {
+                        serde_json::json!({"type": "warning", "message": "Thinking level applies next turn"})
+                    } else {
+                        serde_json::Value::Null
+                    }
                 }
             })
         }
@@ -4625,6 +4674,7 @@ async fn discover_jsonl_cli_models(
                     "protocolVersion": 2
                 });
                 let _ = stdin.write_all(format!("{neg}\n").as_bytes()).await;
+                let _ = stdin.flush().await;
                 let _ = tokio::time::timeout(Duration::from_secs(2), async {
                     while let Ok(Some(line)) = lines.next_line().await {
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
@@ -4725,16 +4775,88 @@ fn runtime_cli_models(data: &serde_json::Value, provider_name: &str) -> Vec<serd
             if !seen.insert(id.clone()) {
                 return None;
             }
-            Some(dynamic_model(
+            let mut definition = dynamic_model(
                 provider_name,
                 &id,
                 model.get("name").and_then(serde_json::Value::as_str),
                 None,
                 false,
                 model.get("contextWindow").and_then(serde_json::Value::as_u64),
-            ))
+            );
+            apply_runtime_thinking_options(&mut definition, model, provider_name);
+            Some(definition)
         })
         .collect()
+}
+
+fn apply_runtime_thinking_options(
+    definition: &mut serde_json::Value,
+    model: &serde_json::Value,
+    provider: &str,
+) {
+    if model.get("reasoning").and_then(serde_json::Value::as_bool) != Some(true) {
+        return;
+    }
+    if provider == "pi" {
+        // Mirrors Pi's getSupportedThinkingLevels and upward-first clampThinkingLevel.
+        let levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+        let mapping = model.get("thinkingLevelMap").and_then(serde_json::Value::as_object);
+        let supported: Vec<&str> = levels.iter().copied().filter(|level| {
+            let mapped = mapping.and_then(|mapping| mapping.get(*level));
+            !mapped.is_some_and(serde_json::Value::is_null)
+                && (!matches!(*level, "xhigh" | "max") || mapped.is_some())
+        }).collect();
+        let default = levels[3..].iter().copied().find(|level| supported.contains(level))
+            .or_else(|| supported.last().copied());
+        let options = supported.iter().map(|level| thinking_option(level, None)).collect();
+        set_model_thinking_options(definition, options, default);
+    } else if provider == "omp" {
+        // Current OMP getSupportedEfforts treats a missing ladder as uncontrollable.
+        let mut seen = std::collections::HashSet::new();
+        let efforts: Vec<&str> = model.pointer("/thinking/efforts")
+            .and_then(serde_json::Value::as_array).into_iter().flatten()
+            .filter_map(serde_json::Value::as_str)
+            .filter(|effort| !effort.trim().is_empty() && seen.insert(*effort))
+            .collect();
+        if efforts.is_empty() {
+            return;
+        }
+        let default = model.pointer("/thinking/defaultLevel")
+            .and_then(serde_json::Value::as_str)
+            .filter(|level| efforts.contains(level))
+            .or_else(|| efforts.first().copied());
+        // Off and Auto are OMP session selectors, not entries in the model effort ladder.
+        let mut options = vec![thinking_option("off", None), thinking_option("auto", None)];
+        options.extend(efforts.iter().filter(|level| !matches!(**level, "off" | "auto"))
+            .map(|level| thinking_option(level, None)));
+        set_model_thinking_options(definition, options, default);
+    }
+}
+
+fn thinking_option(id: &str, description: Option<&str>) -> serde_json::Value {
+    let mut option = serde_json::json!({ "id": id, "label": id });
+    if let Some(description) = description.filter(|description| !description.trim().is_empty()) {
+        option["description"] = serde_json::json!(description);
+    }
+    option
+}
+
+fn set_model_thinking_options(
+    model: &mut serde_json::Value,
+    mut options: Vec<serde_json::Value>,
+    default: Option<&str>,
+) {
+    if options.is_empty() {
+        return;
+    }
+    let default = default.filter(|id| options.iter().any(|option| option["id"].as_str() == Some(*id)));
+    for option in &mut options {
+        option["isDefault"] = serde_json::json!(option["id"].as_str() == default);
+    }
+    model["thinkingOptions"] = serde_json::Value::Array(options);
+    if let Some(default) = default {
+        model["defaultThinkingOptionId"] = serde_json::json!(default);
+    }
 }
 
 async fn invalidate_provider_snapshot_cache() {
@@ -4785,6 +4907,7 @@ pub(crate) async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
             let _ = child.kill().await;
             return None;
         }
+        let _ = stdin.flush().await;
 
         let initialized = tokio::time::timeout(Duration::from_secs(4), async {
             while let Ok(Some(line)) = lines.next_line().await {
@@ -4821,6 +4944,7 @@ pub(crate) async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
             let _ = child.kill().await;
             return None;
         }
+        let _ = stdin.flush().await;
 
         let response = tokio::time::timeout(Duration::from_secs(4), async {
             while let Ok(Some(line)) = lines.next_line().await {
@@ -4858,14 +4982,33 @@ pub(crate) fn codex_models_from_response(response: &serde_json::Value) -> Vec<se
             if id.trim().is_empty() || !seen.insert(id) {
                 return None;
             }
-            Some(dynamic_model(
+            let mut definition = dynamic_model(
                 "codex",
                 id,
                 model.get("displayName").and_then(serde_json::Value::as_str),
                 model.get("description").and_then(serde_json::Value::as_str),
                 model.get("isDefault").and_then(serde_json::Value::as_bool).unwrap_or(false),
                 model.get("contextWindow").and_then(serde_json::Value::as_u64),
-            ))
+            );
+            let mut effort_ids = std::collections::HashSet::new();
+            let mut options: Vec<serde_json::Value> = model.get("supportedReasoningEfforts")
+                .and_then(serde_json::Value::as_array).into_iter().flatten()
+                .filter_map(|effort| {
+                    let id = effort.get("reasoningEffort")?.as_str()?.trim();
+                    if id.is_empty() || !effort_ids.insert(id) {
+                        return None;
+                    }
+                    Some(thinking_option(id, effort.get("description").and_then(serde_json::Value::as_str)))
+                }).collect();
+            let default = model.get("defaultReasoningEffort").and_then(serde_json::Value::as_str)
+                .map(str::trim).filter(|id| !id.is_empty());
+            if let Some(default) = default {
+                if effort_ids.insert(default) {
+                    options.push(thinking_option(default, None));
+                }
+            }
+            set_model_thinking_options(&mut definition, options, default);
+            Some(definition)
         })
         .collect()
 }
@@ -4899,30 +5042,6 @@ async fn discover_claude_configured_model() -> Vec<serde_json::Value> {
         )];
     }
 
-    // 2. Dynamic discovery via claude CLI if installed
-    if let Some(binary) = crate::agent::registry::resolve_command("claude") {
-        let mut cmd = tokio::process::Command::new(&binary);
-        cmd.arg("--version")
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null());
-        #[cfg(windows)]
-        cmd.creation_flags(0x08000000);
-        if let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(3), cmd.output()).await {
-            if out.status.success() {
-                let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                return vec![dynamic_model(
-                    "claude",
-                    "claude-sonnet-4-6",
-                    Some("Claude Sonnet 4.6"),
-                    Some(&format!("Claude CLI ({ver})")),
-                    true,
-                    Some(200_000),
-                )];
-            }
-        }
-    }
-
-    // If not installed and not configured, return empty (Claude is unavailable)
     Vec::new()
 }
 
@@ -4946,7 +5065,7 @@ async fn discover_opencode_models(cwd: &str) -> Vec<serde_json::Value> {
     // 1. Dynamic discovery via opencode CLI
     if let Some(binary) = crate::agent::registry::resolve_command("opencode") {
         let mut cmd = tokio::process::Command::new(&binary);
-        cmd.arg("models")
+        cmd.args(["models", "--verbose"])
             .current_dir(safe_cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -4957,21 +5076,7 @@ async fn discover_opencode_models(cwd: &str) -> Vec<serde_json::Value> {
         if let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(5), cmd.output()).await {
             if out.status.success() {
                 let text = String::from_utf8_lossy(&out.stdout);
-                let mut models = Vec::new();
-                for line in text.lines() {
-                    let trimmed = line.trim();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    models.push(dynamic_model(
-                        "opencode",
-                        trimmed,
-                        Some(trimmed),
-                        None,
-                        false,
-                        None,
-                    ));
-                }
+                let models = opencode_models_from_cli_output(&text);
                 if !models.is_empty() {
                     return models;
                 }
@@ -5027,18 +5132,69 @@ pub(crate) fn opencode_models_from_response(value: &serde_json::Value) -> Vec<se
             provider.get("models").and_then(serde_json::Value::as_object)
                 .into_iter()
                 .flat_map(move |models| models.iter().filter_map(move |(model_id, details)| {
-                    let id = format!("{provider_id}/{model_id}");
-                    Some(dynamic_model(
-                        "opencode",
-                        &id,
-                        details.get("name").and_then(serde_json::Value::as_str),
-                        details.get("description").and_then(serde_json::Value::as_str),
-                        details.get("default").and_then(serde_json::Value::as_bool).unwrap_or(false),
-                        details.pointer("/limit/context").and_then(serde_json::Value::as_u64),
-                    ))
+                    opencode_model_definition(provider_id, model_id, details)
                 }))
         })
         .collect()
+}
+
+pub(crate) fn opencode_models_from_cli_output(text: &str) -> Vec<serde_json::Value> {
+    let mut models = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut remaining = text;
+    // `models --verbose` prints each lookup ID followed by a complete, possibly
+    // multiline JSON object. Bare lookup IDs alone are not capability metadata.
+    while let Some(start) = remaining.find('{') {
+        let mut stream = serde_json::Deserializer::from_str(&remaining[start..])
+            .into_iter::<serde_json::Value>();
+        let Some(Ok(details)) = stream.next() else {
+            break;
+        };
+        remaining = &remaining[start + stream.byte_offset()..];
+        let Some(provider) = details.get("providerID").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(id) = details.get("id").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if let Some(model) = opencode_model_definition(provider, id, &details) {
+            if seen.insert(model["id"].as_str().unwrap_or_default().to_owned()) {
+                models.push(model);
+            }
+        }
+    }
+    models
+}
+
+fn opencode_model_definition(
+    provider: &str,
+    id: &str,
+    details: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    if provider.trim().is_empty() || id.trim().is_empty() {
+        return None;
+    }
+    let mut model = dynamic_model(
+        "opencode",
+        &format!("{provider}/{id}"),
+        details.get("name").and_then(serde_json::Value::as_str),
+        details.get("description").and_then(serde_json::Value::as_str),
+        details.get("default").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        details.pointer("/limit/context").and_then(serde_json::Value::as_u64),
+    );
+    if let Some(variants) = details.get("variants").and_then(serde_json::Value::as_object)
+        .filter(|variants| !variants.is_empty()
+            && details.pointer("/capabilities/reasoning")
+                .or_else(|| details.get("reasoning"))
+                .and_then(serde_json::Value::as_bool) != Some(false))
+    {
+        // OpenCode's Default omits the variant and lets its own runtime resolve it.
+        let mut options = vec![serde_json::json!({ "id": "default", "label": "Default" })];
+        options.extend(variants.keys().filter(|id| id.as_str() != "default")
+            .map(|id| thinking_option(id, None)));
+        set_model_thinking_options(&mut model, options, Some("default"));
+    }
+    Some(model)
 }
 async fn discover_ollama_models() -> Vec<serde_json::Value> {
     let endpoint = normalize_http_endpoint(

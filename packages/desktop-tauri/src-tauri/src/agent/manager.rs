@@ -181,6 +181,10 @@ impl AgentManager {
             .ok_or_else(|| format!("Agent {id} not found"))?;
         let mut config = record.config.unwrap_or_else(|| serde_json::json!({}));
         if let Some(obj) = config.as_object_mut() {
+            if obj.get("model").and_then(Value::as_str) != Some(model) {
+                // Effort IDs are model-specific; a stale level can be invalid for the new model.
+                obj.remove("thinkingOptionId");
+            }
             obj.insert("model".to_string(), serde_json::json!(model));
         }
         record.config = Some(config);
@@ -188,6 +192,31 @@ impl AgentManager {
         self.storage
             .save_record(record.clone())
             .map_err(|e| format!("Failed to save record: {e}"))?;
+        Ok(record)
+    }
+
+    pub fn set_agent_thinking(
+        &self,
+        id: &str,
+        thinking_option_id: Option<&str>,
+    ) -> Result<StoredAgentRecord, String> {
+        let mut record = self
+            .get_agent(id)
+            .ok_or_else(|| format!("Agent {id} not found"))?;
+        let mut config = record.config.unwrap_or_else(|| serde_json::json!({}));
+        let obj = config
+            .as_object_mut()
+            .ok_or_else(|| "Agent config must be an object".to_string())?;
+        if let Some(option) = thinking_option_id.filter(|option| !option.trim().is_empty()) {
+            obj.insert("thinkingOptionId".to_string(), serde_json::json!(option));
+        } else {
+            obj.remove("thinkingOptionId");
+        }
+        record.config = Some(config);
+        record.updated_at = now_iso();
+        self.storage
+            .save_record(record.clone())
+            .map_err(|e| format!("Failed to save thinking setting: {e}"))?;
         Ok(record)
     }
 
@@ -228,6 +257,42 @@ fn uuid_v4_simple() -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_thinking_setting_survives_reload_and_can_be_cleared() {
+        let dir = tempdir().unwrap();
+        let manager = AgentManager::new(dir.path());
+        let agent = manager.create_agent(
+            "codex", ".", None, None,
+            Some(serde_json::json!({"model": "runtime-model", "thinkingOptionId": "high"})),
+        ).unwrap();
+        manager.set_agent_thinking(&agent.id, Some("low")).unwrap();
+        let reloaded = AgentManager::new(dir.path());
+        let record = reloaded.get_agent(&agent.id).unwrap();
+        assert_eq!(record.config.as_ref().unwrap()["thinkingOptionId"], "low");
+        assert_eq!(record.config.as_ref().unwrap()["model"], "runtime-model");
+        reloaded.set_agent_thinking(&agent.id, None).unwrap();
+        let cleared = AgentManager::new(dir.path()).get_agent(&agent.id).unwrap();
+        assert!(cleared.config.as_ref().unwrap().get("thinkingOptionId").is_none());
+        assert_eq!(cleared.config.as_ref().unwrap()["model"], "runtime-model");
+        assert!(manager.set_agent_thinking("missing-thinking-agent", Some("high")).is_err());
+    }
+
+    #[test]
+    fn test_thinking_choice_is_not_carried_to_a_different_model() {
+        let dir = tempdir().unwrap();
+        let manager = AgentManager::new(dir.path());
+        let agent = manager.create_agent(
+            "codex", ".", None, None,
+            Some(serde_json::json!({"model": "first", "thinkingOptionId": "xhigh"})),
+        ).unwrap();
+        let unchanged = manager.set_agent_model(&agent.id, "first").unwrap();
+        assert_eq!(unchanged.config.as_ref().unwrap()["thinkingOptionId"], "xhigh");
+        manager.set_agent_model(&agent.id, "second").unwrap();
+        let reloaded = AgentManager::new(dir.path()).get_agent(&agent.id).unwrap();
+        assert_eq!(reloaded.config.as_ref().unwrap()["model"], "second");
+        assert!(reloaded.config.as_ref().unwrap().get("thinkingOptionId").is_none());
+    }
 
     #[test]
     fn test_agent_manager_crud_and_timeline() {

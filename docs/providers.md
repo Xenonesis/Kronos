@@ -8,17 +8,29 @@ server integrations.
 The Rust desktop daemon does not ship a fallback model list. Its provider snapshot uses live
 catalog data from Codex app-server (`model/list`), Pi (`pi --mode rpc`, `get_available_models`,
 command override `PI_COMMAND` or `PI_ACP_PI_COMMAND`), OMP (`omp --mode rpc-ui`,
-`get_available_models`, command override `OMP_COMMAND`), a reachable OpenCode server
-(`GET /provider`, default `http://127.0.0.1:4096`, override with `OPENCODE_SERVER_URL`), and local
-Ollama (`GET /api/tags`, default `http://127.0.0.1:11434`, override with `OLLAMA_HOST`). Claude
+`get_available_models`, command override `OMP_COMMAND`), OpenCode (`models --verbose`, with
+`GET /provider` on a reachable server as the fallback; default `http://127.0.0.1:4096`, override
+with `OPENCODE_SERVER_URL`), and local Ollama (`GET /api/tags`, default
+`http://127.0.0.1:11434`, override with `OLLAMA_HOST`). Claude
 contributes the model explicitly selected in `ANTHROPIC_MODEL` or Claude `settings.json`; this is a
 configured model, not a full Anthropic catalog. Snapshot discovery is cached for 60 seconds and
-refreshed by `refresh_providers_snapshot_request`. Pi and OMP subprocess probes are bounded by a
-five-second deadline and are terminated after their catalog response.
+refreshed by `refresh_providers_snapshot_request`. Pi and OMP subprocess probes have bounded
+discovery deadlines and are terminated after their catalog response.
 
 Providers without an available runtime catalog remain in the snapshot with an empty model list and
 an unavailable status. The Rust daemon currently does not perform model discovery for generic
 ACP/Copilot. It does not infer that a provider is usable from a built-in model ID.
+
+Thinking controls require the runtime's supported effort or variant metadata, not just a
+reasoning-capable model name. In particular, OMP's `reasoning: true` without an effort ladder
+does not establish a configurable thinking level. Bare OpenCode model IDs lose variant metadata;
+keep its verbose JSON records when discovering through the CLI.
+
+Native thinking selections persist with the agent and apply to the next provider invocation.
+Changing models clears the previous model's explicit effort so an incompatible level cannot
+silently differ from the control's displayed default. Reasoning text is limited to what the
+provider exposes; never substitute an answer or a synthetic success message for missing reasoning.
+See [native desktop live prefixes](timeline-sync.md#native-desktop-live-prefixes) for its delivery contract.
 
 ## Plugin providers
 

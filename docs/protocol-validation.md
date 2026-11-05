@@ -34,6 +34,8 @@ zod-aot is exact-pinned and young enough that compiler patches are treated as pa
 - generated runtime imports must keep `.js` extensions for packaged Node ESM
 - the generated WebSocket envelope accepts a minimal valid message and rejects a corrupted one
 
+Native Rust producers must satisfy the same schemas as the Node daemon. Nullable fields are still required unless the schema marks them optional: successful `send_agent_message_response` acknowledgements must include `error: null`. An omitted field rejects the client's pending send even when the daemon has already stored the message and started a provider turn. Verify native responses with the generated outbound validator and `DaemonClient`, not only a raw WebSocket observer. In Rust regression tests, use `.get("error")` to distinguish an absent key from explicit null; `Value` indexing returns null for both.
+
 ## Schema Purity
 
 Message schemas are structural declarations. Do not put `.transform()`, `.catch()`, or `.preprocess()` on WebSocket message schemas. If parsed data needs normalization, put it in an explicit consumer or post-validation pass.

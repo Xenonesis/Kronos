@@ -1532,6 +1532,142 @@ mod tests {
     }
 
     #[test]
+    fn test_codex_catalog_preserves_reported_thinking_choices_and_default() {
+        let models = crate::kernel::server::codex_models_from_response(&serde_json::json!({
+            "result": { "data": [
+                {
+                    "id": "reasoning-model",
+                    "defaultReasoningEffort": "high",
+                    "supportedReasoningEfforts": [
+                        { "reasoningEffort": "low", "description": "Faster reasoning" },
+                        { "reasoningEffort": "high", "description": "Deeper reasoning" },
+                        { "reasoningEffort": "high", "description": "Duplicate" },
+                        { "reasoningEffort": "" }
+                    ]
+                },
+                { "id": "plain-model", "supportedReasoningEfforts": [] },
+                { "id": "default-only", "defaultReasoningEffort": "medium" }
+            ] }
+        }));
+        assert_eq!(models[0]["thinkingOptions"], serde_json::json!([
+            { "id": "low", "label": "low", "description": "Faster reasoning", "isDefault": false },
+            { "id": "high", "label": "high", "description": "Deeper reasoning", "isDefault": true }
+        ]));
+        assert_eq!(models[0]["defaultThinkingOptionId"], "high");
+        assert!(models[1].get("thinkingOptions").is_none());
+        assert!(models[1].get("defaultThinkingOptionId").is_none());
+        assert_eq!(models[2]["thinkingOptions"][0]["id"], "medium");
+        assert_eq!(models[2]["defaultThinkingOptionId"], "medium");
+    }
+
+    #[test]
+    fn test_pi_catalog_derives_only_runtime_supported_thinking_levels() {
+        let models = crate::kernel::server::pi_models_from_response(&serde_json::json!({
+            "models": [
+                {
+                    "provider": "vendor", "id": "restricted", "reasoning": true,
+                    "thinkingLevelMap": { "off": null, "minimal": null, "medium": null, "xhigh": "maximum" }
+                },
+                { "provider": "vendor", "id": "standard", "reasoning": true },
+                { "provider": "vendor", "id": "plain", "reasoning": false },
+                {
+                    "provider": "vendor", "id": "lower-only", "reasoning": true,
+                    "thinkingLevelMap": { "medium": null, "high": null }
+                }
+            ]
+        }));
+        let ids = |model: &serde_json::Value| -> Vec<String> {
+            model["thinkingOptions"].as_array().unwrap().iter()
+                .map(|option| option["id"].as_str().unwrap().to_owned()).collect()
+        };
+        assert_eq!(ids(&models[0]), ["low", "high", "xhigh"]);
+        assert_eq!(models[0]["defaultThinkingOptionId"], "high");
+        assert_eq!(ids(&models[1]), ["off", "minimal", "low", "medium", "high"]);
+        assert_eq!(models[1]["defaultThinkingOptionId"], "medium");
+        assert!(models[2].get("thinkingOptions").is_none());
+        assert!(models[2].get("defaultThinkingOptionId").is_none());
+        assert_eq!(ids(&models[3]), ["off", "minimal", "low"]);
+        assert_eq!(models[3]["defaultThinkingOptionId"], "low");
+    }
+
+    #[test]
+    fn test_omp_catalog_preserves_efforts_without_inventing_missing_ladders() {
+        let models = crate::kernel::server::omp_models_from_response(&serde_json::json!({
+            "models": [
+                {
+                    "provider": "vendor", "id": "reasoning", "reasoning": true,
+                    "thinking": { "mode": "effort", "efforts": ["high", "xhigh"], "defaultLevel": "xhigh" }
+                },
+                { "provider": "vendor", "id": "uncontrolled", "reasoning": true },
+                { "provider": "vendor", "id": "empty", "reasoning": true, "thinking": { "efforts": [] } },
+                { "provider": "vendor", "id": "plain", "reasoning": false, "thinking": { "efforts": ["high"] } }
+            ]
+        }));
+        let options = models[0]["thinkingOptions"].as_array().unwrap();
+        assert_eq!(options.iter().map(|option| option["id"].as_str().unwrap()).collect::<Vec<_>>(),
+            ["off", "auto", "high", "xhigh"]);
+        assert_eq!(models[0]["defaultThinkingOptionId"], "xhigh");
+        assert_eq!(options.iter().filter(|option| option["isDefault"] == true)
+            .map(|option| option["id"].as_str().unwrap()).collect::<Vec<_>>(), ["xhigh"]);
+        for model in &models[1..] {
+            assert!(model.get("thinkingOptions").is_none());
+            assert!(model.get("defaultThinkingOptionId").is_none());
+        }
+    }
+
+    #[test]
+    fn test_opencode_verbose_catalog_uses_json_metadata_not_bare_ids() {
+        let models = crate::kernel::server::opencode_models_from_cli_output(r#"
+vendor/reasoning
+{
+  "id": "reasoning",
+  "providerID": "vendor",
+  "name": "Reasoning Model",
+  "capabilities": { "reasoning": true },
+  "limit": { "context": 123456 },
+  "variants": { "default": {}, "deep": { "reasoningEffort": "high" } }
+}
+vendor/plain
+{"id":"plain","providerID":"vendor","name":"Plain Model","variants":{}}
+vendor/bare-only
+"#);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0]["id"], "vendor/reasoning");
+        assert_eq!(models[0]["label"], "Reasoning Model");
+        assert_eq!(models[0]["contextWindowMaxTokens"], 123456);
+        assert_eq!(models[0]["thinkingOptions"], serde_json::json!([
+            { "id": "default", "label": "Default", "isDefault": true },
+            { "id": "deep", "label": "deep", "isDefault": false }
+        ]));
+        assert_eq!(models[0]["defaultThinkingOptionId"], "default");
+        assert!(models[1].get("thinkingOptions").is_none());
+        assert!(models[1].get("defaultThinkingOptionId").is_none());
+        assert!(crate::kernel::server::opencode_models_from_cli_output("vendor/bare-only\n").is_empty());
+    }
+
+    #[test]
+    fn test_opencode_http_catalog_preserves_actual_variant_choices() {
+        let models = crate::kernel::server::opencode_models_from_response(&serde_json::json!({
+            "connected": ["vendor"],
+            "all": [{ "id": "vendor", "models": {
+                "reasoning": { "name": "Reasoning", "variants": { "custom": { "reasoningEffort": "high" } } },
+                "plain": { "name": "Plain", "variants": {} },
+                "nonreasoning": {
+                    "name": "Not Reasoning", "capabilities": { "reasoning": false },
+                    "variants": { "custom": {} }
+                }
+            } }]
+        }));
+        let reasoning = models.iter().find(|model| model["id"] == "vendor/reasoning").unwrap();
+        assert_eq!(reasoning["thinkingOptions"][1]["id"], "custom");
+        assert_eq!(reasoning["defaultThinkingOptionId"], "default");
+        let plain = models.iter().find(|model| model["id"] == "vendor/plain").unwrap();
+        assert!(plain.get("thinkingOptions").is_none());
+        let nonreasoning = models.iter().find(|model| model["id"] == "vendor/nonreasoning").unwrap();
+        assert!(nonreasoning.get("thinkingOptions").is_none());
+    }
+
+    #[test]
     fn test_pi_catalog_uses_rpc_models_and_deduplicates() {
         let response = serde_json::json!({
             "models": [
@@ -1719,6 +1855,10 @@ mod tests {
         let msg_res = dispatch_session_message(&msg_req).await;
         assert_eq!(msg_res["type"], "send_agent_message_response");
         assert_eq!(msg_res["payload"]["accepted"], true);
+        assert_eq!(msg_res["payload"]["requestId"], "req-agent-msg-1");
+        assert_eq!(msg_res["payload"]["agentId"], agent_id);
+        // Nullable is required on the wire; indexing alone treats missing keys as null.
+        assert_eq!(msg_res["payload"].get("error"), Some(&serde_json::Value::Null));
 
         // 4. Fetch agent timeline
         let timeline_req = serde_json::json!({
@@ -1813,6 +1953,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_send_agent_message_rejects_unknown_agent() {
+        let agent_id = "missing-send-message-contract-agent";
+        let response = dispatch_session_message(&serde_json::json!({
+            "type": "send_agent_message_request",
+            "requestId": "send-missing-agent",
+            "payload": {
+                "agentId": agent_id,
+                "text": "This message must not be stored"
+            }
+        })).await;
+
+        assert_eq!(response["type"], "send_agent_message_response");
+        assert_eq!(response["payload"]["requestId"], "send-missing-agent");
+        assert_eq!(response["payload"]["agentId"], agent_id);
+        assert_eq!(response["payload"]["accepted"], false);
+        assert!(!response["payload"]["error"].as_str().expect("rejection error string").is_empty());
+        assert!(crate::kernel::server::get_agent_manager().get_timeline(agent_id).is_empty());
+    }
+
+    #[tokio::test]
     async fn test_fetch_recent_provider_sessions_and_import() {
         let fetch_req = serde_json::json!({
             "type": "fetch_recent_provider_sessions_request",
@@ -1849,6 +2009,98 @@ mod tests {
         assert!(!imported_agent_id.is_empty());
     }
 
+
+    #[tokio::test]
+    async fn test_thinking_controls_update_snapshot_and_clear_setting() {
+        let mgr = crate::kernel::server::get_agent_manager();
+        let agent = mgr.create_agent(
+            "codex", ".", None, None,
+            Some(serde_json::json!({"model": "runtime-model", "thinkingOptionId": "high"})),
+        ).unwrap();
+        let initial = crate::kernel::server::agent_record_to_snapshot(&agent);
+        assert_eq!(initial["thinkingOptionId"], "high");
+        assert_eq!(initial["capabilities"]["supportsReasoningStream"], true);
+        let mut updates = crate::kernel::server::get_provider_push_tx().subscribe();
+        let response = dispatch_session_message(&serde_json::json!({
+            "type": "set_agent_thinking_request", "requestId": "thinking-update",
+            "agentId": agent.id, "thinkingOptionId": "low",
+        })).await;
+        let updated = mgr.get_agent(&agent.id).unwrap();
+        let stored = updated.config.as_ref().unwrap()["thinkingOptionId"].clone();
+        let published = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                match updates.recv().await {
+                    Ok(frame) => {
+                        let frame: serde_json::Value = serde_json::from_str(&frame).unwrap();
+                        if frame["message"]["type"] == "agent_update"
+                            && frame["message"]["payload"]["agent"]["id"] == agent.id
+                        {
+                            break frame;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(error) => panic!("Thinking update channel closed: {error}"),
+                }
+            }
+        }).await.expect("Thinking update must publish this agent's state");
+        let fetched = dispatch_session_message(&serde_json::json!({
+            "type": "fetch_agent_request", "requestId": "thinking-fetch", "agentId": agent.id,
+        })).await;
+        let cleared = dispatch_session_message(&serde_json::json!({
+            "type": "set_agent_thinking_request", "requestId": "thinking-clear",
+            "payload": {"agentId": agent.id, "thinkingOptionId": null},
+        })).await;
+        let clear_config = mgr.get_agent(&agent.id).unwrap().config.unwrap();
+        mgr.delete_agent(&agent.id).unwrap();
+        assert_eq!(response["payload"]["accepted"], true);
+        assert_eq!(stored, "low");
+        assert_eq!(published["message"]["payload"]["agent"]["thinkingOptionId"], "low");
+        assert_eq!(fetched["payload"]["agent"]["thinkingOptionId"], "low");
+        assert_eq!(fetched["payload"].get("error"), Some(&serde_json::Value::Null));
+        assert_eq!(cleared["payload"]["accepted"], true);
+        assert!(clear_config.get("thinkingOptionId").is_none());
+        assert_eq!(clear_config["model"], "runtime-model");
+        let rejected = dispatch_session_message(&serde_json::json!({
+            "type": "set_agent_thinking_request", "requestId": "thinking-missing",
+            "agentId": "missing-thinking-agent", "thinkingOptionId": "high",
+        })).await;
+        assert_eq!(rejected["payload"]["accepted"], false);
+        assert!(rejected["payload"]["error"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_thinking_profile_applies_setting_to_existing_agent() {
+        let mgr = crate::kernel::server::get_agent_manager();
+        let agent = mgr.create_agent("pi", ".", None, None, None).unwrap();
+        let response = dispatch_session_message(&serde_json::json!({
+            "type": "agent.config.apply.request", "requestId": "thinking-profile",
+            "agentId": agent.id, "config": {"thinkingOptionId": "medium"},
+        })).await;
+        let snapshot = crate::kernel::server::agent_record_to_snapshot(
+            &mgr.get_agent(&agent.id).unwrap(),
+        );
+        mgr.delete_agent(&agent.id).unwrap();
+        assert_eq!(response["payload"]["accepted"], true);
+        assert_eq!(snapshot["thinkingOptionId"], "medium");
+    }
+
+    #[tokio::test]
+    async fn test_thinking_creation_preserves_sdk_provider_config() {
+        let response = dispatch_session_message(&serde_json::json!({
+            "type": "create_agent_request", "requestId": "thinking-sdk-create",
+            "config": {
+                "provider": "pi", "cwd": "C:/thinking-test", "model": "runtime-model",
+                "thinkingOptionId": "high",
+            },
+        })).await;
+        let agent = &response["payload"]["agent"];
+        let id = agent["id"].as_str().unwrap();
+        crate::kernel::server::get_agent_manager().delete_agent(id).unwrap();
+        assert_eq!(agent["provider"], "pi");
+        assert_eq!(agent["cwd"], "C:/thinking-test");
+        assert_eq!(agent["model"], "runtime-model");
+        assert_eq!(agent["thinkingOptionId"], "high");
+    }
 
 }
 

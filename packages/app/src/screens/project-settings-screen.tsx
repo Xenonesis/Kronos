@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { TFunction } from "i18next";
+import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pressable, Text, View } from "react-native";
 import { useFocusEffect } from "expo-router/react-navigation";
 import { StyleSheet } from "react-native-unistyles";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, MoreVertical, Pencil, Plus } from "lucide-react-native";
+import { ArrowLeft, Pencil } from "lucide-react-native";
 import { ProjectIconView } from "@/components/project-icon-view";
 import type {
   PaseoConfigRaw,
@@ -14,23 +13,8 @@ import type {
 } from "@getpaseo/protocol/messages";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Alert } from "@/components/ui/alert";
-import { ExternalLink } from "@/components/ui/external-link";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import { Switch } from "@/components/ui/switch";
-import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
 import { ProjectEditSheet } from "@/components/project-edit-sheet";
-import { EditingTextInput as TextInput } from "@/components/ui/text-input";
-import { SettingsTextAreaCard } from "@/components/settings-textarea";
-import { SettingsGroup } from "@/components/settings/headings/settings-group";
-import { SettingsSection } from "@/components/settings/headings/settings-section";
-import { settingsStyles } from "@/styles/settings";
 import { useProjects } from "@/hooks/use-projects";
 import type { ProjectEditFormSnapshot } from "@/projects/edit-form";
 import { useProjectIcons } from "@/projects/icons";
@@ -42,7 +26,6 @@ import { confirmDialog } from "@/utils/confirm-dialog";
 import {
   applyDraftToConfig,
   configToDraft,
-  METADATA_PROMPT_KEYS,
   type LifecycleOriginalKind,
   type MetadataPromptKey,
   type ProjectConfigDraft,
@@ -54,40 +37,15 @@ import {
   type ProjectHostEntry,
   type ProjectSummary,
 } from "@/utils/projects";
-
-const SCRIPT_SERVICE_TYPE = "service";
+import { ProjectWorktreeSection } from "./settings/project/worktree-section";
+import { ProjectMetadataSection } from "./settings/project/metadata-section";
+import { ProjectScriptsSection } from "./settings/project/scripts-section";
+import { ScriptEditModal } from "./settings/project/script-edit-modal";
+import { validateScript } from "./settings/project/script-validation";
+import { ProjectConfigSaveActions } from "./settings/project/save-actions";
+import { ProjectConfigReadFailureCallout } from "./settings/project/read-failure-callout";
 
 const ICON_SIZE = 14;
-
-interface MetadataPromptField {
-  titleKey: string;
-  placeholderKey: string;
-  sectionTestID: string;
-  inputTestID: string;
-}
-
-const METADATA_PROMPT_FIELDS: Record<MetadataPromptKey, MetadataPromptField> = {
-  branchName: {
-    titleKey: "settings.project.metadata.branchName",
-    placeholderKey: "settings.project.metadata.branchNamePlaceholder",
-    sectionTestID: "metadata-prompt-branch-name-section",
-    inputTestID: "metadata-prompt-branch-name-input",
-  },
-  commitMessage: {
-    titleKey: "settings.project.metadata.commitMessage",
-    placeholderKey: "settings.project.metadata.commitMessagePlaceholder",
-    sectionTestID: "metadata-prompt-commit-message-section",
-    inputTestID: "metadata-prompt-commit-message-input",
-  },
-  pullRequest: {
-    titleKey: "settings.project.metadata.pullRequest",
-    placeholderKey: "settings.project.metadata.pullRequestPlaceholder",
-    sectionTestID: "metadata-prompt-pull-request-section",
-    inputTestID: "metadata-prompt-pull-request-input",
-  },
-};
-
-const WORKTREE_DOCS_URL = "https://paseo.sh/docs/worktrees";
 
 type ReadProjectConfigData = Awaited<ReturnType<DaemonClient["readProjectConfig"]>>;
 
@@ -360,11 +318,19 @@ function renderContent({
   }
 
   if (readQuery.isError) {
-    return <ReadFailureCallout kind="transport" error={readQuery.error} onReload={onReload} />;
+    return (
+      <ProjectConfigReadFailureCallout
+        kind="transport"
+        error={readQuery.error}
+        onReload={onReload}
+      />
+    );
   }
 
   if (readError) {
-    return <ReadFailureCallout kind={readError.code} error={null} onReload={onReload} />;
+    return (
+      <ProjectConfigReadFailureCallout kind={readError.code} error={null} onReload={onReload} />
+    );
   }
 
   if (isHostGone) {
@@ -402,70 +368,6 @@ function renderContent({
 function revisionToKey(revision: PaseoConfigRevision | null): string {
   if (!revision) return "none";
   return `${revision.mtimeMs}-${revision.size}`;
-}
-
-interface ReadFailureCalloutProps {
-  kind: "transport" | ProjectConfigRpcError["code"];
-  error: unknown;
-  onReload: () => void;
-}
-
-function ReadFailureCallout({ kind, error, onReload }: ReadFailureCalloutProps) {
-  const { t } = useTranslation();
-  const { testID, title, description } = resolveReadFailureCopy({
-    kind,
-    error,
-    t,
-  });
-  return (
-    <View style={styles.errorBlock}>
-      <Alert size="md" testID={testID} variant="error" title={title} description={description}>
-        <Button testID={`${testID}-action-0`} onPress={onReload} variant="outline" size="sm">
-          {t("settings.project.actions.reload")}
-        </Button>
-      </Alert>
-    </View>
-  );
-}
-
-function resolveReadFailureCopy(input: {
-  kind: ReadFailureCalloutProps["kind"];
-  error: unknown;
-  t: TFunction;
-}): { testID: string; title: string; description: string } {
-  if (input.kind === "invalid_project_config") {
-    return {
-      testID: "invalid-callout",
-      title: input.t("settings.project.readFailures.invalidTitle"),
-      description: input.t("settings.project.readFailures.invalidDescription"),
-    };
-  }
-  if (input.kind === "project_not_found") {
-    return {
-      testID: "project-not-found-callout",
-      title: input.t("settings.project.readFailures.missingTitle"),
-      description: input.t("settings.project.readFailures.missingSingleHost"),
-    };
-  }
-  if (input.kind === "transport") {
-    const detail = errorToDetail(input.error);
-    return {
-      testID: "read-transport-callout",
-      title: input.t("settings.project.readFailures.transportTitle"),
-      description: detail ?? input.t("settings.project.readFailures.transportFallback"),
-    };
-  }
-  return {
-    testID: "read-failed-callout",
-    title: input.t("settings.project.readFailures.failedTitle"),
-    description: input.t("settings.project.readFailures.failedDescription"),
-  };
-}
-
-function errorToDetail(error: unknown): string | null {
-  if (error instanceof Error && error.message.length > 0) return error.message;
-  if (typeof error === "string" && error.length > 0) return error;
-  return null;
 }
 
 interface ProjectConfigFormProps {
@@ -645,200 +547,35 @@ function ProjectConfigForm({
     [draft.scripts, t],
   );
 
-  const scriptsTrailing = useMemo(
-    () => (
-      <Pressable
-        onPress={handleAddScript}
-        hitSlop={8}
-        style={settingsStyles.sectionHeaderLink}
-        accessibilityRole="button"
-        accessibilityLabel={t("settings.project.scripts.actions.add")}
-        testID="scripts-add-button"
-      >
-        <Plus size={ICON_SIZE} color={styles.iconColor.color} />
-      </Pressable>
-    ),
-    [handleAddScript, t],
-  );
-
-  const setupDocsLink = useMemo(
-    () => (
-      <ExternalLink
-        href={WORKTREE_DOCS_URL}
-        label={t("settings.project.worktree.docs")}
-        tooltip={t("settings.project.worktree.docsTooltip")}
-        testID="worktree-setup-docs-link"
-      />
-    ),
-    [t],
-  );
-  const teardownDocsLink = useMemo(
-    () => (
-      <ExternalLink
-        href={WORKTREE_DOCS_URL}
-        label={t("settings.project.worktree.docs")}
-        tooltip={t("settings.project.worktree.docsTooltip")}
-        testID="worktree-teardown-docs-link"
-      />
-    ),
-    [t],
-  );
-
-  const isStale = writeError?.code === "stale_project_config";
-  const isWriteFailed = writeError?.code === "write_failed";
-  const saveDisabled = saveMutation.isPending || isStale || hasInvalidScripts;
-
   return (
     <View>
-      <SettingsGroup
-        title={t("settings.project.worktree.title")}
-        info={t("settings.project.worktree.info")}
-        testID="worktree-group"
-      >
-        <SettingsSection
-          title={t("settings.project.worktree.setup")}
-          testID="worktree-setup-section"
-          trailing={setupDocsLink}
-        >
-          {hasUncommittedWorktreeSetupChanges ? (
-            <Alert
-              size="sm"
-              variant="warning"
-              title={t("settings.project.worktree.uncommittedTitle")}
-              description={t("settings.project.worktree.uncommittedDescription")}
-            />
-          ) : null}
-          <SettingsTextAreaCard
-            testID="worktree-setup-input"
-            accessibilityLabel={t("settings.project.worktree.setupAccessibility")}
-            value={draft.setupText}
-            onChangeText={handleSetupChange}
-            placeholder="npm install"
-          />
-        </SettingsSection>
+      <ProjectWorktreeSection
+        setupText={draft.setupText}
+        teardownText={draft.teardownText}
+        hasUncommittedWorktreeSetupChanges={hasUncommittedWorktreeSetupChanges}
+        onSetupChange={handleSetupChange}
+        onTeardownChange={handleTeardownChange}
+      />
 
-        <SettingsSection
-          title={t("settings.project.worktree.teardown")}
-          testID="worktree-teardown-section"
-          trailing={teardownDocsLink}
-          flush
-        >
-          <SettingsTextAreaCard
-            testID="worktree-teardown-input"
-            accessibilityLabel={t("settings.project.worktree.teardownAccessibility")}
-            value={draft.teardownText}
-            onChangeText={handleTeardownChange}
-            placeholder="docker compose down"
-          />
-        </SettingsSection>
-      </SettingsGroup>
+      <ProjectScriptsSection
+        scripts={draft.scripts}
+        onAdd={handleAddScript}
+        onEdit={handleEditScript}
+        onRemove={handleRemoveScript}
+      />
 
-      <SettingsGroup
-        title={t("settings.project.scripts.title")}
-        info={t("settings.project.scripts.info")}
-        trailing={scriptsTrailing}
-        testID="scripts-group"
-      >
-        <View style={settingsStyles.card} testID="scripts-list">
-          {draft.scripts.length === 0 ? (
-            <View style={settingsStyles.row}>
-              <Text style={styles.emptyScripts}>{t("settings.project.scripts.empty")}</Text>
-            </View>
-          ) : (
-            draft.scripts.map((script, index) => (
-              <ScriptRow
-                key={script.id}
-                script={script}
-                isFirst={index === 0}
-                onEdit={handleEditScript}
-                onRemove={handleRemoveScript}
-              />
-            ))
-          )}
-        </View>
-      </SettingsGroup>
+      <ProjectMetadataSection
+        metadataPrompts={draft.metadataPrompts}
+        onChange={handleMetadataPromptChange}
+      />
 
-      <SettingsGroup
-        title={t("settings.project.metadata.title")}
-        info={t("settings.project.metadata.info")}
-        testID="metadata-group"
-      >
-        {METADATA_PROMPT_KEYS.map((key, index) => (
-          <MetadataPromptSection
-            key={key}
-            promptKey={key}
-            value={draft.metadataPrompts[key]}
-            onChange={handleMetadataPromptChange}
-            flush={index === METADATA_PROMPT_KEYS.length - 1}
-          />
-        ))}
-      </SettingsGroup>
-
-      {isStale ? (
-        <View style={styles.calloutWrap}>
-          <Alert
-            size="sm"
-            testID="stale-callout"
-            variant="error"
-            title={t("settings.project.writeFailures.staleTitle")}
-            description={t("settings.project.writeFailures.staleDescription")}
-          >
-            <Button
-              testID="stale-callout-action-0"
-              onPress={handleReload}
-              variant="outline"
-              size="sm"
-            >
-              {t("settings.project.actions.reload")}
-            </Button>
-          </Alert>
-        </View>
-      ) : null}
-
-      {isWriteFailed ? (
-        <View style={styles.calloutWrap}>
-          <Alert
-            size="sm"
-            testID="write-failed-callout"
-            variant="error"
-            title={t("settings.project.writeFailures.failedTitle")}
-            description={t("settings.project.writeFailures.failedDescription")}
-          >
-            <Button
-              testID="write-failed-callout-action-0"
-              onPress={handleSave}
-              variant="outline"
-              size="sm"
-            >
-              {t("settings.project.actions.tryAgain")}
-            </Button>
-            <Button
-              testID="write-failed-callout-action-1"
-              onPress={handleReload}
-              variant="outline"
-              size="sm"
-            >
-              {t("settings.project.actions.reload")}
-            </Button>
-          </Alert>
-        </View>
-      ) : null}
-
-      <View style={styles.footer}>
-        <Button
-          testID="save-button"
-          accessibilityLabel={t("settings.project.actions.save")}
-          variant="default"
-          size="md"
-          disabled={saveDisabled}
-          loading={saveMutation.isPending}
-          onPress={handleSave}
-        >
-          {saveMutation.isPending
-            ? t("settings.project.actions.saving")
-            : t("settings.project.actions.save")}
-        </Button>
-      </View>
+      <ProjectConfigSaveActions
+        writeError={writeError}
+        isPending={saveMutation.isPending}
+        hasInvalidScripts={hasInvalidScripts}
+        onSave={handleSave}
+        onReload={handleReload}
+      />
 
       {editingScript ? (
         <ScriptEditModal
@@ -874,246 +611,6 @@ function ProjectTitleIcon({
       size={28}
       textStyle={styles.titleIconFallbackText}
     />
-  );
-}
-
-interface MetadataPromptSectionProps {
-  promptKey: MetadataPromptKey;
-  value: string;
-  onChange: (key: MetadataPromptKey, text: string) => void;
-  flush?: boolean;
-}
-
-function MetadataPromptSection({ promptKey, value, onChange, flush }: MetadataPromptSectionProps) {
-  const { t } = useTranslation();
-  const meta = METADATA_PROMPT_FIELDS[promptKey];
-  const title = t(meta.titleKey);
-  const handleChange = useCallback(
-    (text: string) => onChange(promptKey, text),
-    [onChange, promptKey],
-  );
-  return (
-    <SettingsSection title={title} testID={meta.sectionTestID} flush={flush}>
-      <SettingsTextAreaCard
-        testID={meta.inputTestID}
-        accessibilityLabel={title}
-        value={value}
-        onChangeText={handleChange}
-        placeholder={t(meta.placeholderKey)}
-      />
-    </SettingsSection>
-  );
-}
-
-interface ScriptRowProps {
-  script: ProjectScriptDraft;
-  isFirst: boolean;
-  onEdit: (script: ProjectScriptDraft) => void;
-  onRemove: (script: ProjectScriptDraft) => void;
-}
-
-function ScriptRow({ script, isFirst, onEdit, onRemove }: ScriptRowProps) {
-  const { t } = useTranslation();
-  const handleEdit = useCallback(() => onEdit(script), [onEdit, script]);
-  const handleRemove = useCallback(() => onRemove(script), [onRemove, script]);
-  const rowStyle = isFirst ? styles.scriptRow : styles.scriptRowWithBorder;
-
-  return (
-    <View style={rowStyle} testID={`script-row-${script.id}`}>
-      <Pressable style={styles.scriptRowMain} onPress={handleEdit}>
-        <Text style={settingsStyles.rowTitle} numberOfLines={1}>
-          {script.name || t("settings.project.scripts.untitled")}
-        </Text>
-        <Text style={settingsStyles.rowHint} numberOfLines={1}>
-          {scriptHint(script, t)}
-        </Text>
-      </Pressable>
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          accessibilityLabel={t("settings.project.scripts.menuAccessibility")}
-          testID={`script-row-menu-${script.id}`}
-          style={styles.scriptKebab}
-        >
-          <MoreVertical size={ICON_SIZE} color={styles.chevronColor.color} />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" minWidth={160}>
-          <DropdownMenuItem testID={`script-action-${script.id}-edit`} onSelect={handleEdit}>
-            {t("settings.project.scripts.actions.edit")}
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            testID={`script-action-${script.id}-remove`}
-            destructive
-            onSelect={handleRemove}
-          >
-            {t("settings.project.scripts.actions.remove")}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </View>
-  );
-}
-
-function scriptHint(script: ProjectScriptDraft, t: TFunction): string {
-  const pieces: string[] = [];
-  if (script.type) pieces.push(script.type);
-  if (script.portText) pieces.push(t("settings.project.scripts.port", { port: script.portText }));
-  if (script.commandText) pieces.push(script.commandText.split("\n")[0] ?? "");
-  return pieces.join(" · ");
-}
-
-interface ScriptValidation {
-  hasErrors: boolean;
-  nameError: string | null;
-  commandError: string | null;
-}
-
-function validateScript(script: ProjectScriptDraft, t: TFunction): ScriptValidation {
-  const nameError =
-    script.name.trim().length === 0 ? t("settings.project.scripts.nameRequired") : null;
-  const commandError =
-    script.commandText.trim().length === 0 ? t("settings.project.scripts.commandRequired") : null;
-  return {
-    hasErrors: Boolean(nameError || commandError),
-    nameError,
-    commandError,
-  };
-}
-
-interface ScriptEditModalProps {
-  script: ProjectScriptDraft;
-  onChange: (next: ProjectScriptDraft) => void;
-  onCancel: () => void;
-  onSave: () => void;
-}
-
-interface ScriptFieldsTouched {
-  name: boolean;
-  command: boolean;
-}
-
-const ALL_TOUCHED: ScriptFieldsTouched = { name: true, command: true };
-const NONE_TOUCHED: ScriptFieldsTouched = { name: false, command: false };
-
-function ScriptEditModal({ script, onChange, onCancel, onSave }: ScriptEditModalProps) {
-  const { t } = useTranslation();
-  const [touched, setTouched] = useState<ScriptFieldsTouched>(NONE_TOUCHED);
-
-  useEffect(() => {
-    setTouched(NONE_TOUCHED);
-  }, [script.id]);
-
-  const markTouched = useCallback((field: keyof ScriptFieldsTouched) => {
-    setTouched((prev) => (prev[field] ? prev : { ...prev, [field]: true }));
-  }, []);
-
-  const handleNameChange = useCallback(
-    (text: string) => onChange({ ...script, name: text }),
-    [onChange, script],
-  );
-  const handleCommandChange = useCallback(
-    (text: string) => onChange({ ...script, commandText: text }),
-    [onChange, script],
-  );
-  const handleServiceToggle = useCallback(
-    (next: boolean) => onChange({ ...script, type: next ? SCRIPT_SERVICE_TYPE : "" }),
-    [onChange, script],
-  );
-
-  const handleNameBlur = useCallback(() => markTouched("name"), [markTouched]);
-  const handleCommandBlur = useCallback(() => markTouched("command"), [markTouched]);
-
-  const validation = validateScript(script, t);
-
-  const handleSavePress = useCallback(() => {
-    if (validation.hasErrors) {
-      setTouched(ALL_TOUCHED);
-      return;
-    }
-    onSave();
-  }, [validation.hasErrors, onSave]);
-
-  const showNameError = touched.name && validation.nameError;
-  const showCommandError = touched.command && validation.commandError;
-  const isService = script.type === SCRIPT_SERVICE_TYPE;
-  const sheetHeader = useMemo<SheetHeader>(
-    () => ({
-      title: script.name
-        ? t("settings.project.scripts.editScript", { name: script.name })
-        : t("settings.project.scripts.newScript"),
-    }),
-    [script.name, t],
-  );
-
-  return (
-    <AdaptiveModalSheet
-      visible
-      header={sheetHeader}
-      onClose={onCancel}
-      testID="script-edit-modal"
-      desktopMaxWidth={560}
-    >
-      <View style={styles.modalSection}>
-        <Text style={styles.modalLabel}>{t("settings.project.scripts.name")}</Text>
-        <TextInput
-          testID="script-edit-name"
-          accessibilityLabel={t("settings.project.scripts.nameAccessibility")}
-          initialValue={script.name}
-          onChangeText={handleNameChange}
-          onBlur={handleNameBlur}
-          placeholder="dev"
-          placeholderTextColor={styles.placeholderColor.color}
-          style={styles.modalInput}
-        />
-        {showNameError ? (
-          <Text testID="script-edit-name-error" style={styles.fieldError}>
-            {validation.nameError}
-          </Text>
-        ) : null}
-      </View>
-      <View style={styles.modalSection}>
-        <Text style={styles.modalLabel}>{t("settings.project.scripts.command")}</Text>
-        <TextInput
-          testID="script-edit-command"
-          accessibilityLabel={t("settings.project.scripts.commandAccessibility")}
-          multiline
-          initialValue={script.commandText}
-          onChangeText={handleCommandChange}
-          onBlur={handleCommandBlur}
-          placeholder="npm run dev"
-          placeholderTextColor={styles.placeholderColor.color}
-          style={styles.modalMultilineInput}
-        />
-        {showCommandError ? (
-          <Text testID="script-edit-command-error" style={styles.fieldError}>
-            {validation.commandError}
-          </Text>
-        ) : null}
-      </View>
-      <View style={styles.modalSection}>
-        <View style={styles.serviceToggleRow}>
-          <View style={styles.serviceToggleText}>
-            <Text style={styles.serviceToggleLabel}>
-              {t("settings.project.scripts.runAsService")}
-            </Text>
-            <Text style={styles.modalHint}>{t("settings.project.scripts.serviceHint")}</Text>
-          </View>
-          <Switch
-            value={isService}
-            onValueChange={handleServiceToggle}
-            accessibilityLabel={t("settings.project.scripts.runAsService")}
-            testID="script-edit-service-toggle"
-          />
-        </View>
-      </View>
-      <View style={styles.modalFooter}>
-        <Button onPress={onCancel} variant="ghost" size="md" testID="script-edit-cancel">
-          {t("settings.project.actions.cancel")}
-        </Button>
-        <Button onPress={handleSavePress} variant="default" size="md" testID="script-edit-save">
-          {t("settings.project.actions.save")}
-        </Button>
-      </View>
-    </AdaptiveModalSheet>
   );
 }
 
@@ -1166,109 +663,6 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "center",
     padding: theme.spacing[6],
-  },
-  errorBlock: {
-    marginTop: theme.spacing[2],
-  },
-  emptyScripts: {
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.base,
-  },
-  scriptRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: theme.spacing[4],
-    paddingHorizontal: theme.spacing[4],
-  },
-  scriptRowWithBorder: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: theme.spacing[4],
-    paddingHorizontal: theme.spacing[4],
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
-  },
-  scriptRowMain: {
-    flex: 1,
-    minWidth: 0,
-    gap: theme.spacing[1],
-  },
-  scriptKebab: {
-    padding: theme.spacing[1],
-  },
-  calloutWrap: {
-    marginTop: theme.spacing[3],
-  },
-  footer: {
-    marginTop: theme.spacing[4],
-    flexDirection: "row",
-    justifyContent: "flex-end",
-  },
-  modalSection: {
-    gap: theme.spacing[2],
-  },
-  modalLabel: {
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
-  },
-  modalInput: {
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
-    paddingVertical: theme.spacing[2],
-    paddingHorizontal: theme.spacing[3],
-    borderRadius: theme.borderRadius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface2,
-  },
-  modalMultilineInput: {
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
-    paddingVertical: theme.spacing[2],
-    paddingHorizontal: theme.spacing[3],
-    borderRadius: theme.borderRadius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface2,
-    minHeight: 100,
-    textAlignVertical: "top",
-  },
-  modalFooter: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: theme.spacing[2],
-    marginTop: theme.spacing[2],
-  },
-  fieldError: {
-    color: theme.colors.palette.red[300],
-    fontSize: theme.fontSize.sm,
-  },
-  serviceToggleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[3],
-  },
-  serviceToggleText: {
-    flex: 1,
-    minWidth: 0,
-    gap: theme.spacing[1],
-  },
-  serviceToggleLabel: {
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
-    fontWeight: theme.fontWeight.medium,
-  },
-  modalHint: {
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
-  },
-  placeholderColor: {
-    color: theme.colors.foregroundMuted,
-  },
-  chevronColor: {
-    color: theme.colors.foregroundMuted,
   },
   spinnerColor: {
     color: theme.colors.foregroundMuted,

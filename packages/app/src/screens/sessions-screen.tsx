@@ -1,9 +1,8 @@
-import { useMemo, useState, useCallback, useEffect, type ReactElement } from "react";
+import { useMemo, useState, useCallback, useEffect } from "react";
 import { View, Text } from "react-native";
 import { useIsFocused } from "expo-router/react-navigation";
 import { router } from "expo-router";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { ChevronLeft, Import, Bot, Layers } from "lucide-react-native";
 import { OmpSessionsView } from "@/desktop/omp";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -14,44 +13,22 @@ import { AgentList } from "@/components/agent-list";
 import { SearchField } from "@/components/ui/search-field";
 import { HostFilter } from "@/components/hosts/host-filter";
 import { ALL_HOSTS_OPTION_ID } from "@/components/hosts/host-picker";
-import { type AgentHistoryHostError, useAgentHistory } from "@/hooks/use-agent-history";
+import { useAgentHistory } from "@/hooks/use-agent-history";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useImportSession } from "@/hooks/use-import-session";
 import { useHosts } from "@/runtime/host-runtime";
 import { buildOpenProjectRoute } from "@/utils/host-routes";
+import { SessionViewModeTabs, type SessionViewMode } from "./sessions/view-mode-tabs";
+import {
+  SessionHostErrorsBanner,
+  SessionsEmptyState,
+  SessionsListFooter,
+} from "./sessions/list-feedback";
 
 /** Long enough that a typed word is one request, short enough to feel live. */
 const SEARCH_DEBOUNCE_MS = 200;
 
 const sessionsHostOptionTestID = (serverId: string) => `sessions-host-filter-item-${serverId}`;
-
-/** Which session list the screen is showing. */
-type SessionViewMode = "paseo" | "omp";
-
-/**
- * A host that failed while others answered. Without this the list silently
- * under-reports, and under a query "No sessions match" becomes a claim the app
- * has no basis for.
- */
-function SessionHostErrorsBanner({
-  errors,
-  t,
-}: {
-  errors: AgentHistoryHostError[];
-  t: TFunction;
-}): ReactElement {
-  return (
-    <View style={styles.errorsBannerWrap}>
-      <View style={styles.errorsBanner} testID="sessions-host-errors">
-        {errors.map((error) => (
-          <Text key={error.serverId} style={styles.errorsBannerText}>
-            {t("sessions.hostLoadFailed", { host: error.serverName })}
-          </Text>
-        ))}
-      </View>
-    </View>
-  );
-}
 
 /** An empty list means something different once a query is narrowing it. */
 function resolveEmptyText(input: {
@@ -72,74 +49,6 @@ export function SessionsScreen() {
   }
 
   return <SessionsScreenContent />;
-}
-
-/** The switcher between the Paseo app's own sessions and the OMP CLI's sessions. */
-function SessionViewModeTabs({
-  activeViewMode,
-  onSelectViewMode,
-}: {
-  activeViewMode: SessionViewMode;
-  onSelectViewMode: (mode: SessionViewMode) => void;
-}): ReactElement {
-  const handleSelectPaseo = useCallback(() => onSelectViewMode("paseo"), [onSelectViewMode]);
-  const handleSelectOmp = useCallback(() => onSelectViewMode("omp"), [onSelectViewMode]);
-
-  return (
-    <View style={styles.viewModeTabs}>
-      <Button
-        variant={activeViewMode === "paseo" ? "secondary" : "ghost"}
-        size="xs"
-        leftIcon={Layers}
-        onPress={handleSelectPaseo}
-      >
-        Paseo Sessions
-      </Button>
-      <Button
-        variant={activeViewMode === "omp" ? "secondary" : "ghost"}
-        size="xs"
-        leftIcon={Bot}
-        onPress={handleSelectOmp}
-      >
-        OMP CLI Sessions
-      </Button>
-    </View>
-  );
-}
-
-/** The empty state a search-narrowed list shows, with the way out of the query. */
-function SessionsEmptyState({
-  emptyText,
-  isSearching,
-  onClearSearch,
-  onBack,
-  onImport,
-  t,
-}: {
-  emptyText: string;
-  isSearching: boolean;
-  onClearSearch: () => void;
-  onBack: () => void;
-  onImport: () => void;
-  t: TFunction;
-}): ReactElement {
-  return (
-    <View style={styles.emptyContainer} testID="sessions-empty">
-      <Text style={styles.emptyText}>{emptyText}</Text>
-      {isSearching ? (
-        <Button variant="ghost" onPress={onClearSearch}>
-          {t("sessions.actions.clearSearch")}
-        </Button>
-      ) : (
-        <Button variant="ghost" leftIcon={ChevronLeft} onPress={onBack}>
-          Back
-        </Button>
-      )}
-      <Button variant="ghost" leftIcon={Import} onPress={onImport}>
-        {t("importSession.title")}
-      </Button>
-    </View>
-  );
 }
 
 function SessionsScreenContent() {
@@ -211,24 +120,17 @@ function SessionsScreenContent() {
   }, [openImportSession]);
 
   const listFooterComponent = useMemo(() => {
-    // COMPAT(historyPagination): old daemons return a truncated relevance page.
-    // Added in v0.8.0; remove after 2027-03-16 once the daemon floor supports search pagination.
-    if (isSearchTruncated) {
-      return (
-        <View style={styles.footer}>
-          <Text style={styles.footerHint}>{t("sessions.tooManyMatches")}</Text>
-        </View>
-      );
-    }
-    if (!hasMore) {
+    if (!isSearchTruncated && !hasMore) {
       return null;
     }
     return (
-      <View style={styles.footer}>
-        <Button variant="ghost" onPress={loadMore} disabled={isLoadingMore}>
-          {isLoadingMore ? "Loading..." : t("sessions.actions.loadMore")}
-        </Button>
-      </View>
+      <SessionsListFooter
+        hasMore={hasMore}
+        isLoadingMore={isLoadingMore}
+        isSearchTruncated={isSearchTruncated}
+        onLoadMore={loadMore}
+        t={t}
+      />
     );
   }, [hasMore, isLoadingMore, isSearchTruncated, loadMore, t]);
 
@@ -315,13 +217,6 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     backgroundColor: theme.colors.surface0,
   },
-  viewModeTabs: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[2],
-    paddingHorizontal: theme.spacing[4],
-    paddingBottom: theme.spacing[2],
-  },
   filterContainer: {
     flexDirection: "row",
     alignItems: "center",
@@ -347,31 +242,5 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-  },
-  footer: {
-    alignItems: "center",
-    paddingVertical: theme.spacing[4],
-  },
-  footerHint: {
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.base,
-  },
-  errorsBannerWrap: {
-    paddingHorizontal: {
-      xs: theme.spacing[3],
-      md: theme.spacing[6],
-    },
-    paddingTop: theme.spacing[3],
-  },
-  errorsBanner: {
-    borderWidth: theme.borderWidth[1],
-    borderColor: theme.colors.border,
-    borderRadius: theme.borderRadius.lg,
-    padding: theme.spacing[3],
-    gap: theme.spacing[1],
-  },
-  errorsBannerText: {
-    color: theme.colors.palette.red[300],
-    fontSize: theme.fontSize.sm,
   },
 }));

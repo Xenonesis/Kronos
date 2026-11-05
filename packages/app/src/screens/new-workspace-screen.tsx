@@ -6,23 +6,18 @@ import type { AgentSnapshotPayload, CreationSnapshot } from "@getpaseo/protocol/
 import { encodeImages } from "@/utils/encode-images";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { router } from "expo-router";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { createNameId } from "mnemonic-id";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Composer } from "@/composer";
-import { ComposerDock } from "@/composer/dock";
 import { useComposerEditingSession, useComposerFullscreen } from "@/composer/editing-session";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
 import {
   resolveComposerAttachmentSubmitFormat,
   splitComposerAttachmentsForSubmit,
 } from "@/composer/attachments/submit";
-import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
-import { MenuHeader } from "@/components/headers/menu-header";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useToast } from "@/contexts/toast-context";
 import { useAgentInputDraft } from "@/composer/draft/input-draft";
@@ -76,7 +71,6 @@ import { useProjectIcons } from "@/projects/icons";
 import type { ComposerAttachment } from "@/attachments/types";
 import { useDraftWorkspaceAttachmentScopeKey } from "@/attachments/workspace-attachments-store";
 import type { MessagePayload } from "@/composer/types";
-import type { UserComposerAttachment } from "@/attachments/types";
 import type { AgentAttachment, ForgeSearchItem } from "@getpaseo/protocol/messages";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { AgentProvider } from "@getpaseo/protocol/agent-types";
@@ -109,7 +103,9 @@ import {
 import { buildNewWorkspaceProjectIconTargets } from "./new-workspace/project-icon-targets";
 import { useNewWorkspaceProjectPicker } from "./new-workspace/project-picker";
 import { useNewWorkspaceForm } from "./new-workspace/form";
-import { ImportSessionButton } from "./new-workspace/import-session-button";
+import { NewWorkspaceLayout } from "./new-workspace/layout";
+import { NewWorkspaceChatComposer } from "./new-workspace/chat-composer";
+import { NewWorkspaceTerminalComposer } from "./new-workspace/terminal-composer";
 import { useImportSession } from "@/hooks/use-import-session";
 import {
   buildTerminalsQueryKey,
@@ -172,12 +168,6 @@ interface NewWorkspaceScreenProps {
   displayName?: string;
   draftId?: string;
 }
-
-// A terminal launch sends argv, not a message: there is nothing to attach and
-// no draft to persist, so the composer's attachment and draft seams are inert.
-const NO_TERMINAL_ATTACHMENTS: UserComposerAttachment[] = [];
-function noopChangeAttachments() {}
-function noopClearDraft() {}
 
 // Stable reference so the keyboard-action handler doesn't re-register each render.
 const PROJECT_PICK_ACTIONS: readonly KeyboardActionId[] = ["workspace.project.pick"];
@@ -1524,49 +1514,33 @@ export function NewWorkspaceScreen({
 
   const isComposerFullscreen = composerEditing.isFullscreen(isTerminalLaunch);
   const composer = isTerminalLaunch ? (
-    <Composer
+    <NewWorkspaceTerminalComposer
       key="terminal"
-      inputMode="terminal"
       editingSession={composerEditing.terminal}
       readOnly={!terminalTakesPrompt}
       placeholder={terminalPlaceholder}
       submitLabel={terminalSubmitLabel}
       agentId={draftKey}
       serverId={selectedServerId}
-      isPaneFocused={true}
       onSubmitMessage={handleSubmitTerminalLaunch}
-      allowEmptySubmit={true}
       submitButtonAccessibilityLabel={t("newWorkspace.launch.submit")}
-      submitButtonTestID="new-workspace-launch-submit"
       isSubmitLoading={isPending}
-      submitBehavior="preserve-and-lock"
-      blurOnSubmit={true}
       textSource={terminalTextSource}
       onChangeText={setTerminalPromptText}
       textReplacement={terminalTextReplacement}
-      attachments={NO_TERMINAL_ATTACHMENTS}
-      onChangeAttachments={noopChangeAttachments}
       cwd={selectedSourceDirectory ?? ""}
-      clearDraft={noopClearDraft}
       autoFocus={terminalTakesPrompt}
       autoFocusKey={launchFocusKey}
     />
   ) : (
-    <Composer
+    <NewWorkspaceChatComposer
       key="chat"
       editingSession={composerEditing.chat}
       agentId={draftKey}
       serverId={selectedServerId}
-      isPaneFocused={true}
       onSubmitMessage={handleSubmitNewWorkspace}
-      allowEmptySubmit={true}
       submitButtonAccessibilityLabel={t("newWorkspace.create")}
-      submitButtonTestID="workspace-create-submit"
-      submitIcon="return"
       isSubmitLoading={isPending}
-      waitForForgeAutoAttachOnSubmit
-      submitBehavior="preserve-and-lock"
-      blurOnSubmit={true}
       textSource={chatDraft.textSource}
       onChangeText={chatDraft.editText}
       textReplacement={chatDraft.textReplacement}
@@ -1577,7 +1551,6 @@ export function NewWorkspaceScreen({
       onForgeChangeRequestAutoAttach={handleForgeChangeRequestAutoAttach}
       cwd={selectedSourceDirectory ?? ""}
       clearDraft={handleClearDraft}
-      autoFocus
       autoFocusKey={launchFocusKey}
       commandDraft={composerState?.commandDraft}
       agentControls={agentControlsWithDisabled}
@@ -1621,80 +1594,11 @@ function useNewWorkspaceComposerEditing() {
   };
 }
 
-function NewWorkspaceLayout({
-  isCompact,
-  fullscreen,
-  title,
-  formStack,
-  onImportSession,
-  children,
-}: {
-  isCompact: boolean;
-  /** The composer covers the screen; the header leaves and the dock fills the content. */
-  fullscreen: boolean;
-  title: string;
-  formStack: ReactNode;
-  onImportSession: () => void;
-  children: ReactNode;
-}) {
-  // In the header on compact layouts, under the composer otherwise.
-  const importSessionButton = <ImportSessionButton compact={isCompact} onPress={onImportSession} />;
-  // Compact has no title: the fields name themselves. The free space above pushes them down onto
-  // the composer, where the thumb is.
-  const setupFields = isCompact ? (
-    <>
-      <View style={styles.compactSetupSpace} pointerEvents="none" />
-      {formStack}
-    </>
-  ) : (
-    <>
-      <View style={styles.composerTitleContainer} pointerEvents="none">
-        <Text style={styles.composerTitle}>{title}</Text>
-      </View>
-      {formStack}
-    </>
-  );
-  return (
-    <>
-      {fullscreen ? null : (
-        <MenuHeader borderless rightContent={isCompact ? importSessionButton : undefined} />
-      )}
-      <View style={styles.content}>
-        <TitlebarDragRegion />
-        <ComposerDock centered={!isCompact} fullscreen={fullscreen}>
-          {setupFields}
-          <>
-            {children}
-            {isCompact || fullscreen ? null : importSessionButton}
-          </>
-        </ComposerDock>
-      </View>
-    </>
-  );
-}
-
 const styles = StyleSheet.create((theme) => ({
   container: {
     flex: 1,
     backgroundColor: theme.colors.surface0,
     userSelect: "none",
-  },
-  content: {
-    position: "relative",
-    flex: 1,
-  },
-  compactSetupSpace: {
-    flex: 1,
-  },
-  composerTitleContainer: {
-    marginBottom: theme.spacing[8],
-    paddingLeft: theme.spacing[6],
-    paddingRight: theme.spacing[4],
-  },
-  composerTitle: {
-    fontSize: theme.fontSize["2xl"],
-    fontWeight: theme.fontWeight.normal,
-    color: theme.colors.foreground,
   },
   errorText: {
     fontSize: theme.fontSize.base,
