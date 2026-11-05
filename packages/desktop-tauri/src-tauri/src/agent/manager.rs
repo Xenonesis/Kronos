@@ -176,11 +176,27 @@ impl AgentManager {
     }
 
     pub fn set_agent_model(&self, id: &str, model: &str) -> Result<StoredAgentRecord, String> {
+        self.set_agent_model_with_provider(id, model, None)
+    }
+
+    pub fn set_agent_model_with_provider(
+        &self,
+        id: &str,
+        model: &str,
+        provider: Option<&str>,
+    ) -> Result<StoredAgentRecord, String> {
         let mut record = self
             .get_agent(id)
             .ok_or_else(|| format!("Agent {id} not found"))?;
         let mut config = record.config.unwrap_or_else(|| serde_json::json!({}));
+        let resolved_provider = provider
+            .map(|p| p.to_string())
+            .or_else(|| crate::agent::registry::resolve_provider_for_model(model).map(|p| p.to_string()));
         if let Some(obj) = config.as_object_mut() {
+            if let Some(ref p) = resolved_provider {
+                record.provider = p.clone();
+                obj.insert("provider".to_string(), serde_json::json!(p));
+            }
             if obj.get("model").and_then(Value::as_str) != Some(model) {
                 // Effort IDs are model-specific; a stale level can be invalid for the new model.
                 obj.remove("thinkingOptionId");

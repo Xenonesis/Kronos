@@ -170,6 +170,23 @@ pub fn is_command_available(cmd: &str) -> bool {
     resolve_command(cmd).is_some()
 }
 
+pub fn resolve_provider_for_model(model: &str) -> Option<&'static str> {
+    let lower = model.to_lowercase();
+    if lower.starts_with("opencode/") || lower.starts_with("omniroute/") {
+        Some("opencode")
+    } else if lower.starts_with("gpt-") || lower.starts_with("codex") {
+        Some("codex")
+    } else if lower.starts_with("claude") {
+        Some("claude")
+    } else if lower.starts_with("pi/") || lower.starts_with("pi-") {
+        Some("pi")
+    } else if lower.starts_with("omp/") || lower.contains('/') {
+        Some("omp")
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

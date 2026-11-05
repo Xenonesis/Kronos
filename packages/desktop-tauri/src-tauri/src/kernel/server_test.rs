@@ -1323,13 +1323,30 @@ mod tests {
         let ag_create_req = serde_json::json!({
             "type": "agent.create.request",
             "requestId": "req-ag-create-1",
-            "workspaceId": created_ws["id"].as_str().unwrap()
+            "workspaceId": created_ws["id"].as_str().unwrap(),
+            "model": "opencode/deepseek-v4.1-flash-free",
+            "initialPrompt": "Initialize test repo"
         });
         let ag_create_resp = dispatch_session_message(&ag_create_req).await;
         assert_eq!(ag_create_resp["type"], "agent.create.response");
         assert!(ag_create_resp["payload"]["error"].is_null());
         let created_ag = &ag_create_resp["payload"]["agent"];
         assert!(created_ag["id"].as_str().unwrap().starts_with("ag_"));
+        assert_eq!(created_ag["provider"], "opencode");
+        assert_eq!(created_ag["model"], "opencode/deepseek-v4.1-flash-free");
+        assert_eq!(ag_create_resp["payload"]["creation"]["phase"], "prompt_started");
+
+        // Verify the initial prompt was recorded to the timeline
+        let timeline_req = serde_json::json!({
+            "type": "fetch_agent_timeline_request",
+            "requestId": "req-tl-verify",
+            "agentId": created_ag["id"].as_str().unwrap()
+        });
+        let tl_res = dispatch_session_message(&timeline_req).await;
+        assert_eq!(tl_res["type"], "fetch_agent_timeline_response");
+        let entries = tl_res["payload"]["entries"].as_array().unwrap();
+        assert!(!entries.is_empty(), "Timeline entries must contain the initial prompt");
+        assert_eq!(entries[0]["item"]["text"], "Initialize test repo");
     }
 
     #[tokio::test]
@@ -1907,7 +1924,19 @@ vendor/bare-only
         });
         let verify_model_res = dispatch_session_message(&verify_model_req).await;
         assert_eq!(verify_model_res["payload"]["agent"]["model"], "claude-3-5-sonnet");
+        assert_eq!(verify_model_res["payload"]["agent"]["provider"], "claude");
 
+        let opencode_model_req = serde_json::json!({
+            "type": "set_agent_model_request",
+            "requestId": "req-model-opencode",
+            "agentId": agent_id,
+            "modelId": "opencode/deepseek-v4.1-flash-free"
+        });
+        let opencode_res = dispatch_session_message(&opencode_model_req).await;
+        assert_eq!(opencode_res["payload"]["accepted"], true);
+        let verify_opencode = dispatch_session_message(&verify_model_req).await;
+        assert_eq!(verify_opencode["payload"]["agent"]["provider"], "opencode");
+        assert_eq!(verify_opencode["payload"]["agent"]["model"], "opencode/deepseek-v4.1-flash-free");
         let cmd_req = serde_json::json!({
             "type": "list_commands_request",
             "requestId": "req-cmd-1",

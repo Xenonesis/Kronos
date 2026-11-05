@@ -1859,8 +1859,10 @@ mod tests {
 
         #[cfg(target_os = "windows")]
         unsafe {
-            use windows_sys::Win32::System::Console::{SetStdHandle, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+            use windows_sys::Win32::System::Console::{GetStdHandle, SetStdHandle, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
             use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+            let orig_out = GetStdHandle(STD_OUTPUT_HANDLE);
+            let orig_err = GetStdHandle(STD_ERROR_HANDLE);
             // Temporarily set handles to invalid to verify no panic
             SetStdHandle(STD_OUTPUT_HANDLE, INVALID_HANDLE_VALUE);
             SetStdHandle(STD_ERROR_HANDLE, INVALID_HANDLE_VALUE);
@@ -1869,6 +1871,9 @@ mod tests {
             // Sanitize again recovers valid NUL handle
             sanitize_windows_stdio();
             println!("Recovered handle via sanitize_windows_stdio");
+            // Restore original handles so the test runner can write results
+            SetStdHandle(STD_OUTPUT_HANDLE, orig_out);
+            SetStdHandle(STD_ERROR_HANDLE, orig_err);
         }
     }
 

@@ -2293,11 +2293,20 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             let payload = msg.get("payload");
             let source_config = msg.get("config")
                 .or_else(|| payload.and_then(|p| p.get("config")));
-            let provider = msg.get("provider")
+            let model = msg.get("model")
+                .or_else(|| payload.and_then(|p| p.get("model")))
+                .or_else(|| source_config.and_then(|c| c.get("model")))
+                .and_then(|v| v.as_str());
+            let raw_provider = msg.get("provider")
                 .or_else(|| payload.and_then(|p| p.get("provider")))
                 .or_else(|| source_config.and_then(|config| config.get("provider")))
-                .and_then(|v| v.as_str())
-                .unwrap_or("codex");
+                .and_then(|v| v.as_str());
+            let provider = match (raw_provider, model) {
+                (Some(p), _) if p != "codex" => p,
+                (_, Some(m)) => crate::agent::registry::resolve_provider_for_model(m).unwrap_or(raw_provider.unwrap_or("codex")),
+                (Some(p), _) => p,
+                _ => "codex",
+            };
             let cwd = msg.get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .or_else(|| source_config.and_then(|config| config.get("cwd")))
@@ -2311,9 +2320,6 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let model = msg.get("model")
-                .or_else(|| payload.and_then(|p| p.get("model")))
-                .and_then(|v| v.as_str());
 
             let mut config = source_config.cloned()
                 .unwrap_or_else(|| serde_json::json!({}));
@@ -2321,6 +2327,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             if let Some(m) = model {
                 if let Some(obj) = config.as_object_mut() {
                     obj.insert("model".to_string(), serde_json::json!(m));
+                    obj.insert("provider".to_string(), serde_json::json!(provider));
                 }
             }
             if let Some(thinking) = msg.get("thinkingOptionId")
@@ -2333,9 +2340,26 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .and_then(|v| v.as_str())
                 .unwrap_or(request_id);
 
+            let initial_prompt = msg.get("initialPrompt")
+                .or_else(|| payload.and_then(|p| p.get("initialPrompt")))
+                .and_then(|v| v.as_str());
+
             let mgr = get_agent_manager();
             match mgr.create_agent(provider, cwd, title, ws_id.clone(), Some(config)) {
                 Ok(record) => {
+                    let mut prompt_started = false;
+                    if let Some(prompt) = initial_prompt {
+                        if !prompt.trim().is_empty() {
+                            let _ = mgr.send_message(&record.id, prompt);
+                            prompt_started = true;
+                            let aid = record.id.clone();
+                            let p = prompt.to_string();
+                            tokio::spawn(async move {
+                                crate::agent::runner::run_agent_turn(aid, p).await;
+                            });
+                        }
+                    }
+                    crate::agent::runner::broadcast_agent_status_update(&record.id);
                     let snapshot = agent_record_to_snapshot(&record);
                     serde_json::json!({
                         "type": "agent.create.response",
@@ -2347,7 +2371,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                                 "kind": "agent",
                                 "idempotencyKey": idempotency_key,
                                 "revision": 1,
-                                "phase": "completed",
+                                "phase": if prompt_started { "prompt_started" } else { "completed" },
                                 "agentId": &record.id,
                                 "agent": snapshot.clone(),
                                 "workspaceId": ws_id,
@@ -2844,10 +2868,13 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("model")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let provider_opt = msg.get("provider")
+                .or_else(|| payload.and_then(|p| p.get("provider")))
+                .and_then(|v| v.as_str());
 
             let mgr = get_agent_manager();
             let res = if !agent_id.is_empty() && !model_id.is_empty() {
-                mgr.set_agent_model(agent_id, model_id)
+                mgr.set_agent_model_with_provider(agent_id, model_id, provider_opt)
             } else {
                 Err("Missing agentId or modelId".to_string())
             };

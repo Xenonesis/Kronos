@@ -248,7 +248,7 @@ impl ProviderOutput {
 fn provider_arguments(provider: &str, model: Option<&str>, thinking: Option<&str>, cwd: &Path, prompt: &str) -> Vec<String> {
     let mut args: Vec<String> = match provider {
         "omp" | "pi" => vec!["--mode".into(), "json".into(), "-p".into()],
-        "opencode" => vec!["run".into(), "--format".into(), "json".into(), "--thinking".into(), "--dir".into(), cwd.to_string_lossy().into_owned()],
+        "opencode" => vec!["run".into(), "--pure".into(), "--format".into(), "json".into(), "--thinking".into(), "--dir".into(), cwd.to_string_lossy().into_owned()],
         "codex" => vec!["exec".into(), "--json".into(), "-C".into(), cwd.to_string_lossy().into_owned()],
         "claude" => vec!["-p".into(), "--output-format".into(), "stream-json".into(), "--verbose".into(), "--include-partial-messages".into()],
         _ => Vec::new(),
@@ -259,7 +259,7 @@ fn provider_arguments(provider: &str, model: Option<&str>, thinking: Option<&str
     if let Some(thinking) = thinking.filter(|thinking| !thinking.is_empty()) {
         match provider {
             "omp" | "pi" => args.extend(["--thinking".into(), thinking.into()]),
-            "opencode" if thinking != "default" => args.extend(["--variant".into(), thinking.into()]),
+            "opencode" if matches!(thinking, "max" | "minimal" | "high") => args.extend(["--variant".into(), thinking.into()]),
             "codex" => args.extend(["-c".into(), format!("model_reasoning_effort={}", json!(thinking))]),
             "claude" => args.extend(["--effort".into(), thinking.into()]),
             _ => {}
@@ -296,6 +296,20 @@ pub async fn run_agent_turn(agent_id: String, prompt: String) {
     let _ = mgr.set_agent_status(&agent_id, AgentStatus::Running);
     broadcast_agent_status_update(&agent_id);
     broadcast_timeline_replacement(&agent_id);
+    let turn_id = format!(
+        "turn-{}-{}",
+        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_nanos(),
+        std::process::id()
+    );
+    let _ = get_provider_push_tx().send(json!({
+        "type": "session",
+        "message": {"type": "agent_stream", "payload": {
+            "agentId": agent_id,
+            "timestamp": crate::agent::types::now_iso(),
+            "event": {"type": "turn_started", "provider": agent.provider, "turnId": turn_id},
+        }}
+    }).to_string());
+
 
     let result = execute_provider_turn(&agent_id, &agent.provider, model, thinking, &cwd, &prompt).await;
     let (error, turn_id) = match result {

@@ -89,9 +89,12 @@ fn cli_thinking_options_use_native_arguments_and_default_variant_is_omitted() {
     }
     let args = provider_arguments("opencode", None, Some("default"), Path::new("."), "Prompt");
     assert!(args.iter().any(|arg| arg == "--thinking"));
+    assert!(args.iter().any(|arg| arg == "--pure"));
     assert!(!args.iter().any(|arg| arg == "--variant"));
-    let args = provider_arguments("opencode", None, Some("high"), Path::new("."), "Prompt");
-    assert!(args.windows(2).any(|pair| pair == ["--variant", "high"]));
+    let low_args = provider_arguments("opencode", None, Some("low"), Path::new("."), "Prompt");
+    assert!(!low_args.iter().any(|arg| arg == "--variant"));
+    let opencode_high = provider_arguments("opencode", None, Some("high"), Path::new("."), "Prompt");
+    assert!(opencode_high.windows(2).any(|pair| pair == ["--variant", "high"]));
     let args = provider_arguments("codex", None, Some("xhigh"), Path::new("."), "Prompt");
     assert!(args.windows(2).any(|pair| pair == ["-c", "model_reasoning_effort=\"xhigh\""]));
     let args = provider_arguments("claude", Some("model"), Some("high"), Path::new("."), "Prompt");
@@ -160,4 +163,33 @@ fn claude_single_block_final_frames_reconcile_streamed_content_indexes() {
     let suffix = output.ingest("claude", &json!({"type":"assistant","message":{"id":"m","content":[{"type":"text","text":"Answer"}]}}));
     assert_eq!(suffix[0]["text"], "swer");
     assert_eq!(output.rows.iter().map(|row| row.text.as_str()).collect::<Vec<_>>(), vec!["Think", "Answer"]);
+}
+
+#[test]
+fn test_provider_resolution_for_models() {
+    use crate::agent::registry::resolve_provider_for_model;
+    assert_eq!(resolve_provider_for_model("opencode/deepseek-v4.1-flash-free"), Some("opencode"));
+    assert_eq!(resolve_provider_for_model("omniroute/kc/moonshotai/kimi-k2.6"), Some("opencode"));
+    assert_eq!(resolve_provider_for_model("gpt-6-luna"), Some("codex"));
+    assert_eq!(resolve_provider_for_model("claude-opus-4-6"), Some("claude"));
+    assert_eq!(resolve_provider_for_model("pi/llama-3.3-70b"), Some("pi"));
+    assert_eq!(resolve_provider_for_model("omp/custom-model"), Some("omp"));
+    assert_eq!(resolve_provider_for_model("google-antigravity/gemini-3.8-flash"), Some("omp"));
+}
+
+#[test]
+fn test_set_agent_model_switches_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let manager = crate::agent::manager::AgentManager::new(dir.path());
+    let agent = manager.create_agent("codex", ".", None, None, None).unwrap();
+    assert_eq!(agent.provider, "codex");
+
+    let updated = manager.set_agent_model(&agent.id, "opencode/deepseek-v4.1-flash-free").unwrap();
+    assert_eq!(updated.provider, "opencode");
+    assert_eq!(updated.config.as_ref().unwrap()["provider"], "opencode");
+    assert_eq!(updated.config.as_ref().unwrap()["model"], "opencode/deepseek-v4.1-flash-free");
+
+    let updated2 = manager.set_agent_model(&agent.id, "gpt-6-luna").unwrap();
+    assert_eq!(updated2.provider, "codex");
+    assert_eq!(updated2.config.as_ref().unwrap()["provider"], "codex");
 }
