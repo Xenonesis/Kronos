@@ -476,34 +476,49 @@ function CockpitTerminal() {
   const [latencyMs, setLatencyMs] = useState(0);
 
   useEffect(() => {
-    let timeout: ReturnType<typeof setTimeout>;
-    let latencyTimer: ReturnType<typeof setInterval>;
+    let timeouts: number[] = [];
+    let latencyTimer: number | undefined;
+    let isCancelled = false;
 
-    const cycle = () => {
+    const runCycle = () => {
+      if (isCancelled) return;
       setVisibleLines([]);
-      let i = 0;
-      const showNext = () => {
-        if (i < TERMINAL_LINES.length) {
-          setVisibleLines((prev) => [...prev, TERMINAL_LINES[i].text]);
-          i++;
-          timeout = setTimeout(showNext, TERMINAL_LINES[i]?.delay ?? 0);
+
+      let accumulatedDelay = 0;
+      for (const line of TERMINAL_LINES) {
+        accumulatedDelay += line.delay;
+        const lineText = line.text;
+        const t = window.setTimeout(() => {
+          if (!isCancelled) {
+            setVisibleLines((prev) => [...prev, lineText]);
+          }
+        }, accumulatedDelay);
+        timeouts.push(t);
+      }
+
+      const cycleTimeout = window.setTimeout(() => {
+        if (!isCancelled) {
+          runCycle();
         }
-      };
-      showNext();
+      }, accumulatedDelay + 5000);
+      timeouts.push(cycleTimeout);
     };
 
-    cycle();
+    runCycle();
 
-    // Simulate latency measurement
-    latencyTimer = setInterval(() => {
-      setLatencyMs(Math.floor(Math.random() * 4) + 1);
+    latencyTimer = window.setInterval(() => {
+      if (!isCancelled) {
+        setLatencyMs(Math.floor(Math.random() * 4) + 1);
+      }
     }, 500);
 
-    timeout = setTimeout(cycle, 5000);
-
     return () => {
-      clearTimeout(timeout);
-      clearInterval(latencyTimer);
+      isCancelled = true;
+      timeouts.forEach((id) => window.clearTimeout(id));
+      timeouts = [];
+      if (latencyTimer !== undefined) {
+        window.clearInterval(latencyTimer);
+      }
     };
   }, []);
 
