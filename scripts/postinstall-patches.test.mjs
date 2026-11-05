@@ -12,7 +12,11 @@ const patchFile = `${packageName}+4.0.3.patch`;
 
 for (const platform of ["ios", "android"]) {
   test(`patched Markdown ships ${platform} props generated from its native specs`, () => {
-    const packageDir = path.resolve("packages/app/node_modules/react-native-enriched-markdown");
+    const packageDir = [
+      path.resolve("node_modules/react-native-enriched-markdown"),
+      path.resolve("packages/app/node_modules/react-native-enriched-markdown"),
+    ].find((dir) => existsSync(path.join(dir, "package.json")));
+    assert.ok(packageDir, "react-native-enriched-markdown must be installed");
     const output = mkdtempSync(path.join(tmpdir(), `markdown-${platform}-codegen-`));
     try {
       // includesGeneratedCode makes native builds use the shipped headers instead of

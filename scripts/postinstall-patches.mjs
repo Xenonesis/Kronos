@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join, relative } from "node:path";
+import { delimiter, isAbsolute, join, relative } from "node:path";
 
 // In CI we often install a single workspace (e.g. server/relay/website). Only apply patches
 // when the patched dependency is actually present.
@@ -17,6 +17,10 @@ const patchedPackages = [
   // Backport https://github.com/software-mansion/enriched-markdown/pull/924: preserve settled
   // Android measurements across parent clones. Remove those hunks when upgrading past
   // 1.2.0-nightly-20261019-926ef06f0; reconcile the other local patch hunks separately.
+  {
+    nodeModulesPath: "node_modules/react-native-enriched-markdown",
+    patchPrefix: "react-native-enriched-markdown+",
+  },
   {
     nodeModulesPath: "packages/app/node_modules/react-native-enriched-markdown",
     patchPrefix: "react-native-enriched-markdown+",
@@ -64,6 +68,10 @@ const patchedPackages = [
   },
   // Android resize: retain until upstream clears descendant geometry when the SVG canvas resizes.
   // The native pixel regression is included in the patch; preserve the separate transform hunks.
+  {
+    nodeModulesPath: "node_modules/react-native-svg",
+    patchPrefix: "react-native-svg+",
+  },
   {
     nodeModulesPath: "packages/app/node_modules/react-native-svg",
     patchPrefix: "react-native-svg+",
@@ -121,11 +129,28 @@ for (const [index, { nodeModulesPath, patchPrefix, cwd = "." }] of installedPack
 
 process.exit(failed ? 1 : 0);
 
+function findExecutable(command) {
+  if (isAbsolute(command)) {
+    return existsSync(command) ? command : null;
+  }
+  const pathDirs = (process.env.PATH || "").split(delimiter);
+  for (const dir of pathDirs) {
+    const candidate = join(dir, command);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 function applyPatches(cwd, files, index) {
   const tempPatchDir = join(".tmp", `postinstall-patches-${process.pid}-${index}`);
   mkdirSync(tempPatchDir, { recursive: true });
   for (const patchFile of files) {
     copyFileSync(join("patches", patchFile), join(tempPatchDir, patchFile));
+  }
+
+  if (!findExecutable(cmd)) {
+    console.error("postinstall-patches: patch-package failed to spawn: command not found");
+    return "unavailable";
   }
 
   let result;
