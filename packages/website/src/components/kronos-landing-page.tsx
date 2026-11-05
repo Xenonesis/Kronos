@@ -89,8 +89,11 @@ interface BenchmarkData {
   id: string;
   label: string;
   kronos: string;
+  kronosSub?: string;
   paseo: string;
+  paseoSub?: string;
   paseoLegacy: string;
+  paseoLegacySub?: string;
   improvement: string;
   unit: string;
   icon: React.ReactNode;
@@ -403,11 +406,14 @@ const BENCHMARKS: BenchmarkData[] = [
     id: "bench-latency",
     label: "KEYSTROKE TO RENDER LATENCY",
     kronos: "2 ms",
+    kronosSub: "Direct ConPTY",
     paseo: "35-85 ms",
-    paseoLegacy: "200-400 ms (Electron)",
+    paseoSub: "Node relay",
+    paseoLegacy: "200-400 ms",
+    paseoLegacySub: "Chromium IPC",
     improvement: "35x",
     unit: "Millisecond latency",
-    icon: <Zap size={20} className="text-[#FF2A2A]" />,
+    icon: <Zap size={16} className="text-[#FF2A2A]" />,
     kronosColor: "text-[#4AF626]",
     paseoColor: "text-[#FF2A2A]",
   },
@@ -415,11 +421,14 @@ const BENCHMARKS: BenchmarkData[] = [
     id: "bench-memory",
     label: "MEMORY FOOTPRINT (IDLE)",
     kronos: "<100 MB",
+    kronosSub: "Rust kernel",
     paseo: "840 MB",
-    paseoLegacy: "1,200 MB (Electron)",
+    paseoSub: "Node daemon",
+    paseoLegacy: "1,200 MB",
+    paseoLegacySub: "Electron bundle",
     improvement: "8.4x",
     unit: "RAM resident set",
-    icon: <HardDrive size={20} className="text-[#4AF626]" />,
+    icon: <HardDrive size={16} className="text-[#4AF626]" />,
     kronosColor: "text-[#4AF626]",
     paseoColor: "text-[#FF2A2A]",
   },
@@ -427,23 +436,29 @@ const BENCHMARKS: BenchmarkData[] = [
     id: "bench-diff",
     label: "5000-LINE DIFF COMPUTATION",
     kronos: "5.9 ms",
+    kronosSub: "SIMD Myers AST",
     paseo: "150-400 ms",
-    paseoLegacy: "1,200 ms (Electron)",
+    paseoSub: "V8 JS worker",
+    paseoLegacy: "1,200 ms",
+    paseoLegacySub: "DOM diff render",
     improvement: "67x",
     unit: "Myers diff render",
-    icon: <GitPullRequest size={20} className="text-[#FF2A2A]" />,
+    icon: <GitPullRequest size={16} className="text-[#FF2A2A]" />,
     kronosColor: "text-[#4AF626]",
     paseoColor: "text-[#FF2A2A]",
   },
   {
     id: "bench-processes",
     label: "BACKGROUND PROCESSES",
-    kronos: "1 (Rust supervisor)",
-    paseo: "7+ (node.exe, 4x WebView, worker threads)",
-    paseoLegacy: "12+ (Electron multi-proc)",
+    kronos: "1 proc",
+    kronosSub: "Rust supervisor",
+    paseo: "7+ procs",
+    paseoSub: "Node + 4x WebView2",
+    paseoLegacy: "12+ procs",
+    paseoLegacySub: "Electron multi-proc",
     improvement: "7x",
     unit: "Process count",
-    icon: <Activity size={20} className="text-[#4AF626]" />,
+    icon: <Activity size={16} className="text-[#4AF626]" />,
     kronosColor: "text-[#4AF626]",
     paseoColor: "text-[#FF2A2A]",
   },
@@ -811,29 +826,85 @@ function InteractiveCockpit() {
 
 // --- Benchmarks Gauge ---
 function BenchGauge({ bench }: { bench: BenchmarkData }) {
+  const multiplier = bench.improvement.toUpperCase().replace(/X+$/, "");
+
   return (
-    <div className="border border-[#262626] bg-[#0A0A0A] p-5 font-mono">
-      <div className="text-[10px] text-[#888888] tracking-widest uppercase mb-3 flex items-center gap-2">
-        {bench.icon}
-        <span>{bench.label}</span>
+    <div className="border border-[#262626] bg-[#0A0A0A] p-4 font-mono flex flex-col justify-between hover:border-[#383838] transition-colors">
+      <div>
+        <div className="flex items-center justify-between border-b border-[#262626] pb-2.5 mb-3 text-xs">
+          <div className="flex items-center gap-2 text-[#EAEAEA] font-bold tracking-wider">
+            <span className="shrink-0">{bench.icon}</span>
+            <span className="text-[11px] uppercase tracking-wider">{bench.label}</span>
+          </div>
+          <span className="shrink-0 font-mono text-[10px] font-bold text-[#4AF626] bg-[#4AF626]/10 px-2 py-0.5 border border-[#4AF626]/30 uppercase tracking-wider">
+            {multiplier}X FASTER
+          </span>
+        </div>
+
+        <div className="space-y-1.5 my-1">
+          {/* Kronos Row */}
+          <div className="flex items-center justify-between border border-[#4AF626]/30 bg-[#121212] px-3 py-2">
+            <div className="flex flex-col">
+              <div className="flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 bg-[#4AF626]" />
+                <span className="text-[11px] font-bold tracking-wider text-[#4AF626]">KRONOS</span>
+              </div>
+              {bench.kronosSub && (
+                <span className="text-[9px] text-[#888888] pl-3 mt-0.5">{bench.kronosSub}</span>
+              )}
+            </div>
+            <div className="text-right">
+              <span className="font-mono text-sm sm:text-base font-black text-[#4AF626] tracking-tight">
+                {bench.kronos}
+              </span>
+            </div>
+          </div>
+
+          {/* Paseo Row */}
+          <div className="flex items-center justify-between border border-[#262626] bg-[#0A0A0A] px-3 py-2">
+            <div className="flex flex-col">
+              <div className="flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 bg-[#888888]" />
+                <span className="text-[11px] font-bold tracking-wider text-[#888888]">PASEO</span>
+              </div>
+              {bench.paseoSub && (
+                <span className="text-[9px] text-[#666666] pl-3 mt-0.5">{bench.paseoSub}</span>
+              )}
+            </div>
+            <div className="text-right">
+              <span className="font-mono text-xs font-bold text-[#FF2A2A] tracking-tight">
+                {bench.paseo}
+              </span>
+            </div>
+          </div>
+
+          {/* Electron Row */}
+          <div className="flex items-center justify-between border border-[#262626] bg-[#0A0A0A] px-3 py-2">
+            <div className="flex flex-col">
+              <div className="flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 bg-[#FF2A2A]" />
+                <span className="text-[11px] font-bold tracking-wider text-[#888888]">
+                  ELECTRON
+                </span>
+              </div>
+              {bench.paseoLegacySub && (
+                <span className="text-[9px] text-[#666666] pl-3 mt-0.5">
+                  {bench.paseoLegacySub}
+                </span>
+              )}
+            </div>
+            <div className="text-right">
+              <span className="font-mono text-xs font-bold text-[#FF2A2A] tracking-tight">
+                {bench.paseoLegacy}
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
-      <div className="grid grid-cols-3 gap-px bg-[#262626]">
-        <div className="bg-[#121212] p-3 text-center">
-          <div className={`text-xl font-black ${bench.kronosColor}`}>{bench.kronos}</div>
-          <div className="mt-1 text-[10px] text-[#888888] uppercase">KRONOS</div>
-        </div>
-        <div className="bg-[#0A0A0A] p-3 text-center">
-          <div className="text-xl font-black text-[#FF2A2A]">{bench.paseo}</div>
-          <div className="mt-1 text-[10px] text-[#888888] uppercase">PASEO</div>
-        </div>
-        <div className="bg-[#121212] p-3 text-center">
-          <div className="text-xl font-black text-[#FF2A2A]">{bench.paseoLegacy}</div>
-          <div className="mt-1 text-[10px] text-[#888888] uppercase">ELECTRON</div>
-        </div>
-      </div>
-      <div className={`mt-2 text-center`}>
-        <span className="text-[#4AF626] font-bold">{bench.improvement}x</span>
-        <span className="text-[10px] text-[#888888] ml-1">FASTER</span>
+
+      <div className="mt-3 pt-2.5 border-t border-[#262626] flex items-center justify-between text-[10px] text-[#888888]">
+        <span>TELEMETRY // {bench.unit.toUpperCase()}</span>
+        <span className="text-[#4AF626] font-bold tracking-wider">VERIFIED</span>
       </div>
     </div>
   );

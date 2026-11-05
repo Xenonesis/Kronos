@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pageMeta } from "~/meta";
+import { pageMeta, SITE_ORIGIN } from "~/meta";
 import en from "./resources/en.json";
 import zhCN from "./resources/zh-CN.json";
 import { localeFromParam, localizePath, splitLocalePath } from "./locale";
@@ -41,16 +41,16 @@ describe("pageMeta", () => {
     });
 
     expect(links).toEqual([
-      { rel: "canonical", href: "https://paseo.sh/zh-CN/docs/cli" },
-      { rel: "alternate", hrefLang: "en", href: "https://paseo.sh/docs/cli" },
-      { rel: "alternate", hrefLang: "zh-CN", href: "https://paseo.sh/zh-CN/docs/cli" },
-      { rel: "alternate", hrefLang: "x-default", href: "https://paseo.sh/docs/cli" },
+      { rel: "canonical", href: `${SITE_ORIGIN}/zh-CN/docs/cli` },
+      { rel: "alternate", hrefLang: "en", href: `${SITE_ORIGIN}/docs/cli` },
+      { rel: "alternate", hrefLang: "zh-CN", href: `${SITE_ORIGIN}/zh-CN/docs/cli` },
+      { rel: "alternate", hrefLang: "x-default", href: `${SITE_ORIGIN}/docs/cli` },
     ]);
     expect(meta).toEqual(
       expect.arrayContaining([
         { property: "og:locale", content: "zh_CN" },
         { property: "og:locale:alternate", content: "en_US" },
-        { property: "og:url", content: "https://paseo.sh/zh-CN/docs/cli" },
+        { property: "og:url", content: `${SITE_ORIGIN}/zh-CN/docs/cli` },
         { name: "twitter:title", content: "命令行" },
       ]),
     );

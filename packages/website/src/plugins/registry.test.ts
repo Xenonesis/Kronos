@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
+import { SITE_ORIGIN } from "~/meta";
 import { getTranslator } from "~/i18n";
 import {
   addedAgo,
@@ -334,8 +335,8 @@ describe("plugin registry", () => {
       { cache: seededIndex(), waitUntil: () => undefined },
     );
     const xml = (await response?.text()) ?? "";
-    const english = "https://paseo.sh/plugins/acme/example";
-    const chinese = "https://paseo.sh/zh-CN/plugins/acme/example";
+    const english = `${SITE_ORIGIN}/plugins/acme/example`;
+    const chinese = `${SITE_ORIGIN}/zh-CN/plugins/acme/example`;
     for (const loc of [english, chinese]) {
       expect(xml).toContain(
         `<url><loc>${loc}</loc>` +
@@ -344,7 +345,7 @@ describe("plugin registry", () => {
           `<xhtml:link rel="alternate" hreflang="x-default" href="${english}"/></url>`,
       );
     }
-    expect(xml).toContain("<loc>https://paseo.sh/zh-CN/plugins/category/themes</loc>");
+    expect(xml).toContain(`<loc>${SITE_ORIGIN}/zh-CN/plugins/category/themes</loc>`);
   });
 
   it("strips the README title and quoted description that the page already shows", () => {
