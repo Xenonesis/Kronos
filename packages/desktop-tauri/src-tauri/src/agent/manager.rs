@@ -100,10 +100,24 @@ impl AgentManager {
         list
     }
 
-    pub fn send_message(&self, id: &str, text: &str) -> Result<(), String> {
-        let _record = self
+    pub fn send_message(&self, id: &str, text: &str) -> Result<StoredAgentRecord, String> {
+        let mut record = self
             .get_agent(id)
             .ok_or_else(|| format!("Agent {id} not found"))?;
+        if record.title.as_ref().is_none_or(|title| title.trim().is_empty()) {
+            if let Some(line) = text.lines().find(|line| !line.trim().is_empty()) {
+                // Match the server's provisional title: first content line, compact and bounded.
+                let mut title: String = line.split_whitespace()
+                    .flat_map(|word| word.chars().chain(std::iter::once(' ')))
+                    .take(60)
+                    .collect();
+                title.truncate(title.trim_end().len());
+                record.title = Some(title);
+                record.updated_at = now_iso();
+                self.storage.save_record(record.clone())
+                    .map_err(|e| format!("Failed to save agent title: {e}"))?;
+            }
+        }
 
         let msg_id = format!("msg_{}", uuid_v4_simple());
         let item = AgentTimelineItem::UserMessage {
@@ -121,8 +135,8 @@ impl AgentManager {
             .unwrap()
             .insert(id.to_string(), AgentStatus::Running);
 
-
-        Ok(())
+        record.last_status = AgentStatus::Running;
+        Ok(record)
     }
     pub fn append_assistant_message(&self, id: &str, text: &str) -> Result<(), String> {
         let msg_id = format!("msg_{}", uuid_v4_simple());
@@ -273,6 +287,33 @@ fn uuid_v4_simple() -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_prompt_title_persists_without_being_replaced_by_followups() {
+        let dir = tempdir().unwrap();
+        let manager = AgentManager::new(dir.path());
+        let agent = manager.create_agent("omp", ".", None, None, None).unwrap();
+        manager.send_message(&agent.id, "\n  Fix\t the   tab title \r\nInclude tests").unwrap();
+        let reloaded = AgentManager::new(dir.path());
+        assert_eq!(reloaded.get_agent(&agent.id).unwrap().title.as_deref(), Some("Fix the tab title"));
+        reloaded.send_message(&agent.id, "A different prompt").unwrap();
+        assert_eq!(reloaded.get_agent(&agent.id).unwrap().title.as_deref(), Some("Fix the tab title"));
+    }
+
+    #[test]
+    fn test_prompt_title_preserves_explicit_titles_and_bounds_unicode() {
+        let dir = tempdir().unwrap();
+        let manager = AgentManager::new(dir.path());
+        let named = manager.create_agent("omp", ".", Some("Custom title".into()), None, None).unwrap();
+        manager.send_message(&named.id, "Replace this title").unwrap();
+        assert_eq!(manager.get_agent(&named.id).unwrap().title.as_deref(), Some("Custom title"));
+        let untitled = manager.create_agent("omp", ".", None, None, None).unwrap();
+        manager.send_message(&untitled.id, " \r\n\t ").unwrap();
+        assert_eq!(manager.get_agent(&untitled.id).unwrap().title, None);
+        let prompt = "界".repeat(65);
+        manager.send_message(&untitled.id, &prompt).unwrap();
+        assert_eq!(manager.get_agent(&untitled.id).unwrap().title, Some("界".repeat(60)));
+    }
 
     #[test]
     fn test_thinking_setting_survives_reload_and_can_be_cleared() {

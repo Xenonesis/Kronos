@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAgentDescriptor, resolveAgentLabel } from "@/agent-presentation";
+import { buildAgentDescriptor } from "@/agent-presentation";
 import { i18n } from "@/i18n/i18next";
 import { buildDraftPanelDescriptor } from "@/panels/draft-panel-descriptor";
 
@@ -94,10 +94,21 @@ describe("shared agent descriptor", () => {
   });
 
   it.each([null, "", "   ", "New Agent", " new agent "])(
-    "leaves an untitled agent loading: %s",
+    "finishes loading when untitled agent metadata arrives: %s",
     (title) => {
-      expect(resolveAgentLabel(title)).toBeNull();
-      expect(describeAgent({ title })).toMatchObject({ label: "", titleState: "loading" });
+      expect(describeAgent({ title, status: null }).titleState).toBe("loading");
+      const loaded = describeAgent({ title, provider: "omp" });
+      expect(loaded.titleState).toBe("ready");
+      expect(loaded.label.trim()).not.toBe("");
+      expect(loaded.tooltip).toBe(loaded.label);
+      expect(loaded.statusBucket).toBe("done");
+    },
+  );
+
+  it.each(["running", "error", "closed"] as const)(
+    "does not confuse an untitled %s agent with missing metadata",
+    (status) => {
+      expect(describeAgent({ title: null, status }).titleState).toBe("ready");
     },
   );
 

@@ -65,12 +65,15 @@ export function buildAgentDescriptor(input: {
 }): PanelDescriptor {
   const provider = input.provider;
   const label = resolveAgentLabel(input.title);
+  const providerLabel = `${formatProviderLabel(provider)} agent`;
+  // Titles are optional metadata, not a signal that the agent is still loading.
+  const hasMetadata = input.status !== null;
 
   return {
-    label: label ?? "",
-    subtitle: `${formatProviderLabel(provider)} agent`,
-    tooltip: label ?? `${formatProviderLabel(provider)} agent`,
-    titleState: label ? "ready" : "loading",
+    label: label ?? (hasMetadata ? providerLabel : ""),
+    subtitle: providerLabel,
+    tooltip: label ?? providerLabel,
+    titleState: label || hasMetadata ? "ready" : "loading",
     icon: input.icon,
     statusBucket: input.status
       ? deriveSidebarStateBucket({

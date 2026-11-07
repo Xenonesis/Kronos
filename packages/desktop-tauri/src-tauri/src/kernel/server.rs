@@ -1571,7 +1571,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
 
             let mgr = get_agent_manager();
             match mgr.send_message(agent_id, text) {
-                Ok(()) => serde_json::json!({
+                Ok(_) => serde_json::json!({
                     "type": "agent/message/response",
                     "requestId": request_id,
                     "id": request_id,
@@ -2233,10 +2233,12 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }
 
                 match mgr.create_agent(provider, agent_cwd, agent_title, Some(ws_id.clone()), Some(config)) {
-                    Ok(rec) => {
+                    Ok(mut rec) => {
                         if let Some(prompt) = agent_val.get("initialPrompt").and_then(|v| v.as_str()) {
                             if !prompt.trim().is_empty() {
-                                let _ = mgr.send_message(&rec.id, prompt);
+                                if let Ok(updated) = mgr.send_message(&rec.id, prompt) {
+                                    rec = updated;
+                                }
                                 let aid = rec.id.clone();
                                 let p = prompt.to_string();
                                 tokio::spawn(async move {
@@ -2346,11 +2348,13 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
 
             let mgr = get_agent_manager();
             match mgr.create_agent(provider, cwd, title, ws_id.clone(), Some(config)) {
-                Ok(record) => {
+                Ok(mut record) => {
                     let mut prompt_started = false;
                     if let Some(prompt) = initial_prompt {
                         if !prompt.trim().is_empty() {
-                            let _ = mgr.send_message(&record.id, prompt);
+                            if let Ok(updated) = mgr.send_message(&record.id, prompt) {
+                                record = updated;
+                            }
                             prompt_started = true;
                             let aid = record.id.clone();
                             let p = prompt.to_string();
@@ -2535,7 +2539,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
 
             let mgr = get_agent_manager();
             match mgr.send_message(agent_id, text) {
-                Ok(()) => {
+                Ok(_) => {
                     let aid = agent_id.to_string();
                     let prompt = text.to_string();
                     tokio::spawn(async move {

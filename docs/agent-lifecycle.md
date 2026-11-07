@@ -12,6 +12,11 @@ initializing → idle → running → idle (or error → closed)
 
 Each live agent in `AgentManager` carries a `lastStatus` of `initializing`, `idle`, `running`, or `error`. `closed` is the persisted, resumable state for an agent record that has no live provider runtime. State transitions persist to disk and stream to subscribed clients via WebSocket.
 
+Agent titles are optional, including on restored records. A missing title does not mean
+metadata is still loading; loaded untitled agents use their provider label. Native hosts
+persist a provisional title from the first non-empty prompt line and include it in the
+creation snapshot. Later prompts must not replace an existing title.
+
 ## Daemon restart recovery
 
 Hosts resume interrupted agents by default after graceful shutdown or a crash. The daemon
