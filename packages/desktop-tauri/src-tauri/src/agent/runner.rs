@@ -1,4 +1,6 @@
+use crate::agent::manager::ReservedTurn;
 use crate::agent::registry::resolve_command;
+#[cfg(test)]
 use crate::agent::types::AgentStatus;
 use crate::kernel::server::{agent_record_to_snapshot, get_agent_manager, get_provider_push_tx};
 use serde_json::{json, Value};
@@ -9,17 +11,24 @@ use std::time::{Duration, SystemTime};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
+#[path = "turn_process.rs"]
+mod turn_process;
+
 /// Replacement notifications and authoritative reads must name the same timeline epoch.
 pub fn broadcast_timeline_replacement(agent_id: &str) {
     let msg = json!({
         "type": "session",
-        "message": {"type": "agent.timeline.replacement", "payload": {"agentId": agent_id, "epoch": "epoch-1"}}
+        "message": {"type": "agent.timeline.replacement", "payload": {"agentId": agent_id, "epoch": crate::kernel::timeline::epoch(agent_id)}}
     });
     let _ = get_provider_push_tx().send(msg.to_string());
 }
 
 pub fn broadcast_agent_status_update(agent_id: &str) {
-    if let Some(agent) = get_agent_manager().get_agent(agent_id) {
+    broadcast_agent_status(get_agent_manager(), agent_id);
+}
+
+fn broadcast_agent_status(manager: &crate::agent::manager::AgentManager, agent_id: &str) {
+    if let Some(agent) = manager.get_agent(agent_id) {
         let msg = json!({
             "type": "session",
             "message": {"type": "agent_update", "payload": {"kind": "upsert", "agent": agent_record_to_snapshot(&agent)}}
@@ -60,6 +69,8 @@ struct ProviderOutput {
     message_index: usize,
     claude_message: String,
     error: Option<String>,
+    cleanup_confirmed: bool,
+    usage: Option<Value>,
 }
 
 impl Default for ProviderOutput {
@@ -69,7 +80,10 @@ impl Default for ProviderOutput {
                 static NEXT_TURN: AtomicU64 = AtomicU64::new(0);
                 format!(
                     "turn-{}-{}",
-                    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_nanos(),
+                    SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos(),
                     NEXT_TURN.fetch_add(1, Ordering::Relaxed)
                 )
             },
@@ -77,15 +91,31 @@ impl Default for ProviderOutput {
             message_index: 0,
             claude_message: String::new(),
             error: None,
+            cleanup_confirmed: true,
+            usage: None,
         }
     }
 }
 
 impl ProviderOutput {
-    fn update(&mut self, key: String, kind: OutputKind, text: &str, snapshot: bool, live: &mut Vec<Value>) {
-        let index = self.rows.iter().position(|row| row.key == key && row.kind == kind)
+    fn update(
+        &mut self,
+        key: String,
+        kind: OutputKind,
+        text: &str,
+        snapshot: bool,
+        live: &mut Vec<Value>,
+    ) {
+        let index = self
+            .rows
+            .iter()
+            .position(|row| row.key == key && row.kind == kind)
             .unwrap_or_else(|| {
-                self.rows.push(OutputRow { key, kind, text: String::new() });
+                self.rows.push(OutputRow {
+                    key,
+                    kind,
+                    text: String::new(),
+                });
                 self.rows.len() - 1
             });
         let row = &mut self.rows[index];
@@ -136,7 +166,13 @@ impl ProviderOutput {
                     };
                     if let (Some(kind), Some(delta)) = (kind, update["delta"].as_str()) {
                         let index = update["contentIndex"].as_u64().unwrap_or(0);
-                        self.update(format!("{}:{index}", self.message_index), kind, delta, false, &mut live);
+                        self.update(
+                            format!("{}:{index}", self.message_index),
+                            kind,
+                            delta,
+                            false,
+                            &mut live,
+                        );
                     }
                 }
                 "message_end" if event["message"]["role"].as_str() == Some("assistant") => {
@@ -154,15 +190,26 @@ impl ProviderOutput {
             "opencode" if matches!(event_type, "text" | "reasoning") => {
                 let part = &event["part"];
                 if let Some(text) = part["text"].as_str() {
-                    let key = part["id"].as_str().map(str::to_owned)
+                    let key = part["id"]
+                        .as_str()
+                        .map(str::to_owned)
                         .unwrap_or_else(|| format!("part:{}", self.rows.len()));
-                    let kind = if event_type == "reasoning" { OutputKind::Reasoning } else { OutputKind::Assistant };
+                    let kind = if event_type == "reasoning" {
+                        OutputKind::Reasoning
+                    } else {
+                        OutputKind::Assistant
+                    };
                     self.update(key, kind, text, true, &mut live);
                 }
             }
             // codex exec's JSONL lifecycle carries full item snapshots, not text deltas.
             // Schema: codex-rs/exec/src/exec_events.rs, ThreadItemDetails::{AgentMessage,Reasoning}.
-            "codex" if matches!(event_type, "item.created" | "item.started" | "item.updated" | "item.completed") => {
+            "codex"
+                if matches!(
+                    event_type,
+                    "item.created" | "item.started" | "item.updated" | "item.completed"
+                ) =>
+            {
                 let item = &event["item"];
                 let kind = match item["type"].as_str() {
                     Some("agent_message") => Some(OutputKind::Assistant),
@@ -179,19 +226,36 @@ impl ProviderOutput {
                     let partial = &event["event"];
                     match partial["type"].as_str() {
                         Some("message_start") => {
-                            self.claude_message = partial["message"]["id"].as_str().unwrap_or("message").to_string();
+                            self.claude_message = partial["message"]["id"]
+                                .as_str()
+                                .unwrap_or("message")
+                                .to_string();
                         }
                         Some("content_block_start") | Some("content_block_delta") => {
                             let is_start = partial["type"].as_str() == Some("content_block_start");
-                            let block = if is_start { &partial["content_block"] } else { &partial["delta"] };
+                            let block = if is_start {
+                                &partial["content_block"]
+                            } else {
+                                &partial["delta"]
+                            };
                             let (kind, field) = match block["type"].as_str() {
-                                Some("text") | Some("text_delta") => (OutputKind::Assistant, "text"),
-                                Some("thinking") | Some("thinking_delta") => (OutputKind::Reasoning, "thinking"),
+                                Some("text") | Some("text_delta") => {
+                                    (OutputKind::Assistant, "text")
+                                }
+                                Some("thinking") | Some("thinking_delta") => {
+                                    (OutputKind::Reasoning, "thinking")
+                                }
                                 _ => return live,
                             };
                             if let Some(text) = block[field].as_str() {
                                 let index = partial["index"].as_u64().unwrap_or(0);
-                                self.update(format!("{}:{index}", self.claude_message), kind, text, is_start, &mut live);
+                                self.update(
+                                    format!("{}:{index}", self.claude_message),
+                                    kind,
+                                    text,
+                                    is_start,
+                                    &mut live,
+                                );
                             }
                         }
                         _ => {}
@@ -199,7 +263,12 @@ impl ProviderOutput {
                 }
                 "assistant" if event["parent_tool_use_id"].is_null() => {
                     if event["error"].is_string() {
-                        self.error = Some(event["error"].as_str().unwrap_or("Claude API error").to_string());
+                        self.error = Some(
+                            event["error"]
+                                .as_str()
+                                .unwrap_or("Claude API error")
+                                .to_string(),
+                        );
                     } else if let Some(contents) = event["message"]["content"].as_array() {
                         let key = event["message"]["id"].as_str().unwrap_or("message");
                         // With partial messages enabled, Claude can send one finalized
@@ -207,16 +276,28 @@ impl ProviderOutput {
                         if contents.len() == 1 {
                             let block = &contents[0];
                             let value = match block["type"].as_str() {
-                                Some("text") => Some((OutputKind::Assistant, block["text"].as_str())),
-                                Some("thinking") => Some((OutputKind::Reasoning, block["thinking"].as_str())),
+                                Some("text") => {
+                                    Some((OutputKind::Assistant, block["text"].as_str()))
+                                }
+                                Some("thinking") => {
+                                    Some((OutputKind::Reasoning, block["thinking"].as_str()))
+                                }
                                 _ => None,
                             };
                             if let Some((kind, Some(text))) = value {
                                 let prefix = format!("{key}:");
-                                let existing = self.rows.iter().rev().find(|row| {
-                                    row.kind == kind && row.key.starts_with(&prefix) && text.starts_with(&row.text)
-                                }).map(|row| row.key.clone());
-                                let block_key = existing.unwrap_or_else(|| format!("{key}:final:{}", self.rows.len()));
+                                let existing = self
+                                    .rows
+                                    .iter()
+                                    .rev()
+                                    .find(|row| {
+                                        row.kind == kind
+                                            && row.key.starts_with(&prefix)
+                                            && text.starts_with(&row.text)
+                                    })
+                                    .map(|row| row.key.clone());
+                                let block_key = existing
+                                    .unwrap_or_else(|| format!("{key}:final:{}", self.rows.len()));
                                 self.update(block_key, kind, text, true, &mut live);
                             }
                         } else {
@@ -225,18 +306,127 @@ impl ProviderOutput {
                     }
                 }
                 "result" if event["is_error"].as_bool() == Some(true) => {
-                    self.error = Some(event["result"].as_str().unwrap_or("Claude turn failed").to_string());
+                    self.error = Some(
+                        event["result"]
+                            .as_str()
+                            .unwrap_or("Claude turn failed")
+                            .to_string(),
+                    );
                 }
                 _ => {}
             },
             _ => {}
         }
         if event_type == "error" || event_type == "turn.failed" {
-            let message = event["message"].as_str()
+            let message = event["message"]
+                .as_str()
                 .or_else(|| event["error"]["message"].as_str())
                 .or_else(|| event["error"]["data"]["message"].as_str());
             if let Some(message) = message {
                 self.error = Some(message.to_string());
+            }
+        }
+        if let Some(stats) = event.get("stats") {
+            let mut usage = self.usage.clone().unwrap_or_else(|| json!({}));
+            if let Some(ctx) = stats.get("contextUsage") {
+                if let Some(tokens) = ctx.get("tokens").and_then(|t| t.as_u64()) {
+                    usage["contextWindowUsedTokens"] = json!(tokens);
+                }
+                if let Some(cw) = ctx.get("contextWindow").and_then(|w| w.as_u64()) {
+                    usage["contextWindowMaxTokens"] = json!(cw);
+                }
+            }
+            if let Some(cost) = stats.get("cost").and_then(|c| c.as_f64()) {
+                usage["totalCostUsd"] = json!(cost);
+            }
+            if let Some(tokens) = stats.get("tokens") {
+                if let Some(out) = tokens.get("output").and_then(|o| o.as_u64()) {
+                    usage["outputTokens"] = json!(out);
+                }
+                if let Some(inp) = tokens.get("input").and_then(|i| i.as_u64()) {
+                    usage["inputTokens"] = json!(inp);
+                }
+            }
+            if !usage.as_object().map_or(true, |o| o.is_empty()) {
+                self.usage = Some(usage);
+            }
+        }
+        if let Some(model_usage) = event.get("modelUsage").and_then(|m| m.as_object()) {
+            for (_mid, info) in model_usage {
+                if let Some(cw) = info.get("contextWindow").and_then(|w| w.as_u64()) {
+                    if cw > 0 {
+                        let usage = self.usage.get_or_insert_with(|| json!({}));
+                        usage["contextWindowMaxTokens"] = json!(cw);
+                    }
+                }
+            }
+        }
+        if let Some(usage_val) = event.get("usage").or_else(|| event.pointer("/event/usage")) {
+            let inp = usage_val
+                .get("input_tokens")
+                .or_else(|| usage_val.get("input"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let out = usage_val
+                .get("output_tokens")
+                .or_else(|| usage_val.get("output"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let cache_read = usage_val
+                .get("cache_read_input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let cache_create = usage_val
+                .get("cache_creation_input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let total = inp + out + cache_read + cache_create;
+            if inp > 0 || out > 0 || total > 0 {
+                let usage = self.usage.get_or_insert_with(|| json!({}));
+                if inp > 0 {
+                    usage["inputTokens"] = json!(inp);
+                }
+                if out > 0 {
+                    usage["outputTokens"] = json!(out);
+                }
+                if total > 0 {
+                    usage["contextWindowUsedTokens"] = json!(total);
+                }
+            }
+        }
+        if let Some(token_usage) = event.get("tokenUsage").or_else(|| event.get("token_usage")) {
+            let usage = self.usage.get_or_insert_with(|| json!({}));
+            if let Some(cw) = token_usage
+                .get("model_context_window")
+                .or_else(|| token_usage.get("modelContextWindow"))
+                .and_then(|v| v.as_u64())
+            {
+                if cw > 0 {
+                    usage["contextWindowMaxTokens"] = json!(cw);
+                }
+            }
+            if let Some(last) = token_usage.get("last") {
+                if let Some(tot) = last
+                    .get("total_tokens")
+                    .or_else(|| last.get("totalTokens"))
+                    .and_then(|v| v.as_u64())
+                {
+                    usage["contextWindowUsedTokens"] = json!(tot);
+                }
+                if let Some(inp) = last
+                    .get("input_tokens")
+                    .or_else(|| last.get("inputTokens"))
+                    .and_then(|v| v.as_u64())
+                {
+                    usage["inputTokens"] = json!(inp);
+                }
+                if let Some(out) = last
+                    .get("output_tokens")
+                    .or_else(|| last.get("outputTokens"))
+                    .and_then(|v| v.as_u64())
+                {
+                    usage["outputTokens"] = json!(out);
+                }
             }
         }
         live
@@ -245,31 +435,107 @@ impl ProviderOutput {
 
 /// Start each invocation with the persisted thinking choice, rather than acknowledging
 /// a control change without passing it to the provider.
-fn provider_arguments(provider: &str, model: Option<&str>, thinking: Option<&str>, cwd: &Path, prompt: &str) -> Vec<String> {
+fn provider_arguments(
+    provider: &str,
+    model: Option<&str>,
+    thinking: Option<&str>,
+    cwd: &Path,
+    prompt: &str,
+    handle: Option<&str>,
+    session_dir: Option<&Path>,
+) -> Result<Vec<String>, String> {
     let mut args: Vec<String> = match provider {
         "omp" | "pi" => vec!["--mode".into(), "json".into(), "-p".into()],
-        "opencode" => vec!["run".into(), "--pure".into(), "--format".into(), "json".into(), "--thinking".into(), "--dir".into(), cwd.to_string_lossy().into_owned()],
-        "codex" => vec!["exec".into(), "--json".into(), "-C".into(), cwd.to_string_lossy().into_owned()],
-        "claude" => vec!["-p".into(), "--output-format".into(), "stream-json".into(), "--verbose".into(), "--include-partial-messages".into()],
-        _ => Vec::new(),
+        "opencode" => vec![
+            "run".into(),
+            "--pure".into(),
+            "--format".into(),
+            "json".into(),
+            "--thinking".into(),
+            "--dir".into(),
+            cwd.to_string_lossy().into_owned(),
+        ],
+        "codex" if handle.is_some() => vec!["exec".into(), "resume".into(), "--json".into()],
+        "codex" => vec![
+            "exec".into(),
+            "--json".into(),
+            "-C".into(),
+            cwd.to_string_lossy().into_owned(),
+        ],
+        "claude" => vec![
+            "-p".into(),
+            "--output-format".into(),
+            "stream-json".into(),
+            "--verbose".into(),
+            "--include-partial-messages".into(),
+        ],
+        _ => {
+            return Err(format!(
+                "Provider '{provider}' has no native safe session/resume adapter"
+            ))
+        }
     };
-    if let Some(model) = model.filter(|model| !model.is_empty() && matches!(provider, "omp" | "pi" | "opencode" | "codex" | "claude")) {
-        args.extend([if provider == "opencode" || provider == "codex" { "-m" } else { "--model" }.into(), model.into()]);
+    if let Some(handle) = handle {
+        if handle.trim().is_empty() || handle.starts_with('-') {
+            return Err(
+                "Provider session handle must be an explicit non-option session identity".into(),
+            );
+        }
+        match provider {
+            "claude" | "omp" => args.extend(["--resume".into(), handle.into()]),
+            "opencode" | "pi" => args.extend(["--session".into(), handle.into()]),
+            "codex" => {} // Positional identity follows options, before the prompt.
+            _ => unreachable!(),
+        }
+    } else if matches!(provider, "omp" | "pi") {
+        let directory = session_dir.ok_or("OMP/Pi require an isolated session directory")?;
+        args.extend([
+            "--session-dir".into(),
+            directory.to_string_lossy().into_owned(),
+        ]);
+    }
+    if let Some(model) = model.filter(|model| {
+        !model.is_empty() && matches!(provider, "omp" | "pi" | "opencode" | "codex" | "claude")
+    }) {
+        args.extend([
+            if provider == "opencode" || provider == "codex" {
+                "-m"
+            } else {
+                "--model"
+            }
+            .into(),
+            model.into(),
+        ]);
     }
     if let Some(thinking) = thinking.filter(|thinking| !thinking.is_empty()) {
         match provider {
             "omp" | "pi" => args.extend(["--thinking".into(), thinking.into()]),
-            "opencode" if matches!(thinking, "max" | "minimal" | "high") => args.extend(["--variant".into(), thinking.into()]),
-            "codex" => args.extend(["-c".into(), format!("model_reasoning_effort={}", json!(thinking))]),
+            "opencode" if matches!(thinking, "max" | "minimal" | "high") => {
+                args.extend(["--variant".into(), thinking.into()])
+            }
+            "codex" => args.extend([
+                "-c".into(),
+                format!("model_reasoning_effort={}", json!(thinking)),
+            ]),
             "claude" => args.extend(["--effort".into(), thinking.into()]),
             _ => {}
         }
     }
+    if provider == "codex" {
+        if let Some(handle) = handle {
+            args.push(handle.into());
+        }
+    }
+    args.push("--".into());
     args.push(prompt.to_string());
-    args
+    Ok(args)
 }
 
-fn persist_output(manager: &crate::agent::manager::AgentManager, agent_id: &str, output: &ProviderOutput) -> Result<(), String> {
+fn persist_output(
+    manager: &crate::agent::manager::AgentManager,
+    agent_id: &str,
+    output: &ProviderOutput,
+) -> Result<(), String> {
     // Preserve provider order rather than collapsing all reasoning ahead of all answers.
     for row in output.rows.iter().filter(|row| !row.text.trim().is_empty()) {
         match row.kind {
@@ -280,132 +546,473 @@ fn persist_output(manager: &crate::agent::manager::AgentManager, agent_id: &str,
     Ok(())
 }
 
-pub async fn run_agent_turn(agent_id: String, prompt: String) {
-    let mgr = get_agent_manager();
-    let Some(agent) = mgr.get_agent(&agent_id) else {
-        eprintln!("[Runner] Agent {agent_id} not found for turn execution");
-        return;
+fn provider_handle(
+    agent: &crate::agent::types::StoredAgentRecord,
+) -> Result<Option<String>, String> {
+    if let Some(runtime) = &agent.runtime_info {
+        if runtime["provider"].as_str() != Some(agent.provider.as_str()) {
+            return Err(
+                "Saved provider session belongs to a different provider; select a fresh agent"
+                    .into(),
+            );
+        }
+        if let Some(handle) = runtime["providerHandleId"]
+            .as_str()
+            .filter(|handle| !handle.is_empty())
+        {
+            return Ok(Some(handle.to_owned()));
+        }
+        if runtime["continuityRequired"].as_bool() == Some(true) {
+            return Err("Previous provider turn did not expose a durable session identity. Import its explicit session handle or create a new agent; automatic fresh-session continuation is disabled.".into());
+        }
+    }
+    Ok(agent
+        .config
+        .as_ref()
+        .and_then(|config| config["providerHandleId"].as_str())
+        .filter(|handle| !handle.is_empty())
+        .map(str::to_owned))
+}
+
+fn observed_provider_handle<'a>(provider: &str, event: &'a Value) -> Option<&'a str> {
+    let kind = event["type"].as_str()?;
+    let handle = match provider {
+        "codex" if kind == "thread.started" => event["thread_id"].as_str(),
+        "claude"
+            if event["parent_tool_use_id"].is_null()
+                && (kind == "result" || (kind == "system" && event["subtype"] == "init")) =>
+        {
+            event["session_id"].as_str()
+        }
+        "opencode"
+            if matches!(
+                kind,
+                "step_start" | "step_finish" | "text" | "reasoning" | "tool_use" | "error"
+            ) =>
+        {
+            event["sessionID"].as_str()
+        }
+        _ => None,
+    }?;
+    (!handle.is_empty()).then_some(handle)
+}
+
+fn ingest_provider_event(
+    turn: &mut ReservedTurn,
+    provider: &str,
+    handle: &mut Option<String>,
+    output: &mut ProviderOutput,
+    event: &Value,
+) -> Result<(), String> {
+    if let Some(observed) = observed_provider_handle(provider, event) {
+        if handle.as_deref().is_some_and(|saved| saved != observed) {
+            return Err("Provider returned a different session identity during resume".into());
+        }
+        if handle.is_none() {
+            turn.persist_provider_handle(observed)?;
+            *handle = Some(observed.to_owned());
+        }
+    }
+    for item in output.ingest(provider, event) {
+        let _ = get_provider_push_tx()
+            .send(stream_message(&turn.agent.id, provider, &output.identity, &item).to_string());
+    }
+    Ok(())
+}
+
+/// The directory is private to this agent. Never search a user's global latest session.
+fn isolated_session_file(directory: &Path) -> Result<Option<String>, String> {
+    let mut found = None;
+    for entry in std::fs::read_dir(directory)
+        .map_err(|e| format!("Cannot inspect isolated provider sessions: {e}"))?
+    {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("jsonl")
+            || !path.is_file()
+        {
+            continue;
+        }
+        let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+        let mut reader = std::io::BufReader::new(file);
+        // OMP may write a title record before its session header. Bound all header reads.
+        let mut bytes = Vec::new();
+        use std::io::Read;
+        reader
+            .by_ref()
+            .take(32768)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if !bytes.split(|byte| *byte == b'\n').take(8).any(|line| {
+            serde_json::from_slice::<Value>(line)
+                .ok()
+                .is_some_and(|entry| {
+                    entry["type"] == "session"
+                        && entry["id"].as_str().is_some_and(|id| !id.is_empty())
+                })
+        }) {
+            continue;
+        }
+        if found.is_some() {
+            return Err("Multiple root sessions appeared in the isolated provider directory; refusing ambiguous continuation".into());
+        }
+        let absolute = if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir()
+                .map_err(|e| format!("Cannot resolve provider session path: {e}"))?
+                .join(path)
+        };
+        found = Some(absolute.to_string_lossy().into_owned());
+    }
+    Ok(found)
+}
+
+pub async fn run_agent_turn(turn: ReservedTurn) {
+    run_reserved_turn(turn, None).await;
+}
+
+// Command injection is restricted to module tests; the lifecycle always uses the supplied manager.
+async fn run_reserved_turn(mut turn: ReservedTurn, command: Option<Command>) {
+    let agent_id = turn.agent.id.clone();
+    let provider = turn.agent.provider.clone();
+    let manager = turn.manager().clone();
+    broadcast_agent_status(&manager, &agent_id);
+    broadcast_timeline_replacement(&agent_id);
+    let turn_id = turn.token.clone();
+    let _ = get_provider_push_tx().send(
+        json!({
+            "type": "session", "message": {"type": "agent_stream", "payload": {
+                "agentId": agent_id, "timestamp": crate::agent::types::now_iso(),
+                "event": {"type": "turn_started", "provider": provider, "turnId": turn_id}
+            }}
+        })
+        .to_string(),
+    );
+    let result = execute_provider_turn(&mut turn, command).await;
+    let (mut error, cleanup_confirmed, output_usage) = match result {
+        Ok(ref output) => (
+            persist_output(&manager, &agent_id, output)
+                .err()
+                .or_else(|| output.error.clone()),
+            output.cleanup_confirmed,
+            output.usage.clone(),
+        ),
+        Err(error) => (Some(error), true, None),
     };
-    let model = agent.config.as_ref().and_then(|c| c["model"].as_str());
-    let thinking = agent.config.as_ref().and_then(|c| c["thinkingOptionId"].as_str());
+    if let Some(error) = &error {
+        if let Err(persist) = manager.append_error_notice(&agent_id, error) {
+            eprintln!("[Runner] Failed to persist turn error: {persist}");
+        }
+    }
+    if cleanup_confirmed {
+        if let Err(completion) = turn.finish(error.as_deref()) {
+            error = Some(completion);
+        }
+    } else {
+        let message = error
+            .as_deref()
+            .unwrap_or("Provider cleanup could not be confirmed");
+        turn.retain_cleanup_failure(message);
+    }
+
+    if let Some(ref usage) = output_usage {
+        if let Some(mut agent) = manager.get_agent(&agent_id) {
+            agent.last_usage = Some(usage.clone());
+            let _ = manager.storage().save_record(agent);
+        }
+    }
+
+    let terminal_event = if turn.is_cancelled() && cleanup_confirmed {
+        json!({"type": "turn_canceled", "provider": provider, "turnId": turn_id, "reason": "Cancellation requested"})
+    } else if let Some(error) = error {
+        json!({"type": "turn_failed", "provider": provider, "turnId": turn_id, "error": error})
+    } else {
+        let mut event = json!({"type": "turn_completed", "provider": provider, "turnId": turn_id});
+        if let Some(ref usage) = output_usage {
+            event["usage"] = usage.clone();
+        }
+        event
+    };
+    let _ = get_provider_push_tx().send(json!({
+        "type": "session", "message": {"type": "agent_stream", "payload": {
+            "agentId": agent_id, "timestamp": crate::agent::types::now_iso(), "event": terminal_event
+        }}
+    }).to_string());
+    broadcast_agent_status(&manager, &agent_id);
+    broadcast_timeline_replacement(&agent_id);
+}
+
+async fn cleanup_failed_provider_start(
+    turn: &mut ReservedTurn,
+    tree: &mut turn_process::ProcessTree,
+    child: &mut tokio::process::Child,
+    prior: &crate::agent::types::StoredAgentRecord,
+    error: String,
+) -> ProviderOutput {
+    let mut output = ProviderOutput::default();
+    output.error = Some(error);
+    if let Err(cleanup) = tree.cleanup(child).await {
+        output.cleanup_confirmed = false;
+        output.error = Some(format!(
+            "{}; {cleanup}; agent remains reserved",
+            output.error.as_deref().unwrap_or("Provider setup failed")
+        ));
+    } else {
+        #[cfg(windows)]
+        if tree.was_suspended() {
+            if let Err(restore) = turn.restore_unstarted_provider(prior) {
+                output.error = Some(format!(
+                    "{}; {restore}",
+                    output.error.as_deref().unwrap_or("Provider setup failed")
+                ));
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (turn, prior);
+    output
+}
+
+async fn execute_provider_turn(
+    turn: &mut ReservedTurn,
+    command: Option<Command>,
+) -> Result<ProviderOutput, String> {
+    if turn.is_cancelled() {
+        return Ok(ProviderOutput::default());
+    }
+    let agent = turn.agent.clone();
+    let provider = agent.provider.as_str();
+    let model = agent
+        .config
+        .as_ref()
+        .and_then(|config| config["model"].as_str());
+    let thinking = agent
+        .config
+        .as_ref()
+        .and_then(|config| config["thinkingOptionId"].as_str());
     let cwd = if agent.cwd.is_empty() || agent.cwd == "." {
         dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
     } else {
         PathBuf::from(&agent.cwd)
     };
-    let _ = mgr.set_agent_status(&agent_id, AgentStatus::Running);
-    broadcast_agent_status_update(&agent_id);
-    broadcast_timeline_replacement(&agent_id);
-    let turn_id = format!(
-        "turn-{}-{}",
-        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_nanos(),
-        std::process::id()
-    );
-    let _ = get_provider_push_tx().send(json!({
-        "type": "session",
-        "message": {"type": "agent_stream", "payload": {
-            "agentId": agent_id,
-            "timestamp": crate::agent::types::now_iso(),
-            "event": {"type": "turn_started", "provider": agent.provider, "turnId": turn_id},
-        }}
-    }).to_string());
-
-
-    let result = execute_provider_turn(&agent_id, &agent.provider, model, thinking, &cwd, &prompt).await;
-    let (error, turn_id) = match result {
-        Ok(output) => (persist_output(mgr, &agent_id, &output).err().or(output.error), Some(output.identity)),
-        Err(error) => (Some(error), None),
-    };
-    if let Some(error) = &error {
-        let _ = mgr.append_error_notice(&agent_id, error);
-    }
-    // Finalize the client's ephemeral reasoning/answer head before authoritative
-    // history replaces it, including reasoning-only and failed provider turns.
-    let mut terminal_event = if let Some(error) = error {
-        json!({"type": "turn_failed", "provider": agent.provider, "error": error})
-    } else {
-        json!({"type": "turn_completed", "provider": agent.provider})
-    };
-    if let Some(turn_id) = turn_id {
-        terminal_event["turnId"] = json!(turn_id);
-    }
-    let _ = get_provider_push_tx().send(json!({
-        "type": "session",
-        "message": {"type": "agent_stream", "payload": {
-            "agentId": agent_id,
-            "timestamp": crate::agent::types::now_iso(),
-            "event": terminal_event,
-        }}
-    }).to_string());
-    let _ = mgr.set_agent_status(&agent_id, AgentStatus::Idle);
-    broadcast_agent_status_update(&agent_id);
-    broadcast_timeline_replacement(&agent_id);
-}
-
-async fn execute_provider_turn(agent_id: &str, provider: &str, model: Option<&str>, thinking: Option<&str>, cwd: &Path, prompt: &str) -> Result<ProviderOutput, String> {
-    let bin = resolve_command(provider).ok_or_else(|| format!("Provider '{provider}' is not installed or available on this system."))?;
-    let mut cmd = Command::new(bin);
-    #[cfg(windows)]
-    cmd.creation_flags(0x08000000);
-    cmd.args(provider_arguments(provider, model, thinking, cwd, prompt));
-    cmd.current_dir(cwd);
-    // Non-interactive CLIs otherwise try to read inherited stdin (notably on Windows).
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    cmd.kill_on_drop(true);
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn {provider}: {e}"))?;
-    let stdout = child.stdout.take().ok_or("Failed to capture provider stdout")?;
-    let mut stderr = child.stderr.take().ok_or("Failed to capture provider stderr")?;
-    // Drain concurrently: a full stderr pipe otherwise stalls stdout indefinitely.
-    let stderr_task = tokio::spawn(async move {
-        let mut retained = Vec::new();
-        let mut buffer = [0u8; 4096];
-        while let Ok(count) = stderr.read(&mut buffer).await {
-            if count == 0 { break; }
-            let keep = count.min(16384usize.saturating_sub(retained.len()));
-            retained.extend_from_slice(&buffer[..keep]);
+    let mut handle = provider_handle(&agent)?;
+    if handle.is_none() && agent.runtime_info.is_none() {
+        let prior_conversation = turn
+            .manager()
+            .storage()
+            .with_timeline(&agent.id, |items| {
+                items
+                    .iter()
+                    .filter(|item| {
+                        matches!(
+                            item,
+                            crate::agent::types::AgentTimelineItem::UserMessage { .. }
+                        )
+                    })
+                    .take(2)
+                    .count()
+                    > 1
+                    || items.iter().any(|item| {
+                        matches!(
+                            item,
+                            crate::agent::types::AgentTimelineItem::AssistantMessage { .. }
+                                | crate::agent::types::AgentTimelineItem::Thinking { .. }
+                        )
+                    })
+            })
+            .map_err(|e| format!("Cannot check existing provider continuity: {e}"))?;
+        if prior_conversation {
+            return Err("Existing agent transcript has no durable provider session identity. Import its explicit session handle or create a new agent; refusing to continue in a fresh conversation.".into());
         }
-        retained
-    });
+    }
+    let session_dir = turn
+        .manager()
+        .provider_session_dir(&agent.id)
+        .join(provider)
+        .join(&turn.token);
+    if matches!(provider, "omp" | "pi") {
+        if let Some(path) = &handle {
+            if !Path::new(path).is_absolute() || !Path::new(path).is_file() {
+                return Err(format!(
+                    "{provider} resume requires an existing absolute session file: {path}"
+                ));
+            }
+        } else {
+            std::fs::create_dir_all(&session_dir)
+                .map_err(|e| format!("Failed to create provider session directory: {e}"))?;
+        }
+    }
+    let args = provider_arguments(
+        provider,
+        model,
+        thinking,
+        &cwd,
+        &turn.prompt,
+        handle.as_deref(),
+        Some(&session_dir),
+    )?;
+    let mut cmd = match command {
+        Some(mut command) => {
+            command.args(args);
+            command
+        }
+        None => {
+            let bin = resolve_command(provider).ok_or_else(|| {
+                format!("Provider '{provider}' is not installed or available on this system.")
+            })?;
+            let mut command = Command::new(bin);
+            command.args(args);
+            command
+        }
+    };
+    cmd.current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let (mut tree, mut child) = turn_process::ProcessTree::spawn(&mut cmd)
+        .map_err(|error| format!("{provider}: {error}"))?;
+    if let Err(error) = turn
+        .mark_provider_started()
+        .and_then(|_| tree.attach(&child))
+    {
+        return Ok(
+            cleanup_failed_provider_start(&mut *turn, &mut tree, &mut child, &agent, error).await,
+        );
+    }
+    let stdout = child
+        .stdout
+        .take()
+        .expect("Provider stdout configured as piped");
+    let stderr = child
+        .stderr
+        .take()
+        .expect("Provider stderr configured as piped");
+    let stderr_task = tokio::spawn(drain_stderr(stderr));
     let mut output = ProviderOutput::default();
-    let structured = matches!(provider, "omp" | "pi" | "opencode" | "codex" | "claude");
-    let completion = tokio::time::timeout(Duration::from_secs(300), async {
-        let mut reader = BufReader::new(stdout).lines();
-        while let Some(line) = reader.next_line().await.map_err(|e| format!("Failed reading {provider} output: {e}"))? {
-            if structured {
-                if let Ok(event) = serde_json::from_str::<Value>(&line) {
-                    for item in output.ingest(provider, &event) {
-                        let msg = stream_message(agent_id, provider, &output.identity, &item);
-                        let _ = get_provider_push_tx().send(msg.to_string());
+    output.identity = turn.token.clone();
+    let mut reader = BufReader::new(stdout).lines();
+    let deadline = tokio::time::sleep(Duration::from_secs(300));
+    tokio::pin!(deadline);
+    let mut session_poll = tokio::time::interval(Duration::from_millis(100));
+    let mut exited = None;
+    let mut stdout_closed = false;
+    loop {
+        // Cancellation wins ties with output/exit and remains authoritative through cleanup.
+        tokio::select! {
+            biased;
+            _ = turn.cancellation.changed() => { break; }
+            _ = &mut deadline => {
+                output.error = Some(format!("{provider} turn timed out after 5 minutes."));
+                break;
+            }
+            line = reader.next_line(), if !stdout_closed => match line {
+                Ok(Some(line)) => {
+                    if let Ok(event) = serde_json::from_str::<Value>(&line) {
+                        if let Err(error) = ingest_provider_event(turn, provider, &mut handle, &mut output, &event) {
+                            output.error = Some(error);
+                            break;
+                        }
                     }
                 }
-            } else {
-                output.update("message".into(), OutputKind::Assistant, &format!("{line}\n"), false, &mut Vec::new());
+                Ok(None) => { stdout_closed = true; if exited.is_some() { break; } }
+                Err(error) => { output.error = Some(format!("Failed reading {provider} output: {error}")); break; }
+            },
+            status = child.wait(), if exited.is_none() => {
+                match status {
+                    Ok(status) => exited = Some(status),
+                    Err(error) => { output.error = Some(format!("Failed waiting for {provider}: {error}")); break; }
+                }
+                // Leader exit must terminate descendants even if they still hold stdout/stderr.
+                break;
             }
-        }
-        child.wait().await.map_err(|e| format!("Failed waiting for {provider}: {e}"))
-    }).await;
-    match completion {
-        Ok(Ok(status)) => {
-            let stderr = stderr_task.await.unwrap_or_default();
-            if !status.success() && output.error.is_none() {
-                let detail = String::from_utf8_lossy(&stderr);
-                output.error = Some(format!("{provider} exited with {status}: {}", detail.trim()));
+            _ = session_poll.tick(), if handle.is_none() && matches!(provider, "omp" | "pi") => {
+                match isolated_session_file(&session_dir) {
+                    Ok(Some(path)) => {
+                        if let Err(error) = turn.persist_provider_handle(&path) { output.error = Some(error); break; }
+                        handle = Some(path);
+                    }
+                    Ok(None) => {}
+                    Err(error) => { output.error = Some(error); break; }
+                }
             }
-        }
-        Ok(Err(error)) => {
-            let _ = child.kill().await;
-            stderr_task.abort();
-            output.error = Some(error);
-        }
-        Err(_) => {
-            let _ = child.kill().await;
-            stderr_task.abort();
-            output.error = Some(format!("{provider} turn timed out after 5 minutes."));
         }
     }
+    if let Err(error) = tree.cleanup(&mut child).await {
+        output.cleanup_confirmed = false;
+        output.error = Some(format!(
+            "{error}; agent remains reserved because process-tree cleanup was not confirmed"
+        ));
+    }
+    // Drain bytes already buffered before cancellation, but never wait on inherited pipe handles.
+    if !stdout_closed {
+        let drain = tokio::time::timeout(Duration::from_millis(500), async {
+            while let Ok(Some(line)) = reader.next_line().await {
+                if let Ok(event) = serde_json::from_str::<Value>(&line) {
+                    if let Err(error) =
+                        ingest_provider_event(turn, provider, &mut handle, &mut output, &event)
+                    {
+                        output.error = Some(error);
+                        break;
+                    }
+                }
+            }
+        })
+        .await;
+        if drain.is_err() && output.error.is_none() && !turn.is_cancelled() {
+            output.error = Some("Provider stdout did not close after process-tree cleanup".into());
+        }
+    }
+    let stderr = finish_stderr(stderr_task).await;
+    if let Some(status) = exited {
+        if !status.success() && output.error.is_none() && !turn.is_cancelled() {
+            output.error = Some(format!(
+                "{provider} exited with {status}: {}",
+                String::from_utf8_lossy(&stderr).trim()
+            ));
+        }
+    }
+    if handle.is_none() && matches!(provider, "omp" | "pi") {
+        match isolated_session_file(&session_dir) {
+            Ok(Some(path)) => {
+                if let Err(error) = turn.persist_provider_handle(&path) {
+                    output.error = Some(error);
+                } else {
+                    handle = Some(path);
+                }
+            }
+            Ok(None) => {}
+            Err(error) => output.error = Some(error),
+        }
+    }
+    if handle.is_none() && output.error.is_none() && !turn.is_cancelled() {
+        output.error = Some(format!("{provider} did not expose a durable session identity; cannot safely continue this agent. Import an explicit provider session or create a new agent."));
+    }
     Ok(output)
+}
+
+async fn drain_stderr(mut stderr: impl tokio::io::AsyncRead + Unpin) -> Vec<u8> {
+    let mut retained = Vec::new();
+    let mut buffer = [0u8; 4096];
+    while let Ok(count) = stderr.read(&mut buffer).await {
+        if count == 0 {
+            break;
+        }
+        let keep = count.min(16384usize.saturating_sub(retained.len()));
+        retained.extend_from_slice(&buffer[..keep]);
+    }
+    retained
+}
+
+async fn finish_stderr(mut task: tokio::task::JoinHandle<Vec<u8>>) -> Vec<u8> {
+    match tokio::time::timeout(Duration::from_millis(500), &mut task).await {
+        Ok(Ok(bytes)) => bytes,
+        _ => {
+            task.abort();
+            let _ = task.await;
+            Vec::new()
+        }
+    }
 }
 
 #[cfg(test)]

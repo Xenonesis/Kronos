@@ -1,5 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
+
+#[cfg(feature = "local-whisper")]
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 /// Audio configuration for speech PCM processing.
@@ -42,6 +44,7 @@ enum SpeechEngineBackend {
     Mock {
         mock_transcript: Option<String>,
     },
+    #[cfg(feature = "local-whisper")]
     Whisper(Arc<WhisperContext>),
 }
 
@@ -84,34 +87,48 @@ impl SpeechEngine {
     pub fn new(model_path: Option<&Path>) -> Result<Self, String> {
         match model_path {
             None => Ok(Self::new_mock()),
-            Some(path) => {
-                if !path.exists() {
-                    return Err(format!(
-                        "Whisper model file does not exist: {}",
-                        path.display()
-                    ));
+            Some(_path) => {
+                #[cfg(feature = "local-whisper")]
+                {
+                    if !_path.exists() {
+                        return Err(format!(
+                            "Whisper model file does not exist: {}",
+                            _path.display()
+                        ));
+                    }
+
+                    let path_str = _path.to_str().ok_or_else(|| {
+                        format!("Invalid UTF-8 in model path: {}", _path.display())
+                    })?;
+
+                    let mut params = WhisperContextParameters::default();
+                    params.use_gpu(true);
+
+                    let ctx = WhisperContext::new_with_params(path_str, params)
+                        .map_err(|e| format!("Failed to load Whisper model from {}: {e}", _path.display()))?;
+
+                    Ok(Self {
+                        backend: Arc::new(SpeechEngineBackend::Whisper(Arc::new(ctx))),
+                    })
                 }
-
-                let path_str = path.to_str().ok_or_else(|| {
-                    format!("Invalid UTF-8 in model path: {}", path.display())
-                })?;
-
-                let mut params = WhisperContextParameters::default();
-                params.use_gpu(true);
-
-                let ctx = WhisperContext::new_with_params(path_str, params)
-                    .map_err(|e| format!("Failed to load Whisper model from {}: {e}", path.display()))?;
-
-                Ok(Self {
-                    backend: Arc::new(SpeechEngineBackend::Whisper(Arc::new(ctx))),
-                })
+                #[cfg(not(feature = "local-whisper"))]
+                {
+                    Err("Local whisper engine not included in this build".to_string())
+                }
             }
         }
     }
 
     /// Returns true if a real Whisper model is loaded; false if running in mock mode.
     pub fn is_model_loaded(&self) -> bool {
-        matches!(&*self.backend, SpeechEngineBackend::Whisper(_))
+        #[cfg(feature = "local-whisper")]
+        {
+            matches!(&*self.backend, SpeechEngineBackend::Whisper(_))
+        }
+        #[cfg(not(feature = "local-whisper"))]
+        {
+            false
+        }
     }
 
     /// Normalizes PCM audio samples:
@@ -265,6 +282,7 @@ impl SpeechEngine {
                     Ok("fn main() {\n    println!(\"voice-to-code\");\n}".to_string())
                 }
             }
+            #[cfg(feature = "local-whisper")]
             SpeechEngineBackend::Whisper(ctx) => {
                 let normalized = if Self::is_normalized(samples) {
                     samples.to_vec()

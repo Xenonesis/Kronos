@@ -11,6 +11,7 @@ import { WindowChromeRootRegion } from "@/utils/desktop-window";
 import { MermaidIframeRuntime, type MermaidRenderedMessage } from "./iframe-runtime.web";
 import type { DiagramColorScheme } from "./render-model";
 import { useMermaidRenderModel } from "./use-render-model";
+import { MermaidRuntimeStatus, useMermaidRuntimeHtml } from "./runtime-loader.web";
 
 interface MermaidFullscreenViewerProps {
   source: string;
@@ -29,6 +30,7 @@ export function MermaidFullscreenViewer({
   onClose,
 }: MermaidFullscreenViewerProps) {
   const { t } = useTranslation();
+  const runtime = useMermaidRuntimeHtml();
   const insets = useSafeAreaInsets();
   const { state, request, rendered, renderFailed } = useMermaidRenderModel({
     source,
@@ -100,6 +102,7 @@ export function MermaidFullscreenViewer({
           <View style={contentLayerStyle}>
             {/* biome-ignore lint/a11y/noNoninteractiveTabindex: focus holder for the Escape shortcut */}
             <div ref={contentLayerRef} style={focusLayerDomStyle} tabIndex={-1}>
+              <MermaidRuntimeStatus runtime={runtime} />
               <ZoomableViewport
                 accessibilityLabel={t("message.diagram.diagram")}
                 actions={actions}
@@ -112,6 +115,7 @@ export function MermaidFullscreenViewer({
                 wheelActivation="always"
               >
                 <MermaidIframeRuntime
+                  html={runtime.data}
                   request={request}
                   onRendered={handleRendered}
                   onRenderFailed={renderFailed}

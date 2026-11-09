@@ -416,7 +416,10 @@ function timelineBase(item: StreamItem) {
     id: item.id,
     ...(item.timelineCursor ? { timelineCursor: item.timelineCursor } : {}),
     ...(item.turnId ? { turnId: item.turnId } : {}),
-    timestamp: item.timestamp.toISOString(),
+    timestamp:
+      item.timestamp instanceof Date
+        ? item.timestamp.toISOString()
+        : new Date(item.timestamp).toISOString(),
   };
 }
 

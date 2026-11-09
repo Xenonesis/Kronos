@@ -80,9 +80,7 @@ pub enum WSInboundMessage {
         capabilities: Option<Value>,
     },
     #[serde(rename = "session")]
-    Session {
-        message: Value,
-    },
+    Session { message: Value },
     #[serde(other)]
     Unknown,
 }
@@ -93,9 +91,7 @@ pub enum WSOutboundMessage {
     #[serde(rename = "pong")]
     Pong,
     #[serde(rename = "session")]
-    Session {
-        message: Value,
-    },
+    Session { message: Value },
     #[serde(rename = "hello.rejected")]
     HelloRejected {
         reason: String,
@@ -136,12 +132,14 @@ pub fn build_server_info_payload() -> Value {
             "projectList": true,
             "projectRemove": true,
             "workspaceMultiplicity": true,
+            "wholeTurnTimeline": true,
             "kernelTelemetry": true,
             "kernelAst": true,
             "kernelCrdt": true,
             "kernelIoRing": true,
             "kernelShm": true,
-            "kernelSpeech": true
+            "kernelSpeech": true,
+            "agentHistorySearch": true
         }
     })
 }

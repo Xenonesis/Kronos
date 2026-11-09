@@ -1,583 +1,67 @@
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
-import { useIsExplorerSidebarOpen } from "@/workspace-tabs/explorer-sidebar";
-import { ComposerEditingSessionsProvider } from "@/composer/editing-session";
-import { SheetHostScope } from "@/components/ui/isolated-bottom-sheet-modal";
 import "@/styles/unistyles";
 import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 import { PortalProvider } from "@gorhom/portal";
 import { LucideProvider } from "lucide-react-native";
 import * as Linking from "expo-linking";
-import { Stack, useNavigationContainerRef, usePathname, useRouter } from "expo-router";
-import {
-  createContext,
-  type ReactNode,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  useSyncExternalStore,
-} from "react";
-import { AppState, useWindowDimensions, View } from "react-native";
-import { GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
+import { Stack, useNavigationContainerRef, useRouter } from "expo-router";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { AppState, View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { AppearanceProvider } from "@/appearance/provider";
-import { CommandCenter } from "@/command-center/command-center";
-import { CommandCenterRootActions } from "@/command-center/root-registration";
-import { CommandCenterProvider } from "@/command-center/provider";
-import { CommandCenterWorkspaceActions } from "@/command-center/workspace-registration";
-import { PluginCommandCenterActions } from "@/plugins/command-center/registration";
-import { AddProjectFlowHost } from "@/components/add-project-flow-host";
-import { WorktreeSetupCalloutSource } from "@/components/worktree-setup-callout-source";
-import { DownloadToast } from "@/components/download-toast";
-import { QuittingOverlay } from "@/components/quitting-overlay";
-import { KeyboardShortcutsDialog } from "@/components/keyboard-shortcuts-dialog";
-import { ChangelogHost } from "@/changelog";
-import { AppDiagnosticHost } from "@/components/app-diagnostic-host";
-import { AppearanceStyleBoundary } from "@/components/appearance-style-boundary";
-import { LeftSidebar } from "@/components/left-sidebar";
-import { WindowSidebarMenuToggle } from "@/components/headers/sidebar-menu-toggle";
-import { DesktopWindowControls } from "@/components/desktop/window-controls";
-import { SidebarModelProvider } from "@/components/sidebar/sidebar-model";
-import { WorkspacePinShortcutHandler } from "@/components/workspace-pin-shortcut-handler";
-import { WorkspaceRenameHost } from "@/components/workspace-rename-host";
-import { WorkspaceExplorerOpenGesture } from "@/mobile-panels/explorer-open-gesture";
-import { ProviderSettingsHost } from "@/components/provider-settings-host";
-import { WorkspaceSetupDialog } from "@/components/workspace-setup-dialog";
-import { WorkspaceShortcutTargetsSubscriber } from "@/components/workspace-shortcut-targets-subscriber";
-import { FloatingPanelPortalHost } from "@/components/ui/floating-panel-portal";
-import { HostChooserModal, useHostChooser } from "@/hosts/host-chooser";
-import { HostConfirmationSheet } from "@/hosts/host-confirmation-sheet";
-import { HEADER_INNER_HEIGHT, useIsCompactFormFactor } from "@/constants/layout";
-import {
-  canDesktopAppSidebarShare,
-  resolveDesktopAppChromeLayout,
-  resolveDesktopAppContentMinimum,
-  resolveDesktopSidebarVisibility,
-} from "@/components/desktop-sidebar-layout";
-import { isNative, isWeb } from "@/constants/platform";
+import { useHostChooser } from "@/hosts/host-chooser";
+import { isNative } from "@/constants/platform";
 import { HorizontalScrollProvider } from "@/contexts/horizontal-scroll-context";
-import { SessionProvider } from "@/contexts/session-context";
 import { SidebarCalloutProvider } from "@/contexts/sidebar-callout-context";
 import { ToastProvider } from "@/contexts/toast-context";
 import { VoiceProvider } from "@/contexts/voice-context";
-import { useDesktopNativeBridgeCoordinator } from "@/desktop/use-desktop-native-bridge-coordinator";
-import {
-  resolveStartupBlocker,
-  resolveStartupNavigationReady,
-  shouldRunStartupGiveUpTimer,
-  startHostRuntimeBootstrap,
-  bindHostRuntimeAppState,
-  type StartupBlocker,
-} from "@/navigation/host-runtime-bootstrap";
 import { registerWorkspaceRouteNavigationRef } from "@/navigation/workspace-route-navigation";
-import { useSettingsRouteEntry } from "@/navigation/settings-presentation";
 import { ThemedStack } from "@/navigation/themed-stack";
-import { shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
 import { AgentNavigationListener } from "@/desktop/agent-navigation";
-import { LegacyAgentSkillsMigration } from "@/agent-skills/legacy-migration";
-import { legacyFavoriteProfileMigration } from "@/agent-profiles/migration";
 import { listenToDesktopEvent } from "@/desktop/electron/events";
 import { updateDesktopWindowChrome } from "@/desktop/electron/window";
 import { getDesktopHost } from "@/desktop/host";
-import { loadDesktopSettings } from "@/desktop/settings/desktop-settings";
-import { RosettaCalloutSource } from "@/desktop/updates/rosetta-callout-source";
-import { UpdateCalloutSource } from "@/desktop/updates/update-callout-source";
-import { GlobalCommandPaletteHost } from "@/desktop/command-palette/command-palette-host";
-import { useActiveWorktreeNewAction } from "@/hooks/use-active-worktree-new-action";
-import { useGlobalNewWorkspaceAction } from "@/hooks/use-global-new-workspace-action";
-import { useLatchedBoolean } from "@/hooks/use-latched-boolean";
 import { useFaviconStatus } from "@/hooks/use-favicon-status";
-import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { KeyboardShiftProvider } from "@/keyboard/shift";
-import { useCompactWebViewportZoomLock } from "@/hooks/use-compact-web-viewport-zoom-lock";
 import { useOpenProject } from "@/hooks/use-open-project";
 import { useAppSettings } from "@/hooks/use-settings";
-import { useOpenAgentListGesture } from "@/mobile-panels/gestures";
-import { MobilePanelsProvider, useIsMobilePanelActive } from "@/mobile-panels/provider";
-import {
-  KeyboardActionDispatcherProvider,
-  useKeyboardActionDispatcher,
-} from "@/keyboard/keyboard-action-dispatcher-context";
+import { MobilePanelsProvider } from "@/mobile-panels/provider";
+import { KeyboardActionDispatcherProvider } from "@/keyboard/keyboard-action-dispatcher-context";
 import { polyfillCrypto } from "@/polyfills/crypto";
-import {
-  getHostRuntimeStore,
-  hasConfiguredLocalDaemonOverride,
-  useHostRegistryLoaded,
-  useHostRuntimeClient,
-  useHostRuntimeIsConnected,
-  useHosts,
-} from "@/runtime/host-runtime";
-import { getDaemonStartService } from "@/runtime/daemon-start-service";
-import { usePanelStore } from "@/stores/panel-store";
+import { getHostRuntimeStore, useHostRegistryLoaded } from "@/runtime/host-runtime";
 import { flushDraftPersistStorage } from "@/stores/draft-store";
-import { getNextThemePreference, ICON_STROKE_WIDTH } from "@/styles/theme";
-import { useSessionStore } from "@/stores/session-store";
-import { WorkspaceLayoutModePublisher } from "@/workspace-tabs/layout-mode-publisher";
+import { ICON_STROKE_WIDTH } from "@/styles/theme";
 import { installWebScrollbarStyles } from "@/styles/install-web-scrollbar-styles";
-import type { HostProfile } from "@/types/host-connection";
-import {
-  useHasWindowChromeObstruction,
-  WindowChromeProvider,
-  WindowChromeRegion,
-  WindowChromeSafeArea,
-} from "@/utils/desktop-window";
-import {
-  buildOpenProjectRoute,
-  parseHostWorkspaceRouteFromPathname,
-  parseServerIdFromPathname,
-} from "@/utils/host-routes";
-import { PluginCatalogSync } from "@/plugins";
+import { WindowChromeProvider } from "@/utils/desktop-window";
+import { buildOpenProjectRoute } from "@/utils/host-routes";
 import { NotificationOpenRouter } from "@/notification-open/react";
 import { ensureOsNotificationPermission } from "@/utils/os-notifications";
 
+import {
+  HostRuntimeBootstrapProvider,
+  HostSessionManager,
+  useStoreReady,
+  useHostRuntimeBootstrapState,
+  useEarliestOnlineHostServerId,
+  type HostRuntimeBootstrapState,
+} from "./bootstrap/host-runtime-bootstrap";
+import { AppWithSidebar } from "./shell/app-shell";
+
+export {
+  useHostRuntimeBootstrapState,
+  useEarliestOnlineHostServerId,
+  useStoreReady,
+  type HostRuntimeBootstrapState,
+};
+
 polyfillCrypto();
 
-export interface HostRuntimeBootstrapState {
-  splashError: string | null;
-  retry: () => void;
-  hasGivenUpWaitingForHost: boolean;
-  storeReady: boolean;
-  startupBlocker: StartupBlocker;
-}
-
-const HostRuntimeBootstrapContext = createContext<HostRuntimeBootstrapState>({
-  splashError: null,
-  retry: () => {},
-  hasGivenUpWaitingForHost: false,
-  storeReady: false,
-  startupBlocker: { kind: "none" },
-});
-
-function ManagedDaemonSession({ daemon }: { daemon: HostProfile }) {
-  const client = useHostRuntimeClient(daemon.serverId);
-
-  if (!client) {
-    return null;
-  }
-
-  return (
-    <SessionProvider key={daemon.serverId} serverId={daemon.serverId} client={client}>
-      <LegacyFavoriteProfileMigrationBootstrap serverId={daemon.serverId} client={client} />
-      <PluginCatalogSync serverId={daemon.serverId} client={client} />
-    </SessionProvider>
-  );
-}
-
-function LegacyFavoriteProfileMigrationBootstrap({
-  serverId,
-  client,
-}: {
-  serverId: string;
-  client: NonNullable<ReturnType<typeof useHostRuntimeClient>>;
-}) {
-  const serverInfo = useSessionStore((state) => state.sessions[serverId]?.serverInfo ?? null);
-  const isConnected = useHostRuntimeIsConnected(serverId);
-
-  useEffect(() => {
-    if (!serverInfo || !isConnected) {
-      return;
-    }
-    void legacyFavoriteProfileMigration.migrateHost(serverId, client).catch((error) => {
-      console.warn("[AgentProfiles] Failed to migrate legacy favourites", error);
-    });
-  }, [client, isConnected, serverId, serverInfo]);
-
-  return null;
-}
-
-function HostSessionManager() {
-  const hosts = useHosts();
-
-  if (hosts.length === 0) {
-    return null;
-  }
-
-  return (
-    <>
-      {hosts.map((daemon) => (
-        <ManagedDaemonSession key={daemon.serverId} daemon={daemon} />
-      ))}
-    </>
-  );
-}
-
-export function useEarliestOnlineHostServerId(): string | null {
-  const store = getHostRuntimeStore();
-  const subscribe = useCallback(
-    (listener: () => void) => {
-      const unsubscribeAll = store.subscribeAll(listener);
-      const unsubscribeHostList = store.subscribeHostList(listener);
-      return () => {
-        unsubscribeAll();
-        unsubscribeHostList();
-      };
-    },
-    [store],
-  );
-  return useSyncExternalStore(
-    subscribe,
-    () => store.getEarliestOnlineHostServerId(),
-    () => store.getEarliestOnlineHostServerId(),
-  );
-}
-
-function useDaemonStartLastError(): string | null {
-  const service = getDaemonStartService({ store: getHostRuntimeStore() });
-  return useSyncExternalStore(
-    (listener) => service.subscribe(listener),
-    () => service.getLastError(),
-    () => service.getLastError(),
-  );
-}
-
-function useDaemonStartIsRunning(): boolean {
-  const service = getDaemonStartService({ store: getHostRuntimeStore() });
-  return useSyncExternalStore(
-    (listener) => service.subscribe(listener),
-    () => service.isRunning(),
-    () => service.isRunning(),
-  );
-}
-
-const STARTUP_GIVE_UP_TIMEOUT_MS = 5_000;
-
-async function shouldStartBuiltInDaemon(): Promise<boolean> {
-  if (!shouldUseDesktopDaemon()) {
-    return false;
-  }
-  if (hasConfiguredLocalDaemonOverride()) {
-    return false;
-  }
-  const settings = await loadDesktopSettings();
-  return settings.daemon.manageBuiltInDaemon;
-}
-
-function HostRuntimeBootstrapProvider({ children }: { children: ReactNode }) {
-  useEffect(() => {
-    const store = getHostRuntimeStore();
-    return bindHostRuntimeAppState(store, AppState);
-  }, []);
-
-  useEffect(() => {
-    const store = getHostRuntimeStore();
-    const daemonStartService = getDaemonStartService({ store });
-    startHostRuntimeBootstrap({
-      store,
-      daemonStartService,
-      shouldStartDaemon: shouldStartBuiltInDaemon,
-    });
-  }, []);
-
-  const anyOnlineHostServerId = useEarliestOnlineHostServerId();
-  const daemonStartError = useDaemonStartLastError();
-  const daemonStartIsRunning = useDaemonStartIsRunning();
-  const [hasGivenUpWaitingForHost, setHasGivenUpWaitingForHost] = useState(false);
-  const isDesktopRuntime = shouldUseDesktopDaemon();
-  const startupBlocker = useMemo(
-    () =>
-      resolveStartupBlocker({
-        isDesktopRuntime,
-        anyOnlineHostServerId,
-        daemonStartIsRunning,
-        daemonStartError,
-      }),
-    [anyOnlineHostServerId, daemonStartError, daemonStartIsRunning, isDesktopRuntime],
-  );
-  const shouldRunGiveUpTimer = shouldRunStartupGiveUpTimer({
-    startupBlocker,
-    anyOnlineHostServerId,
-    hasGivenUpWaitingForHost,
-  });
-
-  useEffect(() => {
-    if (!shouldRunGiveUpTimer) {
-      return;
-    }
-    const handle = setTimeout(() => {
-      setHasGivenUpWaitingForHost(true);
-    }, STARTUP_GIVE_UP_TIMEOUT_MS);
-    return () => {
-      clearTimeout(handle);
-    };
-  }, [shouldRunGiveUpTimer]);
-
-  const retry = useCallback(() => {
-    const daemonStartService = getDaemonStartService({ store: getHostRuntimeStore() });
-    void daemonStartService.startIfEnabled({ shouldStart: shouldStartBuiltInDaemon });
-  }, []);
-
-  const splashError =
-    startupBlocker.kind === "managed-daemon-error" ? startupBlocker.message : null;
-  const storeReady = resolveStartupNavigationReady({ startupBlocker });
-
-  const state = useMemo<HostRuntimeBootstrapState>(
-    () => ({ splashError, retry, hasGivenUpWaitingForHost, storeReady, startupBlocker }),
-    [splashError, retry, hasGivenUpWaitingForHost, storeReady, startupBlocker],
-  );
-
-  return (
-    <HostRuntimeBootstrapContext.Provider value={state}>
-      {children}
-    </HostRuntimeBootstrapContext.Provider>
-  );
-}
-
-export function useStoreReady(): boolean {
-  return useContext(HostRuntimeBootstrapContext).storeReady;
-}
-
-export function useHostRuntimeBootstrapState(): HostRuntimeBootstrapState {
-  return useContext(HostRuntimeBootstrapContext);
-}
-
-const rowStyle = { flex: 1, flexDirection: "row" } as const;
 const flexStyle = { flex: 1 } as const;
-const MOBILE_WEB_GESTURE_TOUCH_ACTION = isWeb ? "auto" : "pan-y";
 
-interface AppContainerProps {
-  children: ReactNode;
-  chromeEnabled?: boolean;
-}
-
-const WINDOW_SIDEBAR_TOGGLE_HORIZONTAL_PADDING = 12;
-
-function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppContainerProps) {
-  const keyboardActionDispatcher = useKeyboardActionDispatcher();
-  const daemons = useHosts();
-  const { settings, updateSettings } = useAppSettings();
-  const toggleMobileAgentList = usePanelStore((state) => state.toggleMobileAgentList);
-  const toggleDesktopAgentList = usePanelStore((state) => state.toggleDesktopAgentList);
-  const exitFocusMode = usePanelStore((state) => state.exitFocusMode);
-  const isFocusModeEnabled = usePanelStore((state) => state.desktop.focusModeEnabled);
-  const isDesktopAgentListOpen = usePanelStore((state) => state.desktop.agentListOpen);
-  const sidebarWidth = usePanelStore((state) => state.sidebarWidth);
-  const { width: windowWidth } = useWindowDimensions();
-  const insets = useSafeAreaInsets();
-  const viewportWidth = windowWidth - insets.left - insets.right;
-
-  const cycleTheme = useCallback(() => {
-    void updateSettings({ theme: getNextThemePreference(settings.theme) });
-  }, [settings.theme, updateSettings]);
-
-  const isCompactLayout = useIsCompactFormFactor();
-  useCompactWebViewportZoomLock(isCompactLayout);
-  const pathname = usePathname();
-  const isWorkspaceRoute = parseHostWorkspaceRouteFromPathname(pathname) !== null;
-  const isWorkspaceFocusModeEnabled = isWorkspaceRoute && isFocusModeEnabled;
-  const chromeEnabled = chromeEnabledOverride ?? daemons.length > 0;
-  const hasMountedDesktopSidebar = useLatchedBoolean(chromeEnabled);
-  const toggleAgentList = isCompactLayout ? toggleMobileAgentList : toggleDesktopAgentList;
-  const toggleDesktopSidebars = useCallback(() => {
-    // The focused workspace owns its layout key, its checkout, and therefore the
-    // only correct answer to "is the explorer open". Let it decide when there is
-    // one: the pathname alone cannot identify the active workspace, because
-    // desktop cold-starts at "/" and restores the workspace from route params.
-    if (keyboardActionDispatcher.dispatch({ id: "sidebar.toggle.both", scope: "sidebar" })) {
-      return;
-    }
-    // Off a workspace route there is no explorer — only the agent list.
-    toggleAgentList();
-  }, [keyboardActionDispatcher, toggleAgentList]);
-  // TODO: stop matching pathname here as a branch. `chromeEnabled` should not
-  // conflate workspace/project-specific chrome (sidebar, mobile gesture) with
-  // global concerns like keyboard shortcuts. Split those out so settings (and
-  // other non-workspace routes) don't need a special-case to keep shortcuts alive.
-  const keyboardShortcutsEnabled = chromeEnabled || pathname.startsWith("/settings");
-
-  useKeyboardShortcuts({
-    enabled: keyboardShortcutsEnabled,
-    isMobile: isCompactLayout,
-    isWorkspaceFocusModeEnabled,
-    toggleAgentList,
-    toggleBothSidebars: toggleDesktopSidebars,
-    exitFocusMode,
-    cycleTheme,
-  });
-
-  useActiveWorktreeNewAction();
-  useGlobalNewWorkspaceAction();
-  useDesktopNativeBridgeCoordinator();
-
-  const activeWorkspace = useActiveWorkspaceSelection();
-  const explorerVisible = useIsExplorerSidebarOpen({
-    isCompact: isCompactLayout,
-    workspaceKey: activeWorkspace
-      ? `${activeWorkspace.serverId}:${activeWorkspace.workspaceId}`
-      : null,
-  });
-  const appContentMinimumWidth = resolveDesktopAppContentMinimum({
-    explorerVisible: isWorkspaceRoute && explorerVisible,
-    isSettingsRoute: pathname.includes("/settings"),
-  });
-  const desktopSidebarMounted = hasMountedDesktopSidebar && !isWorkspaceFocusModeEnabled;
-  const desktopSidebarVisible = resolveDesktopSidebarVisibility({
-    chromeEnabled,
-    isCompactLayout,
-    isMounted: desktopSidebarMounted,
-    isOpen: isDesktopAgentListOpen,
-    canShare: canDesktopAppSidebarShare({
-      contentMinimumWidth: appContentMinimumWidth,
-      requestedSidebarWidth: sidebarWidth,
-      viewportWidth,
-    }),
-  });
-  const hasTopLeftWindowControls = useHasWindowChromeObstruction("top-left");
-  const appChromeLayout = resolveDesktopAppChromeLayout({
-    desktopSidebarRendered: desktopSidebarVisible,
-    hasTopLeftWindowControls,
-    sidebarControlsEnabled: chromeEnabled && !isWorkspaceFocusModeEnabled,
-  });
-  const sidebarChrome = (
-    <SidebarChrome
-      mounted={isCompactLayout ? chromeEnabled : desktopSidebarMounted}
-      visible={isCompactLayout ? chromeEnabled : desktopSidebarVisible}
-      keyboardShortcutsEnabled={keyboardShortcutsEnabled}
-    />
-  );
-  let themedSidebarChrome = sidebarChrome;
-  if (isWeb) {
-    themedSidebarChrome = <AppearanceStyleBoundary>{sidebarChrome}</AppearanceStyleBoundary>;
-  }
-  const workspaceChromeStyle = useMemo(
-    () => [rowStyle, !isCompactLayout && { paddingLeft: insets.left, paddingRight: insets.right }],
-    [insets.left, insets.right, isCompactLayout],
-  );
-  const workspaceChrome = (
-    <View style={workspaceChromeStyle}>
-      <WorkspaceLayoutModePublisher />
-      {!isCompactLayout ? (
-        <WindowChromeRegion corners={appChromeLayout.sidebarCorners}>
-          {themedSidebarChrome}
-        </WindowChromeRegion>
-      ) : null}
-      <WorkspaceExplorerOpenGesture enabled={chromeEnabled && isCompactLayout}>
-        <WindowChromeRegion
-          corners={isCompactLayout && chromeEnabled ? "both" : appChromeLayout.contentCorners}
-        >
-          <View style={flexStyle}>{children}</View>
-        </WindowChromeRegion>
-      </WorkspaceExplorerOpenGesture>
-    </View>
-  );
-
-  // Native panel gesture hosts outlive appearance keys, like native navigators.
-  // Their tracked styles update in place; web numeric styles still need remounting.
-  const surface = (
-    <View style={layoutStyles.surfaceFill}>
-      {workspaceChrome}
-      <AppearanceStyleBoundary>
-        {!isCompactLayout && appChromeLayout.sidebarToggleOwner === "window" ? (
-          <WindowChromeRegion corners="top-left">
-            <WindowChromeSafeArea
-              placement="inline"
-              horizontalPadding={WINDOW_SIDEBAR_TOGGLE_HORIZONTAL_PADDING}
-              pointerEvents="box-none"
-              style={layoutStyles.windowSidebarToggle}
-            >
-              <WindowSidebarMenuToggle />
-            </WindowChromeSafeArea>
-          </WindowChromeRegion>
-        ) : null}
-        <DesktopWindowControls />
-        <FloatingPanelPortalHost />
-      </AppearanceStyleBoundary>
-      {isCompactLayout ? themedSidebarChrome : null}
-      <AppearanceStyleBoundary>
-        <DownloadToast />
-        <RosettaCalloutSource />
-        <UpdateCalloutSource />
-        <LegacyAgentSkillsMigration />
-        <WorktreeSetupCalloutSource />
-        <CommandCenterRootActions />
-        <CommandCenterWorkspaceActions />
-        <PluginCommandCenterActions />
-        <WorkspacePinShortcutHandler />
-        <WorkspaceRenameHost />
-        <CommandCenter />
-        <GlobalCommandPaletteHost />
-        <AddProjectFlowHost />
-        <HostChooserModal />
-        <HostConfirmationSheet />
-        <ProviderSettingsHost />
-        <WorkspaceSetupDialog />
-        <KeyboardShortcutsDialog />
-        <AppDiagnosticHost />
-        <ChangelogHost />
-        <QuittingOverlay />
-      </AppearanceStyleBoundary>
-    </View>
-  );
-
-  return (
-    <AppContainerLifetime compactGesturesEnabled={chromeEnabled && isCompactLayout}>
-      <SheetHostScope enabled={isCompactLayout}>{surface}</SheetHostScope>
-    </AppContainerLifetime>
-  );
-}
-
-function AppContainerLifetime({
-  children,
-  compactGesturesEnabled,
-}: {
-  children: ReactNode;
-  compactGesturesEnabled: boolean;
-}) {
-  return (
-    <ComposerEditingSessionsProvider>
-      <CommandCenterProvider>
-        <MobileGestureWrapper chromeEnabled={compactGesturesEnabled}>
-          {children}
-        </MobileGestureWrapper>
-      </CommandCenterProvider>
-    </ComposerEditingSessionsProvider>
-  );
-}
-
-function SidebarChrome({
-  mounted,
-  visible,
-  keyboardShortcutsEnabled,
-}: {
-  mounted: boolean;
-  visible: boolean;
-  keyboardShortcutsEnabled: boolean;
-}) {
-  const isCompactLayout = useIsCompactFormFactor();
-  const isMobileActive = useIsMobilePanelActive("agent-list");
-  const isDesktopOpen = usePanelStore((state) => state.desktop.agentListOpen);
-  const active = visible && (isCompactLayout ? isMobileActive : isDesktopOpen);
-  return (
-    <SidebarModelProvider active={active}>
-      {mounted ? <LeftSidebar active={active} /> : null}
-      <WorkspaceShortcutTargetsSubscriber enabled={keyboardShortcutsEnabled} />
-    </SidebarModelProvider>
-  );
-}
-
-function MobileGestureWrapper({
-  children,
-  chromeEnabled,
-}: {
-  children: ReactNode;
-  chromeEnabled: boolean;
-}) {
-  const openGesture = useOpenAgentListGesture(chromeEnabled);
-  const isCompactLayout = useIsCompactFormFactor();
-
-  return (
-    <GestureDetector gesture={openGesture} touchAction={MOBILE_WEB_GESTURE_TOUCH_ACTION}>
-      <View
-        collapsable={false}
-        style={layoutStyles.surfaceFill}
-        testID={isCompactLayout ? "compact-shell" : "wide-shell"}
-      >
-        {children}
-      </View>
-    </GestureDetector>
-  );
+interface WindowWithIdleCallback {
+  requestIdleCallback?: (callback: () => void) => number;
+  cancelIdleCallback?: (handle: number) => void;
 }
 
 function ProvidersWrapper({ children }: { children: ReactNode }) {
@@ -736,7 +220,6 @@ function OpenProjectListener() {
       })
       .catch(() => undefined);
 
-    // Listen for hot-start paths relayed via the second-instance event.
     void listenToDesktopEvent<OpenProjectEventPayload>("open-project", (payload) => {
       if (disposed) {
         return;
@@ -761,25 +244,6 @@ function OpenProjectListener() {
   }, [openPathOnChosenHost]);
 
   return null;
-}
-
-function AppWithSidebar({ children }: { children: ReactNode }) {
-  useSettingsRouteEntry();
-  const pathname = usePathname();
-  const hosts = useHosts();
-  const storeReady = useStoreReady();
-  const routeServerId = useMemo(() => parseServerIdFromPathname(pathname), [pathname]);
-  const routeHasKnownHost =
-    routeServerId !== null && hosts.some((host) => host.serverId === routeServerId);
-  const shouldShowAppChrome =
-    storeReady &&
-    (pathname === "/open-project" ||
-      pathname === "/new" ||
-      pathname === "/sessions" ||
-      pathname === "/schedules" ||
-      routeHasKnownHost);
-
-  return <AppContainer chromeEnabled={shouldShowAppChrome}>{children}</AppContainer>;
 }
 
 function FaviconStatusSync() {
@@ -865,12 +329,6 @@ function RuntimeProviders({ children }: { children: ReactNode }) {
   );
 }
 
-// PortalProvider must stay inside normal app-wide context providers.
-// `@gorhom/portal` renders portaled children at the host's location in the
-// tree, so any context a portaled sheet might consume (QueryClient, theme,
-// auth, settings, ...) must wrap PortalProvider, not be wrapped by it.
-// BottomSheetModalProvider is the exception: Gorhom modals consume portal
-// context and need one shared provider for sibling sheets to stack.
 function RootProviders({ children }: { children: ReactNode }) {
   return (
     <KeyboardActionDispatcherProvider>
@@ -908,6 +366,30 @@ function RootAppTree() {
 export default function RootLayout() {
   useEffect(() => installWebScrollbarStyles(), []);
   useEffect(() => {
+    void getDesktopHost()
+      ?.invoke?.("mark_first_paint")
+      ?.catch?.(() => {});
+  }, []);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const win = window as unknown as WindowWithIdleCallback;
+    const schedulePrefetch =
+      typeof win.requestIdleCallback === "function"
+        ? (cb: () => void) => win.requestIdleCallback!(cb)
+        : (cb: () => void) => setTimeout(cb, 1200);
+
+    const handle = schedulePrefetch(() => {
+      void import("../terminal/runtime/terminal-emulator-runtime").catch(() => {});
+      void import("../file-panels/source/editor/view.web").catch(() => {});
+    });
+
+    return () => {
+      if (typeof win.cancelIdleCallback === "function" && typeof handle === "number") {
+        win.cancelIdleCallback(handle);
+      }
+    };
+  }, []);
+  useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
       if (nextState !== "active") {
         void flushDraftPersistStorage();
@@ -923,16 +405,5 @@ const layoutStyles = StyleSheet.create((theme) => ({
   surfaceFill: {
     flex: 1,
     backgroundColor: theme.colors.surface0,
-  },
-  windowSidebarToggle: {
-    position: "absolute",
-    top: 1,
-    left: 0,
-    zIndex: 20,
-    height: HEADER_INNER_HEIGHT,
-    flexDirection: "row",
-    alignItems: "center",
-    borderBottomWidth: theme.borderWidth[1],
-    borderBottomColor: "transparent",
   },
 }));

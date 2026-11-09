@@ -28,7 +28,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         MenuItem::with_id(app, "restart_daemon", "Restart Daemon", true, None::<&str>)?;
     let show_logs_i = MenuItem::with_id(app, "show_logs", "Show Logs", true, None::<&str>)?;
     let sep3 = PredefinedMenuItem::separator(app)?;
-    let quit_i = MenuItem::with_id(app, "quit", "Quit Paseo", true, None::<&str>)?;
+    let quit_i = MenuItem::with_id(app, "quit", "Quit Kronos", true, None::<&str>)?;
 
     let menu = Menu::with_items(
         app,
@@ -50,10 +50,23 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         last_count: std::sync::atomic::AtomicUsize::new(usize::MAX),
     });
 
-    let _tray = TrayIconBuilder::with_id("main")
+    let tray_icon = app
+        .default_window_icon()
+        .cloned()
+        .or_else(|| {
+            tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")).ok()
+        });
+
+    let mut builder = TrayIconBuilder::with_id("main")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("Kronos")
+        .tooltip("Kronos");
+
+    if let Some(icon) = tray_icon {
+        builder = builder.icon(icon);
+    }
+
+    let _tray = builder
         .on_menu_event(|app, event| match event.id.as_ref() {
             "new_chat" => {
                 if let Some(window) = app.get_webview_window("main") {
@@ -88,7 +101,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = app
                         .notification()
                         .builder()
-                        .title("Paseo Daemon")
+                        .title("Kronos Daemon")
                         .body(if restarted {
                             "Daemon restarted successfully."
                         } else {

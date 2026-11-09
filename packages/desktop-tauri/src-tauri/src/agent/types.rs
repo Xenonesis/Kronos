@@ -42,6 +42,8 @@ pub struct StoredAgentRecord {
     pub config: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_info: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_usage: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

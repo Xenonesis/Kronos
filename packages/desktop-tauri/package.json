@@ -6,12 +6,13 @@
   "scripts": {
     "prepare-dist": "node prepare-dist.mjs",
     "prepare-dist:with-node": "node prepare-dist.mjs --with-node",
-    "prebuild": "node prepare-dist.mjs",
     "pretauri": "node prepare-dist.mjs",
     "dev": "tauri dev",
     "tauri": "tauri",
-    "build": "tauri build --bundles nsis",
-    "build:clean": "node prepare-dist.mjs && tauri build --bundles nsis"
+    "build": "node build.mjs",
+    "build:clean": "node build.mjs --force",
+    "build:with-node": "node build.mjs --with-node",
+    "build:signed": "node build.mjs --signed"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"

@@ -20,6 +20,18 @@ describe("TelemetryHud", () => {
     expect(screen.getByText(/380ms TTFT/)).toBeTruthy();
   });
 
+  it("renders token badge when tokens is positive", () => {
+    render(<TelemetryHud tokens={1250} isStreaming={true} />);
+    expect(screen.getByText("TOK")).toBeTruthy();
+    expect(screen.getByText("1.3k")).toBeTruthy();
+  });
+
+  it("renders context tokens when tokens is 0 but contextTokens is positive", () => {
+    render(<TelemetryHud tokens={0} contextTokens={8400} isStreaming={false} />);
+    expect(screen.getByText("TOK")).toBeTruthy();
+    expect(screen.getByText("8.4k")).toBeTruthy();
+  });
+
   it("renders cost badge when costUsd is positive", () => {
     render(<TelemetryHud tps={10} ttftMs={100} costUsd={0.0123} isStreaming={true} />);
     expect(screen.getByText(/\$0\.0123/)).toBeTruthy();
@@ -32,6 +44,11 @@ describe("TelemetryHud", () => {
 
   it("renders null when idle, tps is 0, and ttftMs is not provided", () => {
     const { container } = render(<TelemetryHud isStreaming={false} tps={0} />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("renders null when isStreaming is true but all metrics are 0 or null (no empty box)", () => {
+    const { container } = render(<TelemetryHud isStreaming={true} tps={0} />);
     expect(container.firstChild).toBeNull();
   });
 });

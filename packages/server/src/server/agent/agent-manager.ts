@@ -2201,10 +2201,18 @@ export class AgentManager {
     return notice;
   }
 
-  async setAgentModel(agentId: string, modelId: string | null): Promise<void> {
+  async setAgentModel(agentId: string, modelId: string | null, provider?: string): Promise<void> {
     const agent = this.requireSessionAgent(agentId);
     const normalizedModelId =
       typeof modelId === "string" && modelId.trim().length > 0 ? modelId : null;
+
+    if (provider && provider !== agent.provider) {
+      agent.provider = provider as AgentProvider;
+      agent.config.provider = provider as AgentProvider;
+      if (agent.runtimeInfo) {
+        agent.runtimeInfo = { ...agent.runtimeInfo, provider };
+      }
+    }
 
     if (agent.session.setModel) {
       await agent.session.setModel(normalizedModelId);

@@ -3,49 +3,45 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 
+import vm from "node:vm";
 const repoRoot = join(import.meta.dirname, "..");
 
-test("desktop main.rs bridge_script has 100% valid JavaScript syntax", async () => {
-  const mainRsPath = join(repoRoot, "packages/desktop-tauri/src-tauri/src/main.rs");
-  const content = await readFile(mainRsPath, "utf8");
-
+async function desktopBridgeScript() {
+  const content = await readFile(
+    join(repoRoot, "packages/desktop-tauri/src-tauri/src/main.rs"),
+    "utf8",
+  );
   const startMarker = 'let bridge_script = format!(\n        r#"';
   const endMarker = '"#\n    );';
+  const start = content.indexOf(startMarker);
+  const end = content.indexOf(endMarker, start + startMarker.length);
+  if (start < 0 || end < 0) throw new Error("Native bridge template is unavailable");
+  return content
+    .slice(start + startMarker.length, end)
+    .replace(/\{\{/g, "{")
+    .replace(/\}\}/g, "}")
+    .replace("{status_json}", JSON.stringify({ status: "running", listen: "127.0.0.1:6767" }));
+}
 
-  const startIdx = content.indexOf(startMarker);
-  assert.ok(startIdx !== -1, "bridge_script start marker must be present in main.rs");
+test("remote and opaque documents never acquire a native bridge", async () => {
+  const source = await desktopBridgeScript();
+  for (const location of [
+    { protocol: "http:", hostname: "127.0.0.1", port: "6767" },
+    { protocol: "https:", hostname: "tauri.localhost.attacker.invalid", port: "" },
+    { protocol: "about:", hostname: "", port: "" },
+  ]) {
+    const window = { location };
+    window.top = window;
+    vm.runInNewContext(source, { window });
+    assert.equal(window.paseoDesktop, undefined);
+  }
+});
 
-  const codeStart = startIdx + startMarker.length;
-  const endIdx = content.indexOf(endMarker, codeStart);
-  assert.ok(endIdx !== -1, "bridge_script end marker must be present in main.rs");
-
-  let script = content.substring(codeStart, endIdx);
-
-  // Replace rust template formatting {{ and }} with { and }
-  script = script.replace(/\{\{/g, "{").replace(/\}\}/g, "}");
-  // Replace {status_json} with a mock status object
-  script = script.replace(
-    "{status_json}",
-    JSON.stringify({
-      status: "running",
-      listen: "127.0.0.1:6767",
-      server_id: "srv_test_123",
-      credential: "token",
-    }),
-  );
-
-  assert.doesNotThrow(() => {
-    new Function(script);
-  }, "bridge_script must be completely valid JavaScript without syntax errors");
-
-  assert.match(
-    script,
-    /window\.paseoDesktop\s*=\s*\{/,
-    "bridge_script must assign window.paseoDesktop",
-  );
-  assert.match(
-    script,
-    /getKernelTelemetry:\s*async function/,
-    "bridge_script must define getKernelTelemetry",
-  );
+test("a trusted-URL subframe cannot inherit the top-level native bridge", async () => {
+  const window = {
+    top: {},
+    location: { protocol: "http:", hostname: "tauri.localhost", port: "" },
+  };
+  vm.runInNewContext(await desktopBridgeScript(), { window });
+  assert.equal(window.paseoDesktop, undefined);
 });

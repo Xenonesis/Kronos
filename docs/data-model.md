@@ -30,7 +30,7 @@ Workspace archive runs lifecycle teardown from the exact `cwd` but removes only 
 `worktreeRoot` after its last active reference disappears. Worktree recovery recreates that backing
 checkout from `mainRepoRoot`, then restores the relative path from `worktreeRoot` to `cwd`.
 
-Paseo uses **file-based JSON persistence** instead of a traditional database. All data is validated at runtime with Zod schemas. Most stores write atomically (write to temp file, then rename); a few still use plain `writeFile` — see each section. There is no schema-versioning/migration framework — schemas rely on optional fields with defaults for forward compatibility, with a small amount of inline normalization in `persisted-config.ts` for legacy provider/speech entries.
+Paseo uses **file-backed persistence** instead of a traditional database. The Node daemon validates JSON with Zod; the native kernel validates records and timeline journals with Serde. Most stores write atomically (write to temp file, then rename); a few still use plain `writeFile` — see each section. Node schemas rely on optional fields with defaults rather than a schema-versioning/migration framework, with a small amount of inline normalization in `persisted-config.ts` for legacy provider/speech entries.
 
 All server-side stores live under `$PASEO_HOME` (defaults to `~/.paseo`).
 
@@ -164,6 +164,42 @@ Each agent is stored as a separate JSON file, grouped by project directory.
 | `icon`        | `string?`             |
 | `value`       | `string \| null`      |
 | `options`     | `AgentSelectOption[]` |
+
+### Native kernel agent storage
+
+The embedded Rust kernel uses a separate layout: `agents/records.json` contains
+`{ format: 1, records, timelineGenerations }`, and `agents/timelines/{agentId}.jsonl`
+contains one compact JSON timeline item per newline. Do not use Node agent-file tools
+to edit this store. Existing bare record maps and `{agentId}.json` timeline arrays are
+readable; the next successful write cuts over each store. The legacy timeline remains
+an untouched backup, but the journal becomes authoritative once present.
+
+A deletion removes the record and advances its timeline generation in the same
+records-file replacement. Recreating that ID uses `{agentId}.{generation}.jsonl`;
+generation zero alone may read the legacy array. This prevents old history from
+returning after cache invalidation or failed obsolete-file cleanup. Deletion is
+logical, not secure erasure: cleanup failures are logged and can leave unreachable
+old files on disk.
+
+Only a missing file is an empty store. Malformed, unreadable or unsupported records
+fail startup; malformed legacy timelines and invalid or unterminated journal rows
+return errors and block append. Preserve the original files before repairing them.
+A truncated final row does not cause automatic truncation or loss of preceding valid
+rows. The error identifies the byte offset; the read fails rather than presenting a
+silently shortened transcript.
+
+Record writes serialize under their metadata lock. Timeline reads and writes own
+only the affected agent's lock; bounded history projection uses `with_timeline`
+without cloning the entire transcript. Memory changes become visible after successful
+file commit. Appends sync the new row; a failed append attempts a synced rollback to
+the previous length. If rollback also fails, the cache stays unchanged and further
+appends fail until explicit recovery; the file's outcome is uncertain.
+
+Native atomic replacements use exclusively created, unique sibling temporary files,
+sync their content before rename, and clean failed attempts. Records and transcripts
+are not a cross-file transaction. File sync plus rename does not promise directory
+entry survival after power loss on every filesystem or platform. One kernel owns
+each home; these locks do not coordinate multiple daemon processes or external edits.
 
 ---
 

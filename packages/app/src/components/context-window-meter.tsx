@@ -22,6 +22,7 @@ interface ContextWindowMeterProps {
   showPercentage?: boolean;
   /** Optional glyph envelope for icon-toolbar alignment. */
   glyphSize?: number;
+  modelLabel?: string | null;
 }
 
 const SVG_SIZE = 14;
@@ -151,6 +152,7 @@ export function ContextWindowMeter({
   totalCostUsd,
   showPercentage = false,
   glyphSize,
+  modelLabel,
 }: ContextWindowMeterProps) {
   const { t, i18n } = useTranslation();
   const { width } = useWindowDimensions();
@@ -162,16 +164,22 @@ export function ContextWindowMeter({
   const [isSheetOpen, setIsSheetOpen] = useState(false);
   const openSheet = useCallback(() => setIsSheetOpen(true), []);
   const closeSheet = useCallback(() => setIsSheetOpen(false), []);
+  const effectiveUsedTokens =
+    usedTokens !== null && usedTokens !== undefined && isValidUsedTokens(usedTokens)
+      ? usedTokens
+      : 0;
   const percentage =
-    maxTokens !== null && usedTokens !== null ? getUsagePercentage(maxTokens, usedTokens) : null;
+    maxTokens !== null && isValidMaxTokens(maxTokens)
+      ? getUsagePercentage(maxTokens, effectiveUsedTokens)
+      : null;
   const geometry = getMeterGeometry(showPercentage, glyphSize);
 
   const context = useMemo(
     () =>
-      percentage !== null && maxTokens !== null && usedTokens !== null
-        ? { percentage: Math.round(percentage), maxTokens, usedTokens }
+      percentage !== null && maxTokens !== null && isValidMaxTokens(maxTokens)
+        ? { percentage: Math.round(percentage), maxTokens, usedTokens: effectiveUsedTokens }
         : null,
-    [percentage, maxTokens, usedTokens],
+    [percentage, maxTokens, effectiveUsedTokens],
   );
   const meterColors = useCallback(
     (theme: Theme) => ({
@@ -241,6 +249,7 @@ export function ContextWindowMeter({
             sessionCost={formattedSessionCost}
             showTitle={false}
             refreshable
+            modelLabel={modelLabel}
           />
         </ContextWindowSheet>
       </>
@@ -282,6 +291,7 @@ export function ContextWindowMeter({
             sessionCost={formattedSessionCost}
             showTitle
             refreshable={false}
+            modelLabel={modelLabel}
           />
         </TooltipContent>
       </Tooltip>
@@ -327,6 +337,7 @@ export function ContextWindowMeter({
           sessionCost={formattedSessionCost}
           showTitle
           refreshable
+          modelLabel={modelLabel}
         />
       </HoverCardContent>
     </HoverCard>

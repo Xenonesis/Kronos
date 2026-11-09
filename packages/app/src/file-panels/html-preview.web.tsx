@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Linking, Platform, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 
@@ -12,7 +12,11 @@ import {
   parseHostFromUrl,
 } from "@/desktop/browser/pane/browser-load-failure-overlay";
 import { BrowserImportDialog } from "@/desktop/browser/pane/browser-import-dialog";
-import { resolveIframeTargetUrl } from "@/desktop/browser/pane/url-utils";
+import {
+  browserFrameSandbox,
+  importBrowserCookies,
+  useBrowserFrameUrl,
+} from "@/desktop/browser/pane/use-browser-frame-url";
 import { useSendBrowserUrlToAgent } from "@/desktop/browser/pane/use-send-browser-url-to-agent";
 import {
   InteractiveInspectOverlay,
@@ -34,11 +38,9 @@ import { useInlinedHtmlAssets } from "./use-inlined-html-assets";
 // the parent DOM and the app's storage outright. Agent-written HTML is not
 // trusted markup, and the CSP in html-preview-csp.ts is what bounds the rest.
 //
-// A remote URL is a different case: it is a real site the user asked to visit,
-// loaded through the daemon proxy. It keeps `allow-same-origin` so the site
-// behaves like a site (its own origin, its own storage) and can be inspected.
+// Proxied remote documents also require opaque origins: their HTTP host is the
+// daemon, not the upstream site. Direct development URLs retain their own origin.
 const FILE_SANDBOX = "allow-scripts";
-const REMOTE_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-modals";
 
 interface HtmlTabState {
   id: string;
@@ -106,6 +108,16 @@ export function FileHtmlPreview({
   const inlinedDocument = useMemo(() => withPreviewCsp(inlinedHtml), [inlinedHtml]);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [frameRevision, setFrameRevision] = useState(0);
+  const frame = useBrowserFrameUrl(activeTab.url, frameRevision, !activeTab.isFile);
+  useEffect(() => {
+    if (frame.error)
+      setTabs((previous) =>
+        previous.map((tab) =>
+          tab.id === activeTab.id ? { ...tab, hasLoadError: true, isLoading: false } : tab,
+        ),
+      );
+  }, [activeTab.id, frame.error]);
 
   const navigateTo = useCallback(
     (newUrl: string) => {
@@ -171,14 +183,8 @@ export function FileHtmlPreview({
     setTabs((prev) =>
       prev.map((item) => (item.id === activeTabId ? { ...item, hasLoadError: false } : item)),
     );
-    if (iframeRef.current) {
-      if (activeTab.isFile) {
-        iframeRef.current.srcdoc = inlinedDocument;
-      } else {
-        iframeRef.current.src = resolveIframeTargetUrl(activeTab.url);
-      }
-    }
-  }, [activeTab, activeTabId, inlinedDocument]);
+    setFrameRevision((revision) => revision + 1);
+  }, [activeTabId]);
   const handleCopyAddress = useCallback(
     async (urlToCopy: string) => {
       await Clipboard.setStringAsync(urlToCopy);
@@ -234,11 +240,17 @@ export function FileHtmlPreview({
     void sendToAgent(activeTab.url, activeTab.title);
   }, [activeTab.title, activeTab.url, sendToAgent]);
   const handleImportSession = useCallback(
-    (_cookiesText: string, source: "chrome" | "edge" | "manual") => {
-      toast.show(`Imported ${source} session cookies`);
-      handleReload();
+    async (cookies: string, source: "chrome" | "edge" | "manual") => {
+      try {
+        if (activeTab.isFile) throw new Error("Navigate to a website before importing its session");
+        await importBrowserCookies(parseHostFromUrl(activeTab.url), cookies.trim());
+        toast.show(`Imported ${source} session cookies`);
+        handleReload();
+      } catch {
+        toast.show("Unable to import session cookies");
+      }
     },
-    [handleReload, toast],
+    [activeTab.isFile, activeTab.url, handleReload, toast],
   );
 
   const handleOpenImport = useCallback(() => setIsImportOpen(true), []);
@@ -329,7 +341,7 @@ export function FileHtmlPreview({
         <View style={viewportStyle}>
           {Platform.OS === "web" && activeTab.isFile && (
             <iframe
-              key={activeTab.id}
+              key={`${activeTab.id}:${frameRevision}`}
               ref={iframeRef}
               data-testid={testID}
               title={activeTab.title || "HTML Preview"}
@@ -339,15 +351,15 @@ export function FileHtmlPreview({
               referrerPolicy="no-referrer"
             />
           )}
-          {Platform.OS === "web" && !activeTab.isFile && (
+          {Platform.OS === "web" && !activeTab.isFile && frame.src && (
             <iframe
-              key={activeTab.id}
+              key={`${activeTab.id}:${frameRevision}`}
               ref={iframeRef}
               data-testid={testID}
               title={activeTab.title || "HTML Preview"}
-              src={resolveIframeTargetUrl(activeTab.url)}
+              src={frame.src}
               style={iframeInnerStyle}
-              sandbox={REMOTE_SANDBOX}
+              sandbox={browserFrameSandbox(activeTab.url)}
               referrerPolicy="no-referrer"
               onError={handleIframeError}
             />

@@ -1,4 +1,3 @@
-
 import { LOCALES, type Locale, languageAlternates, localizePath, OPEN_GRAPH_LOCALES } from "~/i18n";
 
 export const SITE_ORIGIN = "https://xenonesis.github.io/Kronos";

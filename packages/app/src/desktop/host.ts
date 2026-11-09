@@ -257,6 +257,10 @@ export interface DesktopHostBridge {
   browser?: DesktopBrowserBridge;
   nativeTerminal?: NativeTerminalBridge;
   nativeDiff?: NativeDiffBridge;
+  nativeBrowser?: {
+    resolveUrl: (url: string) => Promise<string>;
+    importCookies: (host: string, cookies: string) => Promise<void>;
+  };
   getKernelTelemetry?: () => Promise<KernelTelemetry | null>;
 }
 

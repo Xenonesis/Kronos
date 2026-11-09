@@ -36,7 +36,7 @@ for (const schema of messages.SessionInboundMessageSchema.options) {
   const jsonSchema = z.toJSONSchema(schema, { unrepresentable: "any" });
   const typeTag = schema.shape?.type?.value ?? schema.shape?.type?._def?.value ?? "unknown";
   const filename = `${sanitizeFilename(typeTag)}.json`;
-  
+
   await writeFile(resolve(inboundDir, filename), JSON.stringify(jsonSchema, null, 2));
   manifest.inbound[typeTag] = {
     file: `inbound/${filename}`,
@@ -50,7 +50,7 @@ for (const schema of messages.SessionOutboundMessageSchema.options) {
   const jsonSchema = z.toJSONSchema(schema, { unrepresentable: "any" });
   const typeTag = schema.shape?.type?.value ?? schema.shape?.type?._def?.value ?? "unknown";
   const filename = `${sanitizeFilename(typeTag)}.json`;
-  
+
   await writeFile(resolve(outboundDir, filename), JSON.stringify(jsonSchema, null, 2));
   manifest.outbound[typeTag] = {
     file: `outbound/${filename}`,
@@ -80,4 +80,6 @@ for (const schema of messages.WSOutboundMessageSchema.options) {
 
 await writeFile(resolve(schemasDir, "manifest.json"), JSON.stringify(manifest, null, 2));
 
-console.log(`[export-json-schemas] Successfully exported ${totalInbound} inbound and ${totalOutbound} outbound JSON schemas (total ${totalInbound + totalOutbound + manifest.topLevel.wsInbound.length + manifest.topLevel.wsOutbound.length}) to ${schemasDir}`);
+console.log(
+  `[export-json-schemas] Successfully exported ${totalInbound} inbound and ${totalOutbound} outbound JSON schemas (total ${totalInbound + totalOutbound + manifest.topLevel.wsInbound.length + manifest.topLevel.wsOutbound.length}) to ${schemasDir}`,
+);

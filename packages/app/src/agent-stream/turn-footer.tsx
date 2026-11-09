@@ -49,6 +49,8 @@ export const TurnFooter = memo(function TurnFooter({
   supportsTimelineCursor,
   onForkAssistantTurn,
   onForkInFlightTurn,
+  serverId,
+  agentId,
 }: {
   isRunning: boolean;
   inFlightTurnStartedAt: Date | null;
@@ -57,6 +59,8 @@ export const TurnFooter = memo(function TurnFooter({
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
   onForkInFlightTurn?: InFlightTurnForkHandler;
+  serverId?: string;
+  agentId?: string;
 }) {
   if (isRunning) {
     return (
@@ -79,6 +83,8 @@ export const TurnFooter = memo(function TurnFooter({
       startIndex={host.startIndex}
       supportsTimelineCursor={supportsTimelineCursor}
       onForkAssistantTurn={onForkAssistantTurn}
+      serverId={serverId}
+      agentId={agentId}
     />
   );
 });
@@ -90,6 +96,8 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
   startIndex,
   supportsTimelineCursor,
   onForkAssistantTurn,
+  serverId,
+  agentId,
 }: {
   strategy: TurnContentStrategy;
   items: StreamItem[];
@@ -97,6 +105,8 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
   startIndex: number;
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
+  serverId?: string;
+  agentId?: string;
 }) {
   return (
     <TurnFooterRow>
@@ -107,6 +117,8 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
         startIndex={startIndex}
         supportsTimelineCursor={supportsTimelineCursor}
         onForkAssistantTurn={onForkAssistantTurn}
+        serverId={serverId}
+        agentId={agentId}
       />
     </TurnFooterRow>
   );
@@ -163,6 +175,8 @@ function CompletedTurnFooter({
   startIndex,
   supportsTimelineCursor,
   onForkAssistantTurn,
+  serverId,
+  agentId,
 }: {
   strategy: TurnContentStrategy;
   items: StreamItem[];
@@ -170,6 +184,8 @@ function CompletedTurnFooter({
   startIndex: number;
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
+  serverId?: string;
+  agentId?: string;
 }) {
   const getContent = useCallback(
     () =>
@@ -194,6 +210,14 @@ function CompletedTurnFooter({
     },
     [boundary, onForkAssistantTurn],
   );
+  const item = items[startIndex];
+  const messageId = item
+    ? item.kind === "assistant_message"
+      ? (item.messageId ?? item.id)
+      : item.id
+    : undefined;
+  const occurrenceKey = item?.id;
+
   return (
     <View style={stylesheet.turnFooterSlot}>
       <AssistantTurnFooter
@@ -201,6 +225,10 @@ function CompletedTurnFooter({
         completedAt={timing?.completedAt}
         durationMs={timing?.durationMs}
         onFork={boundary && onForkAssistantTurn ? handleFork : undefined}
+        messageId={messageId}
+        occurrenceKey={occurrenceKey}
+        serverId={serverId}
+        agentId={agentId}
       />
     </View>
   );

@@ -19,6 +19,9 @@
         }
       ]
     },
+    "provider": {
+      "type": "string"
+    },
     "requestId": {
       "type": "string"
     }

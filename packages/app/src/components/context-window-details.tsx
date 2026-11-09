@@ -17,6 +17,7 @@ interface ContextWindowDetailsProps {
   showTitle: boolean;
   /** Whether the usage cards have a Refresh button; without one they show their freshness. */
   refreshable: boolean;
+  modelLabel?: string | null;
 }
 
 /**
@@ -30,12 +31,16 @@ export function ContextWindowDetails({
   sessionCost,
   showTitle,
   refreshable,
+  modelLabel,
 }: ContextWindowDetailsProps) {
   const { t } = useTranslation();
+  const titleText = modelLabel
+    ? `${modelLabel} • ${t("contextWindow.title")}`
+    : t("contextWindow.title");
   return (
     <>
       <View style={styles.summary}>
-        {showTitle ? <Text style={styles.title}>{t("contextWindow.title")}</Text> : null}
+        {showTitle ? <Text style={styles.title}>{titleText}</Text> : null}
         {context ? (
           <>
             <Text style={styles.text}>

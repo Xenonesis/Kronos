@@ -2,26 +2,248 @@ use crate::agent::registry::ProviderRegistry;
 use crate::agent::storage::AgentStorage;
 use crate::agent::types::{now_iso, AgentStatus, AgentTimelineItem, StoredAgentRecord};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
 
+struct TurnControl {
+    token: String,
+    cancel: tokio::sync::watch::Sender<bool>,
+    finished: tokio::sync::watch::Sender<bool>,
+}
+
+/// Admission owns the turn even before the runner is scheduled. Never clone this lease.
+pub struct ReservedTurn {
+    pub agent: StoredAgentRecord,
+    pub(crate) prompt: String,
+    pub(crate) token: String,
+    pub(crate) cancellation: tokio::sync::watch::Receiver<bool>,
+    manager: AgentManager,
+    completed: bool,
+    provider_started: bool,
+}
+
+impl ReservedTurn {
+    pub fn is_cancelled(&self) -> bool {
+        *self.cancellation.borrow()
+    }
+
+    pub(crate) fn manager(&self) -> &AgentManager {
+        &self.manager
+    }
+
+    pub(crate) fn mark_provider_started(&mut self) -> Result<(), String> {
+        let gate = self.manager.lifecycle_gate(&self.agent.id);
+        let _guard = gate.lock().unwrap();
+        let mut record = self
+            .manager
+            .get_agent(&self.agent.id)
+            .ok_or("Agent disappeared before provider start")?;
+        let handle = record
+            .runtime_info
+            .as_ref()
+            .and_then(|runtime| runtime["providerHandleId"].as_str())
+            .or_else(|| {
+                record
+                    .config
+                    .as_ref()
+                    .and_then(|config| config["providerHandleId"].as_str())
+            })
+            .map(str::to_owned);
+        record.runtime_info = Some(serde_json::json!({
+            "provider": record.provider, "continuityRequired": true, "providerHandleId": handle
+        }));
+        self.manager
+            .storage
+            .save_record(record.clone())
+            .map_err(|e| format!("Failed to save provider start: {e}"))?;
+        self.agent = record;
+        self.provider_started = true;
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn restore_unstarted_provider(
+        &mut self,
+        prior: &StoredAgentRecord,
+    ) -> Result<(), String> {
+        if !self.provider_started {
+            return Ok(());
+        }
+        let gate = self.manager.lifecycle_gate(&self.agent.id);
+        let _guard = gate.lock().unwrap();
+        let mut record = self
+            .manager
+            .get_agent(&self.agent.id)
+            .ok_or("Agent disappeared while restoring suspended provider setup")?;
+        record.runtime_info = prior.runtime_info.clone();
+        self.manager
+            .storage
+            .save_record(record.clone())
+            .map_err(|error| {
+                format!(
+                    "Failed to restore provider continuity after suspended setup failure: {error}"
+                )
+            })?;
+        self.agent = record;
+        self.provider_started = false;
+        Ok(())
+    }
+
+    pub(crate) fn persist_provider_handle(&mut self, handle: &str) -> Result<(), String> {
+        let gate = self.manager.lifecycle_gate(&self.agent.id);
+        let _guard = gate.lock().unwrap();
+        let mut record = self
+            .manager
+            .get_agent(&self.agent.id)
+            .ok_or_else(|| "Agent disappeared while saving provider session".to_string())?;
+        record.runtime_info = Some(serde_json::json!({
+            "provider": record.provider, "providerHandleId": handle
+        }));
+        self.manager
+            .storage
+            .save_record(record.clone())
+            .map_err(|e| format!("Failed to persist provider session: {e}"))?;
+        self.agent = record;
+        Ok(())
+    }
+
+    pub(crate) fn retain_cleanup_failure(&mut self, error: &str) {
+        let gate = self.manager.lifecycle_gate(&self.agent.id);
+        let _guard = gate.lock().unwrap();
+        if let Some(mut record) = self.manager.get_agent(&self.agent.id) {
+            record.last_status = AgentStatus::Error;
+            record.last_error = Some(error.to_owned());
+            record.updated_at = now_iso();
+            match self.manager.storage.save_record(record) {
+                Ok(()) => {
+                    self.manager
+                        .active_statuses
+                        .write()
+                        .unwrap()
+                        .insert(self.agent.id.clone(), AgentStatus::Error);
+                }
+                Err(persist) => eprintln!("[Runner] Failed to persist cleanup failure: {persist}"),
+            }
+        }
+        // Never permit a new turn when the previous tree's exit is unconfirmed.
+        self.completed = true;
+    }
+
+    /// Call only after the owned process tree and stream readers have been cleaned up.
+    pub(crate) fn finish(&mut self, error: Option<&str>) -> Result<(), String> {
+        if self.completed {
+            return Ok(());
+        }
+        let gate = self.manager.lifecycle_gate(&self.agent.id);
+        let _guard = gate.lock().unwrap();
+        if !self
+            .manager
+            .active_turns
+            .lock()
+            .unwrap()
+            .get(&self.agent.id)
+            .is_some_and(|turn| turn.token == self.token)
+        {
+            self.completed = true;
+            return Err("Turn no longer owns this agent".into());
+        }
+        let status = if self.is_cancelled() {
+            AgentStatus::Closed
+        } else if error.is_some() {
+            AgentStatus::Error
+        } else {
+            AgentStatus::Idle
+        };
+        let result = self
+            .manager
+            .get_agent(&self.agent.id)
+            .ok_or_else(|| "Agent disappeared".to_string())
+            .and_then(|mut record| {
+                record.last_status = status;
+                record.last_error = error.map(str::to_owned);
+                record.updated_at = now_iso();
+                self.manager
+                    .storage
+                    .save_record(record)
+                    .map_err(|e| format!("Failed to save turn completion: {e}"))
+            });
+        if result.is_ok() {
+            self.manager
+                .active_statuses
+                .write()
+                .unwrap()
+                .insert(self.agent.id.clone(), status);
+        }
+        if let Some(turn) = self
+            .manager
+            .active_turns
+            .lock()
+            .unwrap()
+            .remove(&self.agent.id)
+        {
+            turn.finished.send_replace(true);
+        }
+        self.completed = true;
+        result
+    }
+}
+
+impl Drop for ReservedTurn {
+    fn drop(&mut self) {
+        if !self.completed {
+            if self.provider_started {
+                self.retain_cleanup_failure(
+                    "Runner dropped before provider cleanup was confirmed; agent remains reserved",
+                );
+            } else {
+                let _ = self.finish(Some("Turn execution was dropped before completion"));
+            }
+        }
+    }
+}
+
+struct DeletionGuard {
+    pending: Arc<Mutex<HashSet<String>>>,
+    id: String,
+}
+
+impl Drop for DeletionGuard {
+    fn drop(&mut self) {
+        self.pending.lock().unwrap().remove(&self.id);
+    }
+}
+
+#[derive(Clone)]
 pub struct AgentManager {
     storage: Arc<AgentStorage>,
     registry: Arc<ProviderRegistry>,
     active_statuses: Arc<RwLock<HashMap<String, AgentStatus>>>,
+    active_turns: Arc<Mutex<HashMap<String, TurnControl>>>,
+    lifecycle_gates: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    deleting: Arc<Mutex<HashSet<String>>>,
+    home_dir: Arc<PathBuf>,
 }
 
 impl AgentManager {
     pub fn new(home_dir: impl Into<PathBuf>) -> Self {
-        let storage = Arc::new(AgentStorage::new(home_dir));
+        Self::try_new(home_dir).expect("Failed to initialize agent storage")
+    }
+
+    pub fn try_new(home_dir: impl Into<PathBuf>) -> std::io::Result<Self> {
+        let home_dir = Arc::new(home_dir.into());
+        let storage = Arc::new(AgentStorage::try_new(home_dir.as_ref().clone())?);
         let registry = Arc::new(ProviderRegistry::new());
-        Self {
+        Ok(Self {
             storage,
             registry,
             active_statuses: Arc::new(RwLock::new(HashMap::new())),
-        }
+            active_turns: Arc::new(Mutex::new(HashMap::new())),
+            lifecycle_gates: Arc::new(Mutex::new(HashMap::new())),
+            deleting: Arc::new(Mutex::new(HashSet::new())),
+            home_dir,
+        })
     }
 
     pub fn storage(&self) -> &Arc<AgentStorage> {
@@ -32,6 +254,33 @@ impl AgentManager {
         &self.registry
     }
 
+    fn lifecycle_gate(&self, id: &str) -> Arc<Mutex<()>> {
+        self.lifecycle_gates
+            .lock()
+            .unwrap()
+            .entry(id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    fn ensure_inactive(&self, id: &str) -> Result<(), String> {
+        if self.deleting.lock().unwrap().contains(id) {
+            return Err(format!("Agent {id} is being deleted"));
+        }
+        if self.active_turns.lock().unwrap().contains_key(id) {
+            Err(format!("Agent {id} has an active turn; wait for cancellation/completion before changing it"))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn provider_session_dir(&self, id: &str) -> PathBuf {
+        self.home_dir
+            .join("agents")
+            .join("provider-sessions")
+            .join(id)
+    }
+
     pub fn create_agent(
         &self,
         provider: &str,
@@ -40,15 +289,14 @@ impl AgentManager {
         workspace_id: Option<String>,
         config: Option<Value>,
     ) -> Result<StoredAgentRecord, String> {
-        let provider_desc = self
-            .registry
-            .get(provider)
-            .unwrap_or_else(|| crate::agent::types::ProviderDescriptor {
+        let provider_desc = self.registry.get(provider).unwrap_or_else(|| {
+            crate::agent::types::ProviderDescriptor {
                 id: provider.to_string(),
                 label: provider.to_string(),
                 description: format!("Agent provider {provider}"),
                 is_installed: true,
-            });
+            }
+        });
 
         let id = format!("ag_{}", uuid_v4_simple());
         let now = now_iso();
@@ -66,7 +314,10 @@ impl AgentManager {
             last_status: AgentStatus::Idle,
             last_error: None,
             config,
-            runtime_info: None,
+            runtime_info: Some(
+                serde_json::json!({"provider": provider, "continuityRequired": false}),
+            ),
+            last_usage: None,
         };
 
         self.storage
@@ -100,43 +351,120 @@ impl AgentManager {
         list
     }
 
-    pub fn send_message(&self, id: &str, text: &str) -> Result<StoredAgentRecord, String> {
+    pub fn send_message(&self, id: &str, text: &str) -> Result<ReservedTurn, String> {
+        let gate = self.lifecycle_gate(id);
+        let _guard = gate.lock().unwrap();
+        self.ensure_inactive(id)?;
         let mut record = self
             .get_agent(id)
             .ok_or_else(|| format!("Agent {id} not found"))?;
-        if record.title.as_ref().is_none_or(|title| title.trim().is_empty()) {
-            if let Some(line) = text.lines().find(|line| !line.trim().is_empty()) {
-                // Match the server's provisional title: first content line, compact and bounded.
-                let mut title: String = line.split_whitespace()
-                    .flat_map(|word| word.chars().chain(std::iter::once(' ')))
-                    .take(60)
-                    .collect();
-                title.truncate(title.trim_end().len());
-                record.title = Some(title);
-                record.updated_at = now_iso();
-                self.storage.save_record(record.clone())
-                    .map_err(|e| format!("Failed to save agent title: {e}"))?;
-            }
-        }
+        let original = record.clone();
+        let token = uuid_v4_simple();
+        let (cancel, cancellation) = tokio::sync::watch::channel(false);
+        let (finished, _) = tokio::sync::watch::channel(false);
+        self.active_turns.lock().unwrap().insert(
+            id.to_string(),
+            TurnControl {
+                token: token.clone(),
+                cancel,
+                finished,
+            },
+        );
+        let effective_prompt = if text.trim_start().starts_with("/council") || text.trim_start().starts_with("/swarm") {
+            let task = text
+                .trim_start()
+                .trim_start_matches("/council")
+                .trim_start_matches("/swarm")
+                .trim();
+            format!(
+r#"[KRONOS COUNCIL SWARM PROTOCOL ACTIVATED]
+Operate as an autonomous multi-perspective AI Council:
 
-        let msg_id = format!("msg_{}", uuid_v4_simple());
-        let item = AgentTimelineItem::UserMessage {
-            id: msg_id,
-            text: text.to_string(),
-            timestamp: now_iso(),
+Phase 1: [COUNCIL: ARCHITECT]
+- Inspect codebase structure and dependencies.
+- Formulate a precise, step-by-step implementation blueprint.
+
+Phase 2: [COUNCIL: IMPLEMENTER]
+- Implement changes with zero placeholder code or omissions.
+- Preserve conventions, comments, and architectural integrity.
+
+Phase 3: [COUNCIL: AUDITOR]
+- Verify diffs, linting, type safety, and test coverage.
+- Deliver verified final solution.
+
+TASK:
+{task}"#
+            )
+        } else {
+            text.to_string()
         };
 
-        self.storage
-            .append_timeline_item(id, item)
-            .map_err(|e| format!("Failed to append message: {e}"))?;
+        let mut reservation = ReservedTurn {
+            agent: record.clone(),
+            prompt: effective_prompt,
+            token,
+            cancellation,
+            manager: self.clone(),
+            completed: false,
+            provider_started: false,
+        };
+        // On setup failure remove admission before returning, without invoking Drop under the gate.
+        let setup = (|| {
+            if record
+                .title
+                .as_ref()
+                .is_none_or(|title| title.trim().is_empty())
+            {
+                if let Some(line) = text.lines().find(|line| !line.trim().is_empty()) {
+                    // Match the server's provisional title: first content line, compact and bounded.
+                    let mut title: String = line
+                        .split_whitespace()
+                        .flat_map(|word| word.chars().chain(std::iter::once(' ')))
+                        .take(60)
+                        .collect();
+                    title.truncate(title.trim_end().len());
+                    record.title = Some(title);
+                    record.updated_at = now_iso();
+                }
+            }
 
-        self.active_statuses
-            .write()
-            .unwrap()
-            .insert(id.to_string(), AgentStatus::Running);
+            let msg_id = format!("msg_{}", uuid_v4_simple());
+            let item = AgentTimelineItem::UserMessage {
+                id: msg_id,
+                text: text.to_string(),
+                timestamp: now_iso(),
+            };
 
-        record.last_status = AgentStatus::Running;
-        Ok(record)
+            record.last_status = AgentStatus::Running;
+            record.last_error = None;
+            record.updated_at = now_iso();
+            self.storage
+                .save_record(record.clone())
+                .map_err(|e| format!("Failed to save prompt admission: {e}"))?;
+            if let Err(error) = self.storage.append_timeline_item(id, item) {
+                return match self.storage.save_record(original) {
+                Ok(()) => Err(format!("Failed to append message: {error}")),
+                Err(rollback) => Err(format!("Failed to append message: {error}; failed to restore agent record: {rollback}")),
+            };
+            }
+
+            self.active_statuses
+                .write()
+                .unwrap()
+                .insert(id.to_string(), AgentStatus::Running);
+
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = setup {
+            if let Some(turn) = self.active_turns.lock().unwrap().remove(id) {
+                turn.finished.send_replace(true);
+            }
+            self.active_statuses.write().unwrap().remove(id);
+            reservation.completed = true;
+            return Err(error);
+        }
+        reservation.agent = record;
+        Ok(reservation)
     }
     pub fn append_assistant_message(&self, id: &str, text: &str) -> Result<(), String> {
         let msg_id = format!("msg_{}", uuid_v4_simple());
@@ -175,18 +503,22 @@ impl AgentManager {
     }
 
     pub fn set_agent_status(&self, id: &str, status: AgentStatus) -> Result<(), String> {
+        let gate = self.lifecycle_gate(id);
+        let _guard = gate.lock().unwrap();
+        self.ensure_inactive(id)?;
         let mut record = self
             .get_agent(id)
             .ok_or_else(|| format!("Agent {id} not found"))?;
         record.last_status = status;
         record.updated_at = now_iso();
+        self.storage
+            .save_record(record)
+            .map_err(|e| format!("Failed to save status: {e}"))?;
         self.active_statuses
             .write()
             .unwrap()
             .insert(id.to_string(), status);
-        self.storage
-            .save_record(record)
-            .map_err(|e| format!("Failed to save status: {e}"))
+        Ok(())
     }
 
     pub fn set_agent_model(&self, id: &str, model: &str) -> Result<StoredAgentRecord, String> {
@@ -199,15 +531,23 @@ impl AgentManager {
         model: &str,
         provider: Option<&str>,
     ) -> Result<StoredAgentRecord, String> {
+        let gate = self.lifecycle_gate(id);
+        let _guard = gate.lock().unwrap();
+        self.ensure_inactive(id)?;
         let mut record = self
             .get_agent(id)
             .ok_or_else(|| format!("Agent {id} not found"))?;
         let mut config = record.config.unwrap_or_else(|| serde_json::json!({}));
-        let resolved_provider = provider
-            .map(|p| p.to_string())
-            .or_else(|| crate::agent::registry::resolve_provider_for_model(model).map(|p| p.to_string()));
+        let resolved_provider = provider.map(|p| p.to_string()).or_else(|| {
+            crate::agent::registry::resolve_provider_for_model(model).map(|p| p.to_string())
+        });
         if let Some(obj) = config.as_object_mut() {
             if let Some(ref p) = resolved_provider {
+                if record.provider != *p {
+                    record.runtime_info =
+                        Some(serde_json::json!({"provider": p, "continuityRequired": false}));
+                    obj.remove("providerHandleId");
+                }
                 record.provider = p.clone();
                 obj.insert("provider".to_string(), serde_json::json!(p));
             }
@@ -230,6 +570,9 @@ impl AgentManager {
         id: &str,
         thinking_option_id: Option<&str>,
     ) -> Result<StoredAgentRecord, String> {
+        let gate = self.lifecycle_gate(id);
+        let _guard = gate.lock().unwrap();
+        self.ensure_inactive(id)?;
         let mut record = self
             .get_agent(id)
             .ok_or_else(|| format!("Agent {id} not found"))?;
@@ -255,26 +598,68 @@ impl AgentManager {
     }
 
     pub fn cancel_agent(&self, id: &str) -> Result<(), String> {
-        let _ = self
-            .get_agent(id)
+        let gate = self.lifecycle_gate(id);
+        let _guard = gate.lock().unwrap();
+        self.get_agent(id)
             .ok_or_else(|| format!("Agent {id} not found"))?;
-
-        self.active_statuses
-            .write()
-            .unwrap()
-            .insert(id.to_string(), AgentStatus::Closed);
-
+        if let Some(turn) = self.active_turns.lock().unwrap().get(id) {
+            turn.cancel.send_replace(true);
+        }
         Ok(())
     }
 
+    pub async fn delete_agent_and_wait(&self, id: &str) -> Result<bool, String> {
+        let (waiting, _admission) = {
+            let gate = self.lifecycle_gate(id);
+            let _guard = gate.lock().unwrap();
+            if !self.deleting.lock().unwrap().insert(id.to_owned()) {
+                return Err(format!("Agent {id} is already being deleted"));
+            }
+            let admission = DeletionGuard {
+                pending: self.deleting.clone(),
+                id: id.to_owned(),
+            };
+            let turns = self.active_turns.lock().unwrap();
+            let waiting = turns.get(id).map(|turn| {
+                turn.cancel.send_replace(true);
+                turn.finished.subscribe()
+            });
+            (waiting, admission)
+        };
+        if let Some(mut finished) = waiting {
+            tokio::time::timeout(std::time::Duration::from_secs(15), async {
+                while !*finished.borrow_and_update() {
+                    finished
+                        .changed()
+                        .await
+                        .map_err(|_| "Turn cleanup notification closed")?;
+                }
+                Ok::<(), &str>(())
+            })
+            .await
+            .map_err(|_| "Timed out waiting for provider cleanup; agent retained".to_string())?
+            .map_err(str::to_owned)?;
+        }
+        self.delete_agent(id)
+    }
+
     pub fn delete_agent(&self, id: &str) -> Result<bool, String> {
-        self.active_statuses.write().unwrap().remove(id);
-        self.storage
+        let gate = self.lifecycle_gate(id);
+        let _guard = gate.lock().unwrap();
+        if let Some(turn) = self.active_turns.lock().unwrap().get(id) {
+            turn.cancel.send_replace(true);
+            return Err(
+                "Cancellation requested; agent retained until provider cleanup completes".into(),
+            );
+        }
+        let deleted = self
+            .storage
             .delete_record(id)
-            .map_err(|e| format!("Failed to delete agent: {e}"))
+            .map_err(|e| format!("Failed to delete agent: {e}"))?;
+        self.active_statuses.write().unwrap().remove(id);
+        Ok(deleted)
     }
 }
-
 
 fn uuid_v4_simple() -> String {
     let now = SystemTime::now()
@@ -293,36 +678,66 @@ mod tests {
         let dir = tempdir().unwrap();
         let manager = AgentManager::new(dir.path());
         let agent = manager.create_agent("omp", ".", None, None, None).unwrap();
-        manager.send_message(&agent.id, "\n  Fix\t the   tab title \r\nInclude tests").unwrap();
+        let mut first = manager
+            .send_message(&agent.id, "\n  Fix\t the   tab title \r\nInclude tests")
+            .unwrap();
+        first.finish(None).unwrap();
         let reloaded = AgentManager::new(dir.path());
-        assert_eq!(reloaded.get_agent(&agent.id).unwrap().title.as_deref(), Some("Fix the tab title"));
-        reloaded.send_message(&agent.id, "A different prompt").unwrap();
-        assert_eq!(reloaded.get_agent(&agent.id).unwrap().title.as_deref(), Some("Fix the tab title"));
+        assert_eq!(
+            reloaded.get_agent(&agent.id).unwrap().title.as_deref(),
+            Some("Fix the tab title")
+        );
+        let mut followup = reloaded
+            .send_message(&agent.id, "A different prompt")
+            .unwrap();
+        followup.finish(None).unwrap();
+        assert_eq!(
+            reloaded.get_agent(&agent.id).unwrap().title.as_deref(),
+            Some("Fix the tab title")
+        );
     }
 
     #[test]
     fn test_prompt_title_preserves_explicit_titles_and_bounds_unicode() {
         let dir = tempdir().unwrap();
         let manager = AgentManager::new(dir.path());
-        let named = manager.create_agent("omp", ".", Some("Custom title".into()), None, None).unwrap();
-        manager.send_message(&named.id, "Replace this title").unwrap();
-        assert_eq!(manager.get_agent(&named.id).unwrap().title.as_deref(), Some("Custom title"));
+        let named = manager
+            .create_agent("omp", ".", Some("Custom title".into()), None, None)
+            .unwrap();
+        let mut named_turn = manager
+            .send_message(&named.id, "Replace this title")
+            .unwrap();
+        named_turn.finish(None).unwrap();
+        assert_eq!(
+            manager.get_agent(&named.id).unwrap().title.as_deref(),
+            Some("Custom title")
+        );
         let untitled = manager.create_agent("omp", ".", None, None, None).unwrap();
-        manager.send_message(&untitled.id, " \r\n\t ").unwrap();
+        let mut blank = manager.send_message(&untitled.id, " \r\n\t ").unwrap();
+        blank.finish(None).unwrap();
         assert_eq!(manager.get_agent(&untitled.id).unwrap().title, None);
         let prompt = "界".repeat(65);
-        manager.send_message(&untitled.id, &prompt).unwrap();
-        assert_eq!(manager.get_agent(&untitled.id).unwrap().title, Some("界".repeat(60)));
+        let mut titled = manager.send_message(&untitled.id, &prompt).unwrap();
+        titled.finish(None).unwrap();
+        assert_eq!(
+            manager.get_agent(&untitled.id).unwrap().title,
+            Some("界".repeat(60))
+        );
     }
 
     #[test]
     fn test_thinking_setting_survives_reload_and_can_be_cleared() {
         let dir = tempdir().unwrap();
         let manager = AgentManager::new(dir.path());
-        let agent = manager.create_agent(
-            "codex", ".", None, None,
-            Some(serde_json::json!({"model": "runtime-model", "thinkingOptionId": "high"})),
-        ).unwrap();
+        let agent = manager
+            .create_agent(
+                "codex",
+                ".",
+                None,
+                None,
+                Some(serde_json::json!({"model": "runtime-model", "thinkingOptionId": "high"})),
+            )
+            .unwrap();
         manager.set_agent_thinking(&agent.id, Some("low")).unwrap();
         let reloaded = AgentManager::new(dir.path());
         let record = reloaded.get_agent(&agent.id).unwrap();
@@ -330,25 +745,45 @@ mod tests {
         assert_eq!(record.config.as_ref().unwrap()["model"], "runtime-model");
         reloaded.set_agent_thinking(&agent.id, None).unwrap();
         let cleared = AgentManager::new(dir.path()).get_agent(&agent.id).unwrap();
-        assert!(cleared.config.as_ref().unwrap().get("thinkingOptionId").is_none());
+        assert!(cleared
+            .config
+            .as_ref()
+            .unwrap()
+            .get("thinkingOptionId")
+            .is_none());
         assert_eq!(cleared.config.as_ref().unwrap()["model"], "runtime-model");
-        assert!(manager.set_agent_thinking("missing-thinking-agent", Some("high")).is_err());
+        assert!(manager
+            .set_agent_thinking("missing-thinking-agent", Some("high"))
+            .is_err());
     }
 
     #[test]
     fn test_thinking_choice_is_not_carried_to_a_different_model() {
         let dir = tempdir().unwrap();
         let manager = AgentManager::new(dir.path());
-        let agent = manager.create_agent(
-            "codex", ".", None, None,
-            Some(serde_json::json!({"model": "first", "thinkingOptionId": "xhigh"})),
-        ).unwrap();
+        let agent = manager
+            .create_agent(
+                "codex",
+                ".",
+                None,
+                None,
+                Some(serde_json::json!({"model": "first", "thinkingOptionId": "xhigh"})),
+            )
+            .unwrap();
         let unchanged = manager.set_agent_model(&agent.id, "first").unwrap();
-        assert_eq!(unchanged.config.as_ref().unwrap()["thinkingOptionId"], "xhigh");
+        assert_eq!(
+            unchanged.config.as_ref().unwrap()["thinkingOptionId"],
+            "xhigh"
+        );
         manager.set_agent_model(&agent.id, "second").unwrap();
         let reloaded = AgentManager::new(dir.path()).get_agent(&agent.id).unwrap();
         assert_eq!(reloaded.config.as_ref().unwrap()["model"], "second");
-        assert!(reloaded.config.as_ref().unwrap().get("thinkingOptionId").is_none());
+        assert!(reloaded
+            .config
+            .as_ref()
+            .unwrap()
+            .get("thinkingOptionId")
+            .is_none());
     }
 
     #[test]
@@ -373,7 +808,7 @@ mod tests {
         let retrieved = manager.get_agent(&created.id).expect("Get agent");
         assert_eq!(retrieved.title, Some("Test Agent".to_string()));
 
-        manager
+        let mut turn = manager
             .send_message(&created.id, "Run test command")
             .expect("Send message");
 
@@ -394,6 +829,12 @@ mod tests {
 
         let timeline = manager.get_timeline(&created.id);
         assert_eq!(timeline.len(), 4);
+        manager.cancel_agent(&created.id).expect("Cancel agent");
+        assert_eq!(
+            manager.get_agent(&created.id).unwrap().last_status,
+            AgentStatus::Running
+        );
+        turn.finish(None).unwrap();
 
         let updated_record = manager
             .set_agent_model(&created.id, "gpt-6-luna")
@@ -407,7 +848,6 @@ mod tests {
             Some("gpt-6-luna")
         );
 
-        manager.cancel_agent(&created.id).expect("Cancel agent");
         let cancelled = manager.get_agent(&created.id).unwrap();
         assert_eq!(cancelled.last_status, AgentStatus::Closed);
 

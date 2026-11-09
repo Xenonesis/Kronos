@@ -8,22 +8,18 @@ import { BrowserTabBar, type BrowserTabItem } from "./browser-tab-bar";
 import { BrowserNavigationBar } from "./browser-navigation-bar";
 import { BrowserLoadFailureOverlay, parseHostFromUrl } from "./browser-load-failure-overlay";
 import { BrowserImportDialog } from "./browser-import-dialog";
-import { isLocalhostUrl, normalizeAddressBarInput, resolveIframeTargetUrl } from "./url-utils";
+import { isLocalhostUrl, normalizeAddressBarInput } from "./url-utils";
+import {
+  browserFrameSandbox,
+  importBrowserCookies,
+  useBrowserFrameUrl,
+} from "./use-browser-frame-url";
 import { useSendBrowserUrlToAgent } from "./use-send-browser-url-to-agent";
 import { INSPECT_INJECTOR_SCRIPT } from "./inspect-injector";
 import { InteractiveInspectOverlay, type InspectTargetInfo } from "./interactive-inspect-overlay";
 import { formatGrabPayloadAsText, type BrowserGrabPayload } from "./browser-grab-payload";
 import { BrowserMarkupOverlay } from "./browser-markup-overlay";
 import type { BrowserAnnotationPayload } from "./browser-markup-types";
-
-/**
- * The browser pane loads a site the user explicitly navigated to, through the
- * daemon proxy. It is not agent-written markup, so it keeps a real origin and
- * runs scripts: `allow-same-origin` is what lets the page behave like a site,
- * and what lets the element inspector read the frame's document.
- */
-const REMOTE_IFRAME_SANDBOX =
-  "allow-scripts allow-same-origin allow-forms allow-popups allow-modals";
 
 export interface BrowserPaneViewProps {
   browserId: string;
@@ -82,6 +78,16 @@ export function BrowserPaneView({
   );
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [frameRevision, setFrameRevision] = useState(0);
+  const frame = useBrowserFrameUrl(activeTab.url, frameRevision);
+  useEffect(() => {
+    if (frame.error)
+      setTabs((previous) =>
+        previous.map((tab) =>
+          tab.id === activeTab.id ? { ...tab, hasLoadError: true, isLoading: false } : tab,
+        ),
+      );
+  }, [activeTab.id, frame.error]);
 
   // Check reachability for localhost / dev servers
   const verifyReachability = useCallback(async (targetUrl: string, tabId: string) => {
@@ -201,9 +207,7 @@ export function BrowserPaneView({
     setTabs((prev) =>
       prev.map((t) => (t.id === activeTabId ? { ...t, hasLoadError: false, isLoading: true } : t)),
     );
-    if (iframeRef.current) {
-      iframeRef.current.src = activeTab.url;
-    }
+    setFrameRevision((revision) => revision + 1);
     void verifyReachability(activeTab.url, activeTabId);
   }, [activeTab.url, activeTabId, verifyReachability]);
 
@@ -301,6 +305,7 @@ export function BrowserPaneView({
 
   useEffect(() => {
     const handleWindowMessage = (event: MessageEvent) => {
+      if (event.source !== iframeRef.current?.contentWindow) return;
       if (event.data?.type === "PASEO_INSPECT_ELEMENT_SELECTED") {
         const { tag, id, text, snippet } = (event.data.payload || {}) as {
           tag?: string;
@@ -335,20 +340,11 @@ export function BrowserPaneView({
       try {
         const host = parseHostFromUrl(activeTab.url);
         if (host && cookiesText.trim()) {
-          const daemonBase =
-            typeof window !== "undefined" && window.location?.origin
-              ? window.location.origin
-              : "http://127.0.0.1:6767";
-
-          await fetch(`${daemonBase}/api/browser-proxy/cookies`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ host, cookies: cookiesText.trim() }),
-          });
+          await importBrowserCookies(host, cookiesText.trim());
         }
         toast.show(`Imported ${source} session cookies for ${parseHostFromUrl(activeTab.url)}`);
       } catch {
-        toast.show(`Applied ${source} session cookies locally`);
+        toast.show(`Unable to import ${source} session cookies`);
       }
       handleReload();
     },
@@ -463,15 +459,13 @@ export function BrowserPaneView({
       {/* 3. Main Viewport Content */}
       <View style={styles.viewportWrapper}>
         <View style={viewportStyle}>
-          {Platform.OS === "web" ? (
+          {Platform.OS === "web" && frame.src ? (
             <iframe
-              key={activeTab.id}
+              key={`${activeTab.id}:${frameRevision}`}
               ref={iframeRef}
-              src={resolveIframeTargetUrl(activeTab.url)}
-              // A remote site the user asked to visit, not agent-written markup,
-              // so it keeps a real origin and may run scripts. `allow-same-origin`
-              // is also what lets the inspector reach into the frame's document.
-              sandbox={REMOTE_IFRAME_SANDBOX}
+              src={frame.src}
+              referrerPolicy="no-referrer"
+              sandbox={browserFrameSandbox(activeTab.url)}
               style={iframeStyle}
               onLoad={handleIframeLoad}
               onError={handleIframeError}

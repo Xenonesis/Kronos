@@ -250,9 +250,9 @@ npm run release:promote          # Promote X.Y.Z-beta.N to stable X.Y.Z
 - Betas publish npm packages with `--tag beta`, so `npm install @getpaseo/cli@beta` opts in while plain `npm install @getpaseo/cli` stays on `latest`
 - Betas publish desktop assets and APKs for testing. They also build iOS, upload it to TestFlight, add it to the `Paseo Beta` external group, and submit it for Beta App Review. They do not submit mobile builds to the production stores.
 - `release:promote` creates a fresh stable tag like `v0.1.41`; the final release never reuses the beta tag
-- Desktop assets now come from the Electron package at `packages/desktop`
-- Require the Linux artifact CI checks with both restricted and usable user namespaces to pass before publication; see [packaged desktop smoke](testing.md#packaged-desktop-smoke). Keep the installed-package and AppImage checks together.
-- Beta releases use Electron's `beta` update channel. Users on the stable channel only receive stable releases; users on the beta channel receive beta releases and the final stable release when it is published.
+- Desktop assets come from the native Tauri package at `packages/desktop-tauri`.
+- Require the Windows isolated native smoke and signed artifact validation in `Desktop Release` before publication.
+- Tauri's configured updater endpoint follows GitHub's latest stable release. Beta installers are tested explicitly; the legacy Electron beta channel is not the native updater contract.
 - **A beta series has one changelog entry.** Each beta folds into it and renames its heading to the new `## X.Y.Z-beta.N`, which `Release Notes Sync` mirrors into that prerelease body. Promotion renames it to the stable heading. See the Changelog policy section.
 
 Use the beta path when you need to:
@@ -262,18 +262,84 @@ Use the beta path when you need to:
 - send a build to a user who is hitting a specific problem
 - iterate on `beta.1`, `beta.2`, `beta.3`, and so on before deciding to ship broadly
 
-## Staged rollout (stable channel)
+## Native desktop installers and updater signing
 
-Stable desktop releases go out via a linear time-based rollout for automatic update checks: 0% admitted when the updater manifests appear, 100% admitted 36 hours later, linear ramp in between. Manual checks bypass the rollout so a user can install immediately when they click **Check**. Beta releases bypass the rollout entirely — beta users always receive updates immediately.
+Build the checked-out sources with `npm run bundle:desktop` or
+`node scripts/update-and-build-exe.mjs`. Both export a fresh production desktop
+frontend before Tauri packages it. Neither pulls Git changes or reuses an old
+installer. The default payload uses the embedded Rust kernel; it does not rebuild
+or ship the optional Node daemon.
 
-The rollout is driven by a `rolloutHours` field stamped into the GitHub Release manifests (`latest-mac.yml`, `latest-linux.yml`, `latest.yml`) by the `finalize-rollout` job in `desktop-release.yml`.
+Use `npm run bundle:desktop:with-node` (or the builder's `--with-node`) only when
+you need the optional Node payload. This path rebuilds its server dependencies
+before preparing the distribution. `--without-node` explicitly selects the
+native payload. `--force` remains accepted, but every installer invocation already
+exports current sources.
 
-Desktop release builds now publish in two phases:
+On Windows, distribute the NSIS setup installer only. The local builder writes
+regular, byte-identical versioned and `Kronos_x64-setup.exe` copies under `dist/`
+and the NSIS bundle directory. Raw/portable executable distribution and the old
+`--quick`/`--portable` installer shortcuts are not supported. A raw executable is
+used only by the isolated smoke harness.
 
-- The GitHub Release stays a draft while platform build jobs upload the installers/packages (`.dmg`, `.zip`, `.exe`, `.AppImage`, etc.).
-- The final job merges and stamps every channel manifest, uploads them with the final `releaseDate` and `rolloutHours`, then publishes the GitHub Release.
+### Owner-managed signing prerequisites
 
-Drafts do not appear in GitHub's releases feed. Updater clients continue to see the previous complete release until all three manifests are available. If a desktop build or manifest upload fails, the new release stays a draft.
+Unsigned local NSIS builds need no signing secrets. They have no updater public
+key or updater artifacts and cannot produce `latest.json`. The builder removes
+stale updater metadata/signatures before staging an unsigned local installer.
+An unsigned build is not a signed auto-update release.
+
+Signed builds require the repository owner's existing signing material:
+
+- `TAURI_SIGNING_PUBLIC_KEY`: repository Actions variable or secret containing
+  the base64-encoded minisign public key file used by Tauri.
+- `TAURI_SIGNING_PRIVATE_KEY`: Actions secret containing the corresponding
+  Tauri updater private key. For local builds, Tauri also accepts its supported
+  private-key file-path form in this environment variable.
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: Actions secret/environment variable
+  when that private key is encrypted; leave unset/empty only for an unencrypted key.
+
+Set these variables in your environment and use `npm run bundle:desktop:signed`
+to build signed artifacts, or `node scripts/update-and-build-exe.mjs --release`
+to also stage the local signed updater manifest. `--publish` requires signing and
+uploads validated assets; it does not undraft a release. Do not generate replacement
+owner keys, commit keys, put private keys on the command line, or print them in logs.
+Updater signing is separate from Windows Authenticode or Apple code signing.
+
+### Release validation and publication
+
+`Desktop Release` requires signing material even when `publish=false`. It checks
+desktop package, Tauri and Cargo versions against the source tag, exports current
+frontend sources through Tauri's build hook, then validates actual updater `.sig`
+sidecars against the produced artifacts and configured public key. Missing,
+malformed, mismatched or invalid signatures fail the job; no empty-signature
+manifest is generated. The Windows job runs focused native regressions and an
+isolated executable smoke before uploading its workflow artifacts.
+
+The normal `version:all:*` lifecycle synchronizes the desktop package, Tauri
+configuration, native Cargo package and its root lockfile entry. Do not patch a
+release tag's native version independently; the bundle gate rejects drift.
+Linux metadata includes independently verified `-deb` and `-appimage` updater
+targets so an installed Debian package never downloads an AppImage update.
+
+Platform jobs upload only validated staging directories. The final job downloads
+and revalidates them, merges platform entries into Tauri's `latest.json`, uploads
+the complete assets, then undrafts the GitHub Release. A failed platform or merge
+does not publish a new release. Non-publishing workflow runs retain the validated
+assets for inspection without uploading to GitHub Releases. Publication is not
+part of a local build unless you explicitly request it.
+
+Platform-only rebuilds preserve the same release's other updater entries and
+revalidate their downloaded artifacts/signatures before merging. They also check
+the currently published stable manifest for platform loss. If a new version
+would omit previously published platforms, publication fails with the missing
+targets; build those platforms for the new version rather than labelling older
+binaries with a newer version. A same-version partial rebuild remains supported.
+
+The native updater has no staged-rollout contract. The former Electron
+`latest*.yml`, `rolloutHours` and `desktop-rollout.yml` controls do not apply to
+Tauri's signed JSON metadata. Do not use them to claim that a native rollout is
+paused, delayed or instant-admit.
 
 ### Windows package-manager manifests
 
@@ -281,11 +347,10 @@ For a published Windows release, `Desktop Release` generates Winget-compatible
 version, installer, and locale manifests plus a Scoop manifest from the exact
 nonempty NSIS installer bytes. It computes the SHA-256 during that workflow and
 uploads the manifests as versioned GitHub Release assets beside the installer.
-The step is skipped when publishing is disabled or for smoke tags. When `WINGET_TOKEN`
-is configured in GitHub Actions secrets, the workflow executes `scripts/submit-winget-package.mjs`
-to automatically open a Pull Request to `microsoft/winget-pkgs` on the standard path
-`manifests/x/Xenonesis/Kronos/<version>/`. If no token is configured, the script validates
-all manifests against the Winget schema in dry-run mode.
+When `WINGET_TOKEN` is configured in GitHub Actions secrets, the Windows job runs
+`scripts/submit-winget-package.mjs` to open a pull request to
+`microsoft/winget-pkgs` at `manifests/x/Xenonesis/Kronos/<version>/`. Without that
+token, the script performs its local manifest validation without submission.
 These assets are not an official Winget source or a maintained Scoop bucket.
 To install with Winget before upstream catalog submission, download all three
 `Xenonesis.Kronos*.yaml` assets for one version into the same local directory,
@@ -294,90 +359,6 @@ For Scoop, download `Kronos.json` and run `scoop install .\Kronos.json`; no
 bucket needs to be added for this local-manifest install. The NSIS setup can
 prompt for per-user or per-machine installation. The manifests intentionally
 do not claim silent installer switches.
-
-### Default behavior
-
-`npm run release:patch` or `npm run release:minor` → tag push → 36h ramp. No extra action needed.
-
-The `rollout_hours` input on `desktop-release.yml` is **only read on `workflow_dispatch`** — tag-push runs always default to 36. To get any other rollout duration on a fresh release, use the post-publish flip below.
-
-### Instant-admit release (rollout_hours=0 from publish)
-
-For a fresh release that should admit everyone immediately (low-risk change, doc-only, hotfix, or just a release you want out fast), cut the release normally and queue the rollout flip immediately after:
-
-```bash
-# 1. Cut and publish (default 36h ramp from tag push).
-npm run release:patch
-
-# 2. Immediately queue the flip — runs as soon as finalize-rollout completes.
-gh workflow run desktop-rollout.yml \
-  -f tag=v0.1.64 \
-  -f rollout_hours=0
-```
-
-**Why this is gap-free:** `desktop-release.yml`'s `finalize-rollout` job and `desktop-rollout.yml` share the concurrency group `desktop-rollout-<tag>`. Dispatching `desktop-rollout.yml` while the tag-push pipeline is still running queues it safely behind `finalize-rollout`. The first public manifests already carry `rolloutHours=36`, then `desktop-rollout.yml` flips them to `rolloutHours=0` shortly afterward. The renderer polls every 30 minutes, so active stable users pick up the new manifest on their next check.
-
-Run the dispatch right after `release:patch` or `release:minor` returns. Don't wait for the tag-push CI to finish.
-
-### Adjusting an already-published release
-
-To change the rollout duration on a release that's already shipped — e.g. flip a hotfix to instant admit, or slow a release down — use the dedicated `desktop-rollout.yml` workflow. It edits the manifests in place on the GitHub release without rebuilding anything. It only rewrites `rolloutHours`; `releaseDate` is preserved, so the rollout clock keeps ticking from the original publish time.
-
-**Hotfix (instant admit) on an already-shipped release:**
-
-```bash
-gh workflow run desktop-rollout.yml \
-  -f tag=v0.1.42 \
-  -f rollout_hours=0
-```
-
-`rollout_hours=0` admits 100% of stable users on their next update check (within ~30 min for active clients).
-
-**Slow a rollout down** (e.g. extend total duration to 72h since the original release):
-
-```bash
-gh workflow run desktop-rollout.yml \
-  -f tag=v0.1.42 \
-  -f rollout_hours=72
-```
-
-`rollout_hours` is **total duration since the original release date**, not "extend by N more hours from now." If `v0.1.42` was published 2h ago and you set `rollout_hours=72`, the ramp finishes 70h from now.
-
-The dispatch is idempotent and shares the `desktop-rollout-<tag>` concurrency group with `desktop-release.yml`'s `finalize-rollout` job, so it serializes safely against an in-flight tag-push pipeline targeting the same release.
-
-### Custom ramp on a manually-dispatched build
-
-`desktop-release.yml` accepts `rollout_hours` only on `workflow_dispatch`, which is the path used to **rebuild an existing tag** (retry a failed release, force a rebuild on a different ref). When you go that route, you can stamp a non-default ramp directly:
-
-```bash
-gh workflow run desktop-release.yml \
-  -f tag=v0.1.43 \
-  -f rollout_hours=6
-```
-
-This does **not** apply to fresh releases cut via `npm run release:patch` or `npm run release:minor` — those paths always tag-push and stamp 36. For a fresh release with a custom ramp, cut normally and then dispatch `desktop-rollout.yml` (same pattern as the instant-admit flow above, with your chosen `rollout_hours`).
-
-### Releasing during an active rollout
-
-If you ship N+1 while N is still ramping, N+1 starts a fresh rollout from its own publish timestamp. N's rollout effectively ends — the newer manifest supersedes it. Rollout-aware clients revalidate the manifest for up to five seconds before installing a downloaded update on quit. If N+1 has replaced N but the client is not admitted to N+1 yet, it skips the downloaded N and waits rather than installing two updates in succession. If revalidation times out, the app exits without installing the cached update.
-
-If N+1 is a hotfix for a bug in N, dispatch `desktop-rollout.yml -f tag=v0.1.<N+1> -f rollout_hours=0` after N+1 publishes so the users who already got N reach the fix fast.
-
-### macOS system floor
-
-The desktop app requires macOS 13 or newer. Keep both release guards when the floor changes:
-
-- `packages/desktop/electron-builder.yml` writes the macOS version to `LSMinimumSystemVersion` for new installs.
-- `scripts/merge-mac-manifest.mjs` writes the matching Darwin kernel version to `minimumSystemVersion` in the update manifest. Existing clients check this before downloading an update.
-
-macOS 13 maps to Darwin 22. The two values use different version domains; do not copy the macOS version into the update manifest.
-
-### Limitations
-
-- **No pause / kill switch.** To stop new admissions, ship a superseding release. Clients revalidate on quit and will not install the superseded download, but a client that already completed installation cannot be recalled; ship a hotfix `+1` patch.
-- **No rollback.** `allowDowngrade = false`. Bad release = ship a hotfix.
-- **Bootstrap caveat.** Clients running a build older than the rollout feature ignore `rolloutHours` and admit immediately. Rollout protection only applies to clients running the rollout-aware version or later.
-- **Up to ~30 min automatic admission latency.** Renderer polls every 30 minutes, so a stable user may take up to that long to be evaluated against the rollout window. Clicking **Check** is manual and bypasses rollout admission.
 
 ## Mobile builds (EAS)
 

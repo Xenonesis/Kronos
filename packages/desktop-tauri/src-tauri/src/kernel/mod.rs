@@ -17,10 +17,13 @@ pub mod telemetry;
 pub mod watcher;
 pub mod browser_proxy;
 pub mod auth;
+pub mod access;
+pub mod timeline;
 pub mod config_store;
 pub mod file_service;
 pub mod terminal;
 pub mod services;
+pub mod schedules;
 pub mod relay_crypto;
 
 #[cfg(test)]

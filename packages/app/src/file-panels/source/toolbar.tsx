@@ -1,6 +1,7 @@
-import { Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
+import { Code2, ChevronDown } from "lucide-react-native";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { PaneContentToolbar } from "@/components/ui/pane-content-toolbar";
 import { SegmentedControl } from "@/components/ui/segmented-control";
@@ -8,6 +9,7 @@ import type { Theme } from "@/styles/theme";
 import { formatFileSize } from "@/utils/format-file-size";
 import { FileConflictAlert, type FileConflictAlertState } from "./conflict-alert";
 import type { FileEditorStatus } from "./editor/model";
+import type { AstSymbol } from "./ast/types";
 
 const ThemedSpinner = withUnistyles(LoadingSpinner);
 const spinnerMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
@@ -27,6 +29,9 @@ export function TextFileToolbar({
   cursor,
   vimMode,
   conflict,
+  activeSymbol,
+  hasSymbols,
+  onOpenSymbolPalette,
 }: {
   size: number;
   lineCount: number;
@@ -36,6 +41,9 @@ export function TextFileToolbar({
   cursor?: { line: number; column: number };
   vimMode?: string | null;
   conflict?: FileConflictAlertState | null;
+  activeSymbol?: AstSymbol | null;
+  hasSymbols?: boolean;
+  onOpenSymbolPalette?: () => void;
 }) {
   const { t } = useTranslation();
   const views = [
@@ -65,6 +73,20 @@ export function TextFileToolbar({
             >
               {t("panels.file.editor.lines", { count: lineCount })}
             </Text>
+            {onOpenSymbolPalette && (activeSymbol || hasSymbols) ? (
+              <Pressable
+                style={styles.symbolBreadcrumb}
+                onPress={onOpenSymbolPalette}
+                testID="file-symbol-breadcrumb"
+                accessibilityLabel="Go to symbol in file"
+              >
+                <Code2 size={13} color="#94a3b8" />
+                <Text style={styles.symbolText} numberOfLines={1}>
+                  {activeSymbol ? activeSymbol.name : "Go to symbol..."}
+                </Text>
+                <ChevronDown size={11} color="#64748b" />
+              </Pressable>
+            ) : null}
           </View>
           <View
             style={styles.status}
@@ -159,5 +181,21 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontFamily: theme.fontFamily.mono,
     fontSize: theme.fontSize.sm,
+  },
+  symbolBreadcrumb: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: theme.borderRadius.sm,
+    backgroundColor: theme.colors.surface1,
+    maxWidth: 240,
+  },
+  symbolText: {
+    color: theme.colors.foreground,
+    fontSize: 11,
+    fontFamily: theme.fontFamily.mono,
+    flexShrink: 1,
   },
 }));

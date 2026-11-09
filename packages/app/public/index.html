@@ -26,6 +26,8 @@
         padding: 0;
         overflow: hidden;
         overscroll-behavior: none;
+        background-color: #0a0a0a;
+        color: #fafafa;
       }
       /* These styles smooth text rendering in the app shell. */
       body {
@@ -33,11 +35,9 @@
         -moz-osx-font-smoothing: grayscale;
       }
       /* Prevent white flash before React mounts */
-      @media (prefers-color-scheme: dark) {
-        html,
-        body {
-          background-color: #0A0A0A;
-        }
+      html,
+      body {
+        background-color: #0a0a0a;
       }
       /* These styles make the root element full-height */
       #root {
@@ -51,6 +51,22 @@
       }
     </style>
     <style>
+      /* Reset default HTML button styles so unstyled browser chrome never flashes or overrides React Native Web */
+      button,
+      [role="button"] {
+        appearance: none;
+        -webkit-appearance: none;
+        background-color: transparent;
+        border: 0;
+        padding: 0;
+        margin: 0;
+        color: inherit;
+        font: inherit;
+        text-align: inherit;
+        text-decoration: none;
+        box-sizing: border-box;
+      }
+
       button,
       a,
       input,
@@ -94,15 +110,62 @@
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <div id="root">
-      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;width:100vw;background:#0A0A0A;color:#EAEAEA;font-family:ui-monospace,SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace;user-select:none;">
-        <div style="border:1px solid #262626;background:#121212;padding:24px 32px;display:flex;flex-direction:column;gap:12px;box-shadow:0 0 20px rgba(0,0,0,0.8);">
-          <div style="display:flex;align-items:center;gap:12px;">
-            <span style="background:#FF2A2A;color:#000;padding:2px 6px;font-weight:bold;font-size:11px;letter-spacing:1px;">KRN</span>
-            <span style="font-size:13px;font-weight:bold;letter-spacing:2px;color:#EAEAEA;">KRONOS // APEX-01</span>
+      <div
+        style="
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          height: 100vh;
+          width: 100vw;
+          background: #0a0a0a;
+          color: #eaeaea;
+          font-family:
+            ui-monospace, SFMono-Regular, Consolas, &quot;Liberation Mono&quot;, Menlo, monospace;
+          user-select: none;
+        "
+      >
+        <div
+          style="
+            border: 1px solid #262626;
+            background: #121212;
+            padding: 24px 32px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
+          "
+        >
+          <div style="display: flex; align-items: center; gap: 12px">
+            <span
+              style="
+                background: #ff2a2a;
+                color: #000;
+                padding: 2px 6px;
+                font-weight: bold;
+                font-size: 11px;
+                letter-spacing: 1px;
+              "
+              >KRN</span
+            >
+            <span style="font-size: 13px; font-weight: bold; letter-spacing: 2px; color: #eaeaea"
+              >KRONOS // APEX-01</span
+            >
           </div>
-          <div style="height:1px;background:#262626;width:100%;"></div>
-          <div style="font-size:11px;color:#888888;letter-spacing:1px;display:flex;align-items:center;gap:8px;">
-            <span style="display:inline-block;width:6px;height:6px;background:#4AF626;"></span>
+          <div style="height: 1px; background: #262626; width: 100%"></div>
+          <div
+            style="
+              font-size: 11px;
+              color: #888888;
+              letter-spacing: 1px;
+              display: flex;
+              align-items: center;
+              gap: 8px;
+            "
+          >
+            <span
+              style="display: inline-block; width: 6px; height: 6px; background: #4af626"
+            ></span>
             <span>INITIALIZING TACTICAL TELEMETRY & RUNTIME...</span>
           </div>
         </div>

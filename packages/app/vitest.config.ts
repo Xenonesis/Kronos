@@ -293,7 +293,7 @@ export default defineConfig({
         replacement: path.resolve(__dirname, "test-stubs/async-storage.ts"),
       },
       {
-        find: /^lucide-react-native$/,
+        find: /^lucide-react-native(\/.*)?$/,
         replacement: path.resolve(__dirname, "test-stubs/lucide-react-native.ts"),
       },
     ],

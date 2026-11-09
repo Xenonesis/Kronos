@@ -13,6 +13,7 @@ module.exports = function (api) {
   return {
     presets: [expoPreset],
     plugins: [
+      "./plugins/babel-lucide-icons.cjs",
       [
         "react-native-unistyles/plugin",
         {

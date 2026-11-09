@@ -1,0 +1,80 @@
+import React, { useMemo } from "react";
+import { Text } from "react-native";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import {
+  Copy,
+  RotateCw,
+  ArrowLeftToLine,
+  ArrowRightToLine,
+  CopyX,
+  Pencil,
+  X,
+} from "lucide-react-native";
+import { ContextMenuItem } from "@/components/ui/context-menu";
+import type { WorkspaceTabMenuEntry } from "@/screens/workspace/workspace-tab-menu";
+import type { Theme } from "@/styles/theme";
+
+const ThemedCopy = withUnistyles(Copy);
+const ThemedRotateCw = withUnistyles(RotateCw);
+const ThemedArrowLeftToLine = withUnistyles(ArrowLeftToLine);
+const ThemedArrowRightToLine = withUnistyles(ArrowRightToLine);
+const ThemedCopyX = withUnistyles(CopyX);
+const ThemedPencil = withUnistyles(Pencil);
+const ThemedX = withUnistyles(X);
+
+const mutedColorMapping = (theme: Theme) => ({
+  color: theme.colors.foregroundMuted,
+});
+
+export function TabContextMenuItem({
+  entry,
+}: {
+  entry: Extract<WorkspaceTabMenuEntry, { kind: "item" }>;
+}) {
+  const leading = useMemo(() => {
+    switch (entry.icon) {
+      case "copy":
+        return <ThemedCopy size={16} uniProps={mutedColorMapping} />;
+      case "rotate-cw":
+        return <ThemedRotateCw size={16} uniProps={mutedColorMapping} />;
+      case "arrow-left-to-line":
+        return <ThemedArrowLeftToLine size={16} uniProps={mutedColorMapping} />;
+      case "arrow-right-to-line":
+        return <ThemedArrowRightToLine size={16} uniProps={mutedColorMapping} />;
+      case "copy-x":
+        return <ThemedCopyX size={16} uniProps={mutedColorMapping} />;
+      case "pencil":
+        return <ThemedPencil size={16} uniProps={mutedColorMapping} />;
+      case "x":
+        return <ThemedX size={16} uniProps={mutedColorMapping} />;
+      default:
+        return undefined;
+    }
+  }, [entry.icon]);
+
+  const trailing = useMemo(
+    () => (entry.hint ? <Text style={styles.menuItemHint}>{entry.hint}</Text> : undefined),
+    [entry.hint],
+  );
+
+  return (
+    <ContextMenuItem
+      testID={entry.testID}
+      disabled={entry.disabled}
+      destructive={entry.destructive}
+      onSelect={entry.onSelect}
+      tooltip={entry.tooltip}
+      leading={leading}
+      trailing={trailing}
+    >
+      {entry.label}
+    </ContextMenuItem>
+  );
+}
+
+const styles = StyleSheet.create((theme) => ({
+  menuItemHint: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
+}));

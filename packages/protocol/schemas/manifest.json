@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-11-01T20:06:33.437Z",
+  "generatedAt": "2026-11-09T21:12:10.059Z",
   "inbound": {
     "hosts.list.request": {
       "file": "inbound/hosts-list-request.json",
@@ -634,7 +634,7 @@
     "set_agent_model_request": {
       "file": "inbound/set_agent_model_request.json",
       "required": ["type", "agentId", "modelId", "requestId"],
-      "properties": ["type", "agentId", "modelId", "requestId"]
+      "properties": ["type", "agentId", "modelId", "provider", "requestId"]
     },
     "set_agent_thinking_request": {
       "file": "inbound/set_agent_thinking_request.json",
@@ -8278,6 +8278,9 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "provider": {
+                      "type": "string"
                     },
                     "requestId": {
                       "type": "string"

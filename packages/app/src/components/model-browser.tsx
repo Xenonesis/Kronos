@@ -21,6 +21,7 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import {
   AlertTriangle,
+  ArrowLeftRight,
   Check,
   ChevronRight,
   Pencil,
@@ -52,6 +53,7 @@ import {
   type ProviderSelectionModelRow,
   type ProviderSelectorProvider,
 } from "@/provider-selection/provider-selection";
+import { formatTokenCount } from "@/components/context-window-meter.utils";
 import { useProviderSettingsStore } from "@/stores/provider-settings-store";
 import { useCurrentOverlayLayer } from "@/lib/overlay-root";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
@@ -68,6 +70,7 @@ const DESKTOP_PROVIDER_VIEW_BASE_HEIGHT = 80;
 const DESKTOP_MODEL_ROW_HEIGHT = 40;
 
 const ThemedAlertTriangle = withUnistyles(AlertTriangle);
+const ThemedArrowLeftRight = withUnistyles(ArrowLeftRight);
 const ThemedCheck = withUnistyles(Check);
 const ThemedChevronRight = withUnistyles(ChevronRight);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
@@ -75,6 +78,34 @@ const ThemedPencil = withUnistyles(Pencil);
 const ThemedPlus = withUnistyles(Plus);
 const ThemedSearch = withUnistyles(Search);
 const ThemedSettings = withUnistyles(Settings);
+
+function SwitchProviderAction({
+  onPress,
+  accessibilityLabel,
+}: {
+  onPress: () => void;
+  accessibilityLabel: string;
+}) {
+  return (
+    <Tooltip delayDuration={250} enabledOnDesktop enabledOnMobile={false}>
+      <TooltipTrigger asChild>
+        <Pressable
+          onPress={onPress}
+          hitSlop={8}
+          style={iconButtonStyle}
+          accessibilityRole="button"
+          accessibilityLabel={accessibilityLabel}
+          testID="selector-header-switch-provider"
+        >
+          <ThemedArrowLeftRight size={ICON_SIZE.sm} uniProps={foregroundMutedMapping} />
+        </Pressable>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="center" offset={8}>
+        <Text style={styles.tooltipText}>{accessibilityLabel}</Text>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 function ProviderSettingsAction({
   accessibilityLabel,
@@ -337,16 +368,33 @@ export function useModelBrowser({
     return {
       title: view.providerLabel,
       leading: (
-        <ModelProviderGlyph
-          provider={view.providerId}
-          serverId={serverId}
-          size={ICON_SIZE.md}
-          tone="foreground"
-        />
+        <Pressable
+          onPress={singleProviderView ? undefined : showAll}
+          disabled={singleProviderView}
+          hitSlop={8}
+          accessibilityRole={singleProviderView ? undefined : "button"}
+          accessibilityLabel={
+            singleProviderView ? undefined : t("modelSelector.switchProvider", "Switch provider")
+          }
+          style={styles.headerLeadingPressable}
+        >
+          <ModelProviderGlyph
+            provider={view.providerId}
+            serverId={serverId}
+            size={ICON_SIZE.md}
+            tone="foreground"
+          />
+        </Pressable>
       ),
       back: singleProviderView ? undefined : { onPress: showAll },
       actions: (
         <View style={styles.headerActionRow}>
+          {!singleProviderView ? (
+            <SwitchProviderAction
+              onPress={showAll}
+              accessibilityLabel={t("modelSelector.switchProvider", "Switch provider")}
+            />
+          ) : null}
           <ProviderSettingsAction
             serverId={serverId}
             provider={view.providerId}
@@ -802,6 +850,16 @@ function ModelRow({
             ) : null}
           </View>
           <View style={styles.browserRowTrailing}>
+            {row.contextWindowMaxTokens ? (
+              <View
+                style={styles.contextBadge}
+                testID={`model-context-badge-${row.provider}-${row.modelId}`}
+              >
+                <Text style={styles.contextBadgeText}>
+                  {formatTokenCount(row.contextWindowMaxTokens)}
+                </Text>
+              </View>
+            ) : null}
             <View style={styles.browserRowSelection}>
               {isSelected ? (
                 <ThemedCheck size={ICON_SIZE.sm} uniProps={foregroundMutedMapping} />
@@ -1565,6 +1623,10 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     gap: theme.spacing[1],
   },
+  headerLeadingPressable: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
   profilesContainer: {
     backgroundColor: theme.colors.surface1,
     borderBottomWidth: 1,
@@ -1661,8 +1723,21 @@ const styles = StyleSheet.create((theme) => ({
   browserRowTrailing: {
     flexDirection: "row",
     alignItems: "center",
-    gap: theme.spacing[1],
+    gap: theme.spacing[1.5],
     marginLeft: "auto",
+  },
+  contextBadge: {
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: theme.borderRadius.sm,
+    backgroundColor: theme.colors.surface2,
+    borderWidth: 1,
+    borderColor: theme.colors.surface3,
+  },
+  contextBadgeText: {
+    fontSize: 11,
+    color: theme.colors.foregroundMuted,
+    fontFamily: theme.fontFamily.mono,
   },
   browserRowSelection: {
     width: 16,

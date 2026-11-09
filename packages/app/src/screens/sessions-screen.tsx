@@ -2,7 +2,7 @@ import { useMemo, useState, useCallback, useEffect } from "react";
 import { View, Text } from "react-native";
 import { useIsFocused } from "expo-router/react-navigation";
 import { router } from "expo-router";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { OmpSessionsView } from "@/desktop/omp";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -18,12 +18,21 @@ import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useImportSession } from "@/hooks/use-import-session";
 import { useHosts } from "@/runtime/host-runtime";
 import { buildOpenProjectRoute } from "@/utils/host-routes";
+import type { Theme } from "@/styles/theme";
+import { useActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
+import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
 import { SessionViewModeTabs, type SessionViewMode } from "./sessions/view-mode-tabs";
+import { UniversalSessionHistory } from "./sessions/universal-session-history";
 import {
   SessionHostErrorsBanner,
   SessionsEmptyState,
   SessionsListFooter,
 } from "./sessions/list-feedback";
+
+const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
+const foregroundMutedColorMapping = (theme: Theme) => ({
+  color: theme.colors.foregroundMuted,
+});
 
 /** Long enough that a typed word is one request, short enough to feel live. */
 const SEARCH_DEBOUNCE_MS = 200;
@@ -52,13 +61,17 @@ export function SessionsScreen() {
 }
 
 function SessionsScreenContent() {
-  const { theme } = useUnistyles();
   const { t } = useTranslation();
   const importSession = useImportSession();
   const { open: openImportSession } = importSession;
   const hosts = useHosts();
+  const activeSelection = useActiveWorkspaceSelection();
+  const currentProjectCwd = useWorkspaceDirectory(
+    activeSelection?.serverId ?? null,
+    activeSelection?.workspaceId ?? null,
+  );
   const [selectedHost, setSelectedHost] = useState(ALL_HOSTS_OPTION_ID);
-  const [activeViewMode, setActiveViewMode] = useState<SessionViewMode>("paseo");
+  const [activeViewMode, setActiveViewMode] = useState<SessionViewMode>("indexed");
   const [searchInput, setSearchInput] = useState("");
   const search = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS).trim();
   const historyServerId = selectedHost === ALL_HOSTS_OPTION_ID ? null : selectedHost;
@@ -137,12 +150,17 @@ function SessionsScreenContent() {
   return (
     <View style={styles.container}>
       <MenuHeader title={t("sessions.title")} />
-      {/* Switcher tabs between Paseo App Sessions & OMP External Sessions */}
+      {/* Switcher tabs between All Agent History, Kronos Sessions, & OMP CLI Sessions */}
       <SessionViewModeTabs
         activeViewMode={activeViewMode}
         onSelectViewMode={handleSelectViewMode}
       />
-      {activeViewMode === "omp" ? (
+      {activeViewMode === "indexed" ? (
+        <UniversalSessionHistory
+          currentProjectCwd={currentProjectCwd ?? undefined}
+          onSelectResumeSession={handleSelectResumeSession}
+        />
+      ) : activeViewMode === "omp" ? (
         <OmpSessionsView onSelectResumeSession={handleSelectResumeSession} />
       ) : (
         <>
@@ -172,7 +190,7 @@ function SessionsScreenContent() {
           {hostErrors.length > 0 ? <SessionHostErrorsBanner errors={hostErrors} t={t} /> : null}
           {isInitialLoad ? (
             <View style={styles.loadingContainer}>
-              <LoadingSpinner size="large" color={theme.colors.foregroundMuted} />
+              <ThemedLoadingSpinner size="large" uniProps={foregroundMutedColorMapping} />
             </View>
           ) : null}
           {!isInitialLoad && showLoadError ? (

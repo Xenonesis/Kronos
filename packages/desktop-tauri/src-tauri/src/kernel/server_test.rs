@@ -1,10 +1,35 @@
 #[cfg(test)]
 mod tests {
-    use crate::kernel::server::EmbeddedDaemon;
-    use tokio_tungstenite::connect_async;
-    use futures_util::{SinkExt, StreamExt};
     use crate::kernel::protocol::RpcEnvelope;
+    use crate::kernel::server::EmbeddedDaemon;
     use crate::kernel::server::{dispatch_envelope, dispatch_session_message};
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::connect_async;
+
+    async fn authenticate_socket(
+        socket: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        daemon: &EmbeddedDaemon,
+    ) {
+        let hello = serde_json::json!({
+            "type":"hello", "protocolVersion":1, "clientId":"native-integration", "clientType":"cli",
+            "auth":{"kind":"localCredential","token":daemon.access.local_credential}
+        });
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                hello.to_string(),
+            ))
+            .await
+            .unwrap();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(3), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let info: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+        assert_eq!(info["message"]["payload"]["status"], "server_info");
+    }
 
     #[tokio::test]
     async fn test_embedded_daemon_mcp_envelope_dispatch() {
@@ -99,7 +124,9 @@ mod tests {
         assert_eq!(resp["type"], "mcp/response");
         assert_eq!(resp["requestId"], "sess-req-1");
         assert_eq!(resp["success"], true);
-        let inner_str = resp["payload"]["response"].as_str().expect("inner response string");
+        let inner_str = resp["payload"]["response"]
+            .as_str()
+            .expect("inner response string");
         let inner_val: serde_json::Value = serde_json::from_str(inner_str).unwrap();
         assert_eq!(inner_val["id"], "sess-inner-1");
         assert!(inner_val["result"]["tools"].as_array().unwrap().len() >= 5);
@@ -147,9 +174,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_embedded_daemon_mcp_websocket_flow() {
-        let daemon = EmbeddedDaemon::start_test(0).await.expect("Failed to start daemon");
+        let daemon = EmbeddedDaemon::start_test(0)
+            .await
+            .expect("Failed to start daemon");
         let url = format!("ws://127.0.0.1:{}", daemon.port);
         let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+        authenticate_socket(&mut ws_stream, &daemon).await;
 
         let msg = serde_json::json!({
             "id": "ws-mcp-env",
@@ -162,7 +192,12 @@ mod tests {
                 }
             }
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(msg.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                msg.to_string(),
+            ))
+            .await
+            .unwrap();
 
         let response = ws_stream.next().await.unwrap().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
@@ -179,16 +214,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_embedded_daemon_websocket_handshake() {
-        let daemon = EmbeddedDaemon::start_test(6799).await.expect("Failed to start daemon");
+        let daemon = EmbeddedDaemon::start_test(6799)
+            .await
+            .expect("Failed to start daemon");
         let url = "ws://127.0.0.1:6799";
         let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+        authenticate_socket(&mut ws_stream, &daemon).await;
 
         let msg = serde_json::json!({
             "id": "ping-1",
             "type": "ping",
             "payload": {}
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(msg.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                msg.to_string(),
+            ))
+            .await
+            .unwrap();
 
         let response = ws_stream.next().await.unwrap().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
@@ -201,7 +244,9 @@ mod tests {
     #[tokio::test]
     async fn test_embedded_daemon_canonical_hello_and_ping() {
         let port = 6795;
-        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+        let daemon = EmbeddedDaemon::start_test(port)
+            .await
+            .expect("Failed to start daemon");
         let url = format!("ws://127.0.0.1:{}", port);
         let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
 
@@ -210,16 +255,30 @@ mod tests {
             "type": "hello",
             "clientId": "cid-integration-test",
             "clientType": "cli",
-            "protocolVersion": 1
+            "protocolVersion": 1,
+            "auth": {"kind":"localCredential","token":daemon.access.local_credential}
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(hello.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                hello.to_string(),
+            ))
+            .await
+            .unwrap();
 
         let mut parsed: serde_json::Value = serde_json::Value::Null;
         for _ in 0..10 {
-            if let Ok(Some(Ok(msg))) = tokio::time::timeout(std::time::Duration::from_millis(1000), ws_stream.next()).await {
+            if let Ok(Some(Ok(msg))) =
+                tokio::time::timeout(std::time::Duration::from_millis(1000), ws_stream.next()).await
+            {
                 if let Ok(text) = msg.to_text() {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
-                        if val.get("message").and_then(|m| m.get("payload")).and_then(|p| p.get("status")).and_then(|v| v.as_str()) == Some("server_info") {
+                        if val
+                            .get("message")
+                            .and_then(|m| m.get("payload"))
+                            .and_then(|p| p.get("status"))
+                            .and_then(|v| v.as_str())
+                            == Some("server_info")
+                        {
                             parsed = val;
                             break;
                         }
@@ -231,14 +290,24 @@ mod tests {
         assert_eq!(parsed["message"]["type"], "status");
         assert_eq!(parsed["message"]["payload"]["status"], "server_info");
         assert_eq!(parsed["message"]["payload"]["protocolVersion"], 1);
-        assert!(!parsed["message"]["payload"]["serverId"].as_str().unwrap().is_empty());
+        assert!(!parsed["message"]["payload"]["serverId"]
+            .as_str()
+            .unwrap()
+            .is_empty());
 
         // 2. Send Simple Ping
         let ping = serde_json::json!({ "type": "ping" });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(ping.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                ping.to_string(),
+            ))
+            .await
+            .unwrap();
         let mut parsed_pong: serde_json::Value = serde_json::Value::Null;
         for _ in 0..10 {
-            if let Ok(Some(Ok(msg))) = tokio::time::timeout(std::time::Duration::from_millis(500), ws_stream.next()).await {
+            if let Ok(Some(Ok(msg))) =
+                tokio::time::timeout(std::time::Duration::from_millis(500), ws_stream.next()).await
+            {
                 if let Ok(text) = msg.to_text() {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
                         if val.get("type").and_then(|v| v.as_str()) == Some("pong") {
@@ -261,13 +330,18 @@ mod tests {
                 "requestId": "req-tele-test"
             }
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(tele_query.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                tele_query.to_string(),
+            ))
+            .await
+            .unwrap();
 
         let parsed_tele = wait_for_rpc_response(&mut ws_stream, "req-tele-test").await;
         assert!(
             parsed_tele["payload"]["uptime_secs"].is_number()
-            || parsed_tele["message"]["payload"]["uptime_secs"].is_number()
-            || parsed_tele["data"]["uptime_secs"].is_number()
+                || parsed_tele["message"]["payload"]["uptime_secs"].is_number()
+                || parsed_tele["data"]["uptime_secs"].is_number()
         );
 
         daemon.stop().await;
@@ -275,16 +349,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_embedded_daemon_unknown_method_dispatch() {
-        let daemon = EmbeddedDaemon::start_test(6797).await.expect("Failed to start daemon");
+        let daemon = EmbeddedDaemon::start_test(6797)
+            .await
+            .expect("Failed to start daemon");
         let url = "ws://127.0.0.1:6797";
         let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+        authenticate_socket(&mut ws_stream, &daemon).await;
 
         let msg = serde_json::json!({
             "id": "req-unknown-1",
             "type": "workspace.unimplemented",
             "payload": {}
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(msg.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                msg.to_string(),
+            ))
+            .await
+            .unwrap();
 
         let response = ws_stream.next().await.unwrap().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
@@ -297,9 +379,12 @@ mod tests {
     #[tokio::test]
     async fn test_embedded_daemon_directory_suggestions_dispatch() {
         let port = 6794;
-        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+        let daemon = EmbeddedDaemon::start_test(port)
+            .await
+            .expect("Failed to start daemon");
         let url = format!("ws://127.0.0.1:{}", port);
         let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+        authenticate_socket(&mut ws_stream, &daemon).await;
 
         let dir_query = serde_json::json!({
             "type": "session",
@@ -313,11 +398,17 @@ mod tests {
                 "requestId": "req-dir-sugg-test"
             }
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(dir_query.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                dir_query.to_string(),
+            ))
+            .await
+            .unwrap();
 
         let mut parsed: serde_json::Value = serde_json::Value::Null;
         while let Some(msg) = ws_stream.next().await {
-            let val: serde_json::Value = serde_json::from_str(msg.unwrap().to_text().unwrap()).unwrap();
+            let val: serde_json::Value =
+                serde_json::from_str(msg.unwrap().to_text().unwrap()).unwrap();
             if val["message"]["type"] == "directory_suggestions_response" {
                 parsed = val;
                 break;
@@ -325,15 +416,29 @@ mod tests {
         }
         assert_eq!(parsed["type"], "session");
         assert_eq!(parsed["message"]["type"], "directory_suggestions_response");
-        assert_eq!(parsed["message"]["payload"]["requestId"], "req-dir-sugg-test");
+        assert_eq!(
+            parsed["message"]["payload"]["requestId"],
+            "req-dir-sugg-test"
+        );
         assert!(parsed["message"]["payload"]["error"].is_null());
 
-        let entries = parsed["message"]["payload"]["entries"].as_array().expect("entries array");
-        assert!(!entries.is_empty(), "Should return matching search.rs entry");
+        let entries = parsed["message"]["payload"]["entries"]
+            .as_array()
+            .expect("entries array");
+        assert!(
+            !entries.is_empty(),
+            "Should return matching search.rs entry"
+        );
         let matched = entries.iter().any(|e| {
-            e["path"].as_str().map(|p| p.ends_with("search.rs")).unwrap_or(false)
+            e["path"]
+                .as_str()
+                .map(|p| p.ends_with("search.rs"))
+                .unwrap_or(false)
         });
-        assert!(matched, "Expected search.rs in returned suggestions payload");
+        assert!(
+            matched,
+            "Expected search.rs in returned suggestions payload"
+        );
 
         daemon.stop().await;
     }
@@ -361,9 +466,15 @@ mod tests {
         let entries = data["entries"].as_array().expect("entries array");
         assert!(!entries.is_empty());
         let matched = entries.iter().any(|e| {
-            e["path"].as_str().map(|p| p.ends_with("search.rs")).unwrap_or(false)
+            e["path"]
+                .as_str()
+                .map(|p| p.ends_with("search.rs"))
+                .unwrap_or(false)
         });
-        assert!(matched, "Expected search.rs in returned suggestions payload");
+        assert!(
+            matched,
+            "Expected search.rs in returned suggestions payload"
+        );
     }
 
     #[tokio::test]
@@ -394,7 +505,9 @@ mod tests {
         });
         let list_resp = crate::kernel::server::dispatch_session_message(&list_req).await;
         assert_eq!(list_resp["type"], "list_terminals_response");
-        let terms = list_resp["payload"]["terminals"].as_array().expect("terminals array");
+        let terms = list_resp["payload"]["terminals"]
+            .as_array()
+            .expect("terminals array");
         assert!(terms.iter().any(|t| t["id"] == term_id));
 
         // Subscribe terminals
@@ -448,21 +561,38 @@ mod tests {
         use tokio::net::windows::named_pipe::ClientOptions;
 
         let port = 6796;
-        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+        let daemon = EmbeddedDaemon::start_test(port)
+            .await
+            .expect("Failed to start daemon");
         let pipe_name = format!(r"\\.\pipe\kronos-ipc-{}", port);
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let client = ClientOptions::new().open(&pipe_name).expect("Failed to open pipe");
+        let client = ClientOptions::new()
+            .open(&pipe_name)
+            .expect("Failed to open pipe");
         let (reader, mut writer) = tokio::io::split(client);
         let mut lines = BufReader::new(reader).lines();
+        let hello = serde_json::json!({
+            "type":"hello", "protocolVersion":1,
+            "auth":{"kind":"localCredential","token":daemon.access.local_credential}
+        });
+        writer
+            .write_all(format!("{hello}\n").as_bytes())
+            .await
+            .unwrap();
+        let info = lines.next_line().await.unwrap().unwrap();
+        assert!(info.contains("server_info"));
 
         let msg = serde_json::json!({
             "id": "pipe-ping-1",
             "type": "ping",
             "payload": {}
         });
-        writer.write_all(format!("{}\n", msg).as_bytes()).await.unwrap();
+        writer
+            .write_all(format!("{}\n", msg).as_bytes())
+            .await
+            .unwrap();
 
         let resp_line = lines.next_line().await.unwrap().expect("Response line");
         let parsed: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
@@ -515,7 +645,10 @@ mod tests {
 
         let watch_res = dispatch_envelope(watch_req).await;
         assert!(watch_res.success);
-        let sub_id = watch_res.data.unwrap()["subscriptionId"].as_str().unwrap().to_string();
+        let sub_id = watch_res.data.unwrap()["subscriptionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(!sub_id.is_empty());
 
         let unwatch_req = RpcEnvelope {
@@ -609,9 +742,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_embedded_daemon_vfs_websocket_events_forwarding() {
-        let daemon = EmbeddedDaemon::start_test(0).await.expect("Failed to start daemon");
+        let daemon = EmbeddedDaemon::start_test(0)
+            .await
+            .expect("Failed to start daemon");
         let url = format!("ws://127.0.0.1:{}", daemon.port);
         let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+        authenticate_socket(&mut ws_stream, &daemon).await;
 
         let temp = tempfile::tempdir().expect("tempdir");
         let watch_msg = serde_json::json!({
@@ -622,12 +758,20 @@ mod tests {
             }
         });
 
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(watch_msg.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                watch_msg.to_string(),
+            ))
+            .await
+            .unwrap();
 
         let parsed_reply = wait_for_rpc_response(&mut ws_stream, "ws-watch-1").await;
         assert_eq!(parsed_reply["id"], "ws-watch-1");
         assert_eq!(parsed_reply["success"], true);
-        let sub_id = parsed_reply["data"]["subscriptionId"].as_str().unwrap().to_string();
+        let sub_id = parsed_reply["data"]["subscriptionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(!sub_id.is_empty());
 
         // Write a test file to trigger a filesystem event
@@ -661,7 +805,10 @@ mod tests {
             }
         }
 
-        assert!(received_event, "Expected to receive vfs/change_events frame over WebSocket");
+        assert!(
+            received_event,
+            "Expected to receive vfs/change_events frame over WebSocket"
+        );
 
         // Unwatch
         let unwatch_msg = serde_json::json!({
@@ -671,10 +818,16 @@ mod tests {
                 "subscriptionId": sub_id
             }
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(unwatch_msg.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                unwatch_msg.to_string(),
+            ))
+            .await
+            .unwrap();
 
         let unwatch_reply = ws_stream.next().await.unwrap().unwrap();
-        let parsed_unwatch: serde_json::Value = serde_json::from_str(unwatch_reply.to_text().unwrap()).unwrap();
+        let parsed_unwatch: serde_json::Value =
+            serde_json::from_str(unwatch_reply.to_text().unwrap()).unwrap();
         assert_eq!(parsed_unwatch["id"], "ws-unwatch-1");
         assert_eq!(parsed_unwatch["success"], true);
 
@@ -683,14 +836,23 @@ mod tests {
 
     async fn wait_for_rpc_response<S>(ws_stream: &mut S, expected_id: &str) -> serde_json::Value
     where
-        S: futures_util::StreamExt<Item = Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+        S: futures_util::StreamExt<
+                Item = Result<
+                    tokio_tungstenite::tungstenite::Message,
+                    tokio_tungstenite::tungstenite::Error,
+                >,
+            > + Unpin,
     {
         while let Some(Ok(frame)) = ws_stream.next().await {
             if let Ok(text) = frame.to_text() {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(text) {
-                    let id_opt = json.get("id")
+                    let id_opt = json
+                        .get("id")
                         .or_else(|| json.get("requestId"))
-                        .or_else(|| json.get("message").and_then(|m| m.get("id").or_else(|| m.get("requestId"))))
+                        .or_else(|| {
+                            json.get("message")
+                                .and_then(|m| m.get("id").or_else(|| m.get("requestId")))
+                        })
                         .and_then(|v| v.as_str());
                     if id_opt == Some(expected_id) {
                         return json;
@@ -704,9 +866,12 @@ mod tests {
     #[tokio::test]
     async fn test_embedded_daemon_ast_analyze_and_symbols_envelopes() {
         let port = 6791;
-        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+        let daemon = EmbeddedDaemon::start_test(port)
+            .await
+            .expect("Failed to start daemon");
         let url = format!("ws://127.0.0.1:{}", port);
         let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+        authenticate_socket(&mut ws_stream, &daemon).await;
 
         let source_code = r#"
             export interface AppConfig {
@@ -728,12 +893,18 @@ mod tests {
                 "ext": "ts"
             }
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(analyze_envelope.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                analyze_envelope.to_string(),
+            ))
+            .await
+            .unwrap();
 
         let parsed_analyze = wait_for_rpc_response(&mut ws_stream, "ast-analyze-1").await;
         assert_eq!(parsed_analyze["id"], "ast-analyze-1");
         assert_eq!(parsed_analyze["success"], true);
-        let symbols = parsed_analyze.get("data")
+        let symbols = parsed_analyze
+            .get("data")
             .or_else(|| parsed_analyze.get("payload"))
             .and_then(|v| v.get("symbols"))
             .and_then(|v| v.as_array())
@@ -750,12 +921,18 @@ mod tests {
                 "ext": "ts"
             }
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(symbols_envelope.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                symbols_envelope.to_string(),
+            ))
+            .await
+            .unwrap();
 
         let parsed_symbols = wait_for_rpc_response(&mut ws_stream, "ast-symbols-1").await;
         assert_eq!(parsed_symbols["id"], "ast-symbols-1");
         assert_eq!(parsed_symbols["success"], true);
-        let symbols_list = parsed_symbols.get("data")
+        let symbols_list = parsed_symbols
+            .get("data")
             .or_else(|| parsed_symbols.get("payload"))
             .and_then(|v| v.as_array())
             .expect("symbols payload array");
@@ -767,14 +944,18 @@ mod tests {
     #[tokio::test]
     async fn test_embedded_daemon_crdt_realtime_collaboration() {
         let port = 6789;
-        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+        let daemon = EmbeddedDaemon::start_test(port)
+            .await
+            .expect("Failed to start daemon");
         let url = format!("ws://127.0.0.1:{}", port);
 
         // 1. Connect Client 1 (Human Editor)
         let (mut client1, _) = connect_async(&url).await.expect("Client 1 connect");
+        authenticate_socket(&mut client1, &daemon).await;
 
         // 2. Connect Client 2 (Agent A)
         let (mut client2, _) = connect_async(&url).await.expect("Client 2 connect");
+        authenticate_socket(&mut client2, &daemon).await;
 
         let room_id = "test-collab-room";
 
@@ -786,9 +967,15 @@ mod tests {
                 "room": room_id
             }
         });
-        client1.send(tokio_tungstenite::tungstenite::Message::Text(join_msg.to_string())).await.unwrap();
+        client1
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                join_msg.to_string(),
+            ))
+            .await
+            .unwrap();
         let join_reply = client1.next().await.unwrap().unwrap();
-        let parsed_join: serde_json::Value = serde_json::from_str(join_reply.to_text().unwrap()).unwrap();
+        let parsed_join: serde_json::Value =
+            serde_json::from_str(join_reply.to_text().unwrap()).unwrap();
         assert_eq!(parsed_join["id"], "crdt-join-1");
         assert_eq!(parsed_join["success"], true);
 
@@ -804,9 +991,15 @@ mod tests {
                 "sourceId": "agent-alpha"
             }
         });
-        client2.send(tokio_tungstenite::tungstenite::Message::Text(edit_msg.to_string())).await.unwrap();
+        client2
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                edit_msg.to_string(),
+            ))
+            .await
+            .unwrap();
         let edit_reply = client2.next().await.unwrap().unwrap();
-        let parsed_edit: serde_json::Value = serde_json::from_str(edit_reply.to_text().unwrap()).unwrap();
+        let parsed_edit: serde_json::Value =
+            serde_json::from_str(edit_reply.to_text().unwrap()).unwrap();
         assert_eq!(parsed_edit["id"], "crdt-edit-agent");
         assert_eq!(parsed_edit["success"], true);
 
@@ -837,7 +1030,10 @@ mod tests {
                 }
             }
         }
-        assert!(received_crdt_event, "Client 1 should receive real-time CRDT update event from Agent A");
+        assert!(
+            received_crdt_event,
+            "Client 1 should receive real-time CRDT update event from Agent A"
+        );
 
         // Client 1 queries room state
         let state_msg = serde_json::json!({
@@ -847,12 +1043,21 @@ mod tests {
                 "room": room_id
             }
         });
-        client1.send(tokio_tungstenite::tungstenite::Message::Text(state_msg.to_string())).await.unwrap();
+        client1
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                state_msg.to_string(),
+            ))
+            .await
+            .unwrap();
         let state_reply = client1.next().await.unwrap().unwrap();
-        let parsed_state: serde_json::Value = serde_json::from_str(state_reply.to_text().unwrap()).unwrap();
+        let parsed_state: serde_json::Value =
+            serde_json::from_str(state_reply.to_text().unwrap()).unwrap();
         assert_eq!(parsed_state["id"], "crdt-state-1");
         assert_eq!(parsed_state["success"], true);
-        let state_data = parsed_state.get("data").or_else(|| parsed_state.get("payload")).unwrap();
+        let state_data = parsed_state
+            .get("data")
+            .or_else(|| parsed_state.get("payload"))
+            .unwrap();
         assert_eq!(state_data["text"], "const kernelStatus = 'READY';");
 
         daemon.stop().await;
@@ -861,9 +1066,12 @@ mod tests {
     #[tokio::test]
     async fn test_embedded_daemon_ioring_envelopes() {
         let port = 6788;
-        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+        let daemon = EmbeddedDaemon::start_test(port)
+            .await
+            .expect("Failed to start daemon");
         let url = format!("ws://127.0.0.1:{}", port);
         let (mut ws_stream, _) = connect_async(&url).await.expect("connect");
+        authenticate_socket(&mut ws_stream, &daemon).await;
 
         // 1. Test ioring/status
         let status_msg = serde_json::json!({
@@ -871,10 +1079,18 @@ mod tests {
             "type": "ioring/status",
             "payload": {}
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(status_msg.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                status_msg.to_string(),
+            ))
+            .await
+            .unwrap();
         let parsed_status = wait_for_rpc_response(&mut ws_stream, "ioring-status-1").await;
         assert_eq!(parsed_status["success"], true);
-        let status_data = parsed_status.get("data").or_else(|| parsed_status.get("payload")).unwrap();
+        let status_data = parsed_status
+            .get("data")
+            .or_else(|| parsed_status.get("payload"))
+            .unwrap();
         assert!(status_data["isKernelActive"].is_boolean());
         assert!(status_data["queueSize"].as_u64().unwrap() >= 16);
 
@@ -890,10 +1106,16 @@ mod tests {
                 "paths": [test_file.to_str().unwrap()]
             }
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(read_batch_msg.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                read_batch_msg.to_string(),
+            ))
+            .await
+            .unwrap();
         let parsed_read = wait_for_rpc_response(&mut ws_stream, "ioring-read-1").await;
         assert_eq!(parsed_read["success"], true);
-        let files = parsed_read.get("data")
+        let files = parsed_read
+            .get("data")
             .or_else(|| parsed_read.get("payload"))
             .and_then(|v| v.get("files"))
             .and_then(|v| v.as_array())
@@ -907,9 +1129,12 @@ mod tests {
     #[tokio::test]
     async fn test_embedded_daemon_speech_envelopes() {
         let port = 6787;
-        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+        let daemon = EmbeddedDaemon::start_test(port)
+            .await
+            .expect("Failed to start daemon");
         let url = format!("ws://127.0.0.1:{}", port);
         let (mut ws_stream, _) = connect_async(&url).await.expect("connect");
+        authenticate_socket(&mut ws_stream, &daemon).await;
 
         // 1. Test speech/status
         let status_msg = serde_json::json!({
@@ -917,17 +1142,24 @@ mod tests {
             "type": "speech/status",
             "payload": {}
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(status_msg.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                status_msg.to_string(),
+            ))
+            .await
+            .unwrap();
         let parsed_status = wait_for_rpc_response(&mut ws_stream, "speech-status-1").await;
         assert_eq!(parsed_status["success"], true);
-        let status_data = parsed_status.get("data").or_else(|| parsed_status.get("payload")).unwrap();
+        let status_data = parsed_status
+            .get("data")
+            .or_else(|| parsed_status.get("payload"))
+            .unwrap();
         assert_eq!(status_data["targetSampleRate"], 16000);
         assert_eq!(status_data["targetChannels"], 1);
 
         // 2. Test speech/transcribe with synthetic voiced samples
-        let synthetic_samples: Vec<f64> = (0..16000)
-            .map(|i| (i as f64 * 0.05).sin() * 0.75)
-            .collect();
+        let synthetic_samples: Vec<f64> =
+            (0..16000).map(|i| (i as f64 * 0.05).sin() * 0.75).collect();
 
         let transcribe_msg = serde_json::json!({
             "id": "speech-transcribe-1",
@@ -938,10 +1170,18 @@ mod tests {
                 "channels": 1
             }
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(transcribe_msg.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                transcribe_msg.to_string(),
+            ))
+            .await
+            .unwrap();
         let parsed_trans = wait_for_rpc_response(&mut ws_stream, "speech-transcribe-1").await;
         assert_eq!(parsed_trans["success"], true);
-        let trans_data = parsed_trans.get("data").or_else(|| parsed_trans.get("payload")).unwrap();
+        let trans_data = parsed_trans
+            .get("data")
+            .or_else(|| parsed_trans.get("payload"))
+            .unwrap();
         assert!(!trans_data["transcript"].as_str().unwrap().is_empty());
         assert_eq!(trans_data["samplesCount"], 16000);
 
@@ -951,9 +1191,12 @@ mod tests {
     #[tokio::test]
     async fn test_embedded_daemon_shm_envelopes() {
         let port = 6786;
-        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+        let daemon = EmbeddedDaemon::start_test(port)
+            .await
+            .expect("Failed to start daemon");
         let url = format!("ws://127.0.0.1:{}", port);
         let (mut ws_stream, _) = connect_async(&url).await.expect("connect");
+        authenticate_socket(&mut ws_stream, &daemon).await;
 
         // 1. Test shm/status
         let status_msg = serde_json::json!({
@@ -961,10 +1204,18 @@ mod tests {
             "type": "shm/status",
             "payload": {}
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(status_msg.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                status_msg.to_string(),
+            ))
+            .await
+            .unwrap();
         let parsed_status = wait_for_rpc_response(&mut ws_stream, "shm-status-1").await;
         assert_eq!(parsed_status["success"], true);
-        let status_data = parsed_status.get("data").or_else(|| parsed_status.get("payload")).unwrap();
+        let status_data = parsed_status
+            .get("data")
+            .or_else(|| parsed_status.get("payload"))
+            .unwrap();
         assert!(status_data["capacity"].as_u64().unwrap() > 0);
 
         // 2. Test shm/push
@@ -978,10 +1229,18 @@ mod tests {
                 "payloadBase64": b64
             }
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(push_msg.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                push_msg.to_string(),
+            ))
+            .await
+            .unwrap();
         let parsed_push = wait_for_rpc_response(&mut ws_stream, "shm-push-1").await;
         assert_eq!(parsed_push["success"], true);
-        let push_data = parsed_push.get("data").or_else(|| parsed_push.get("payload")).unwrap();
+        let push_data = parsed_push
+            .get("data")
+            .or_else(|| parsed_push.get("payload"))
+            .unwrap();
         let seq = push_data["sequence"].as_u64().unwrap();
         assert!(seq > 0);
 
@@ -993,10 +1252,16 @@ mod tests {
                 "sinceSeq": seq - 1
             }
         });
-        ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(poll_msg.to_string())).await.unwrap();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                poll_msg.to_string(),
+            ))
+            .await
+            .unwrap();
         let parsed_poll = wait_for_rpc_response(&mut ws_stream, "shm-poll-1").await;
         assert_eq!(parsed_poll["success"], true);
-        let records = parsed_poll.get("data")
+        let records = parsed_poll
+            .get("data")
             .or_else(|| parsed_poll.get("payload"))
             .and_then(|v| v.get("records"))
             .and_then(|v| v.as_array())
@@ -1017,7 +1282,10 @@ mod tests {
         let resp = dispatch_session_message(&session_msg).await;
         assert_eq!(resp["type"], "rpc_error");
         assert_eq!(resp["payload"]["requestId"], "req-unsupported-99");
-        assert_eq!(resp["payload"]["requestType"], "project.unknown_unsupported.request");
+        assert_eq!(
+            resp["payload"]["requestType"],
+            "project.unknown_unsupported.request"
+        );
         assert_eq!(resp["payload"]["code"], "not_implemented");
     }
 
@@ -1041,13 +1309,16 @@ mod tests {
     #[tokio::test]
     async fn test_embedded_daemon_browser_proxy_endpoints() {
         let port = 6792;
-        let daemon = EmbeddedDaemon::start_test(port).await.expect("Failed to start daemon");
+        let daemon = EmbeddedDaemon::start_test(port)
+            .await
+            .expect("Failed to start daemon");
 
         let client = reqwest::Client::new();
 
         // 1. Test POST /api/browser-proxy/cookies
         let cookies_resp = client
             .post(format!("http://127.0.0.1:{port}/api/browser-proxy/cookies"))
+            .bearer_auth(&daemon.access.local_credential)
             .json(&serde_json::json!({
                 "host": "test-domain.com",
                 "cookies": "sid=12345; auth=ok"
@@ -1065,12 +1336,127 @@ mod tests {
         // 2. Test GET /api/browser-proxy with missing url
         let missing_url_resp = client
             .get(format!("http://127.0.0.1:{port}/api/browser-proxy"))
+            .bearer_auth(&daemon.access.local_credential)
             .send()
             .await
             .expect("Failed to call browser proxy");
         assert_eq!(missing_url_resp.status(), reqwest::StatusCode::BAD_REQUEST);
 
         daemon.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_browser_proxy_ticket_cannot_expand_authority() {
+        use std::sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            Arc,
+        };
+        let redirect = Arc::new(AtomicBool::new(false));
+        let secrets = Arc::new(AtomicUsize::new(0));
+        let upstream = axum::Router::new()
+            .route(
+                "/start",
+                axum::routing::get({
+                    let redirect = redirect.clone();
+                    move || {
+                        let redirect = redirect.clone();
+                        async move {
+                            use axum::response::IntoResponse;
+                            if redirect.load(Ordering::SeqCst) {
+                                axum::response::Redirect::temporary("/secret").into_response()
+                            } else {
+                                axum::response::Html("<h1>Selected page</h1>").into_response()
+                            }
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/secret",
+                axum::routing::get({
+                    let secrets = secrets.clone();
+                    move || {
+                        let secrets = secrets.clone();
+                        async move {
+                            secrets.fetch_add(1, Ordering::SeqCst);
+                            "other-target-secret"
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_port = listener.local_addr().unwrap().port();
+        let upstream_task = tokio::spawn(async move {
+            axum::serve(listener, upstream).await.unwrap();
+        });
+        let daemon = EmbeddedDaemon::start_test(0).await.unwrap();
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let base = format!("http://127.0.0.1:{}", daemon.port);
+        let selected = format!("http://127.0.0.1:{upstream_port}/start");
+        let issue = client
+            .post(format!("{base}/api/browser-proxy/navigation"))
+            .bearer_auth(&daemon.access.local_credential)
+            .json(&serde_json::json!({"url":selected}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(issue.status(), reqwest::StatusCode::OK);
+        let issue: serde_json::Value = issue.json().await.unwrap();
+        let ticket_path = issue["url"].as_str().unwrap();
+        let initial = client
+            .get(format!("{base}{ticket_path}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(initial.text().await.unwrap().contains("Selected page"));
+        assert_eq!(
+            client
+                .head(format!("{base}{ticket_path}"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::UNAUTHORIZED
+        );
+        redirect.store(true, Ordering::SeqCst);
+        let changed = client
+            .get(format!("{base}{ticket_path}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(changed.status().is_redirection());
+        assert_eq!(
+            changed.headers()[reqwest::header::LOCATION],
+            format!("http://127.0.0.1:{upstream_port}/secret")
+        );
+        assert_eq!(
+            secrets.load(Ordering::SeqCst),
+            0,
+            "A page ticket must not fetch another target's secret"
+        );
+        let unauthorized = client
+            .post(format!("{base}/api/browser-proxy/navigation"))
+            .json(&serde_json::json!({"url":selected}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), reqwest::StatusCode::UNAUTHORIZED);
+        // The trusted operator may deliberately resolve and authorize that redirect.
+        let permitted = client
+            .post(format!("{base}/api/browser-proxy/navigation"))
+            .bearer_auth(&daemon.access.local_credential)
+            .json(&serde_json::json!({"url":selected}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(permitted.status(), reqwest::StatusCode::OK);
+        let permitted: serde_json::Value = permitted.json().await.unwrap();
+        assert_ne!(permitted["url"], issue["url"]);
+        daemon.stop().await;
+        upstream_task.abort();
     }
 
     #[tokio::test]
@@ -1105,7 +1491,10 @@ mod tests {
         let write_resp = dispatch_session_message(&write_req).await;
         assert_eq!(write_resp["type"], "fs.file.write.response");
         assert_eq!(write_resp["success"], true);
-        assert_eq!(std::fs::read_to_string(root.join("hello.txt")).unwrap(), "Rust Kernel VFS File Service");
+        assert_eq!(
+            std::fs::read_to_string(root.join("hello.txt")).unwrap(),
+            "Rust Kernel VFS File Service"
+        );
 
         // 3. File explorer request
         let explore_req = serde_json::json!({
@@ -1115,8 +1504,10 @@ mod tests {
         });
         let explore_resp = dispatch_session_message(&explore_req).await;
         assert_eq!(explore_resp["type"], "file_explorer_response");
-        assert_eq!(explore_resp["success"], true);
-        let entries = explore_resp["payload"]["entries"].as_array().expect("entries array");
+        assert!(explore_resp["payload"]["error"].is_null());
+        let entries = explore_resp["payload"]["directory"]["entries"]
+            .as_array()
+            .expect("entries array");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["name"], "hello.txt");
 
@@ -1150,13 +1541,29 @@ mod tests {
         assert!(init_out.status.success());
 
         // Configure local git user for test commit
-        let _ = tokio::process::Command::new("git").args(&["config", "user.name", "Kronos Test"]).current_dir(root).output().await;
-        let _ = tokio::process::Command::new("git").args(&["config", "user.email", "test@kronos.local"]).current_dir(root).output().await;
+        let _ = tokio::process::Command::new("git")
+            .args(&["config", "user.name", "Kronos Test"])
+            .current_dir(root)
+            .output()
+            .await;
+        let _ = tokio::process::Command::new("git")
+            .args(&["config", "user.email", "test@kronos.local"])
+            .current_dir(root)
+            .output()
+            .await;
 
         // Create and commit a file
         std::fs::write(root.join("file1.txt"), b"line1\n").unwrap();
-        let _ = tokio::process::Command::new("git").args(&["add", "file1.txt"]).current_dir(root).output().await;
-        let _ = tokio::process::Command::new("git").args(&["commit", "-m", "init commit"]).current_dir(root).output().await;
+        let _ = tokio::process::Command::new("git")
+            .args(&["add", "file1.txt"])
+            .current_dir(root)
+            .output()
+            .await;
+        let _ = tokio::process::Command::new("git")
+            .args(&["commit", "-m", "init commit"])
+            .current_dir(root)
+            .output()
+            .await;
 
         // 1. Test git/branches wire call
         let branches_req = serde_json::json!({
@@ -1167,7 +1574,9 @@ mod tests {
         let branches_resp = dispatch_session_message(&branches_req).await;
         assert_eq!(branches_resp["type"], "git/branches/response");
         assert_eq!(branches_resp["success"], true);
-        let branches = branches_resp["payload"]["branches"].as_array().expect("branches array");
+        let branches = branches_resp["payload"]["branches"]
+            .as_array()
+            .expect("branches array");
         assert!(!branches.is_empty());
 
         // 2. Modify file and test git/diff wire call
@@ -1193,7 +1602,9 @@ mod tests {
         let wt_resp = dispatch_session_message(&wt_req).await;
         assert_eq!(wt_resp["type"], "git/worktree/list/response");
         assert_eq!(wt_resp["success"], true);
-        let wt_list = wt_resp["payload"]["worktrees"].as_array().expect("worktrees array");
+        let wt_list = wt_resp["payload"]["worktrees"]
+            .as_array()
+            .expect("worktrees array");
         assert_eq!(wt_list.len(), 1);
     }
 
@@ -1207,7 +1618,9 @@ mod tests {
         let prov_resp = dispatch_session_message(&prov_req).await;
         assert_eq!(prov_resp["type"], "providers/list/response");
         assert_eq!(prov_resp["success"], true);
-        let providers = prov_resp["payload"]["providers"].as_array().expect("providers array");
+        let providers = prov_resp["payload"]["providers"]
+            .as_array()
+            .expect("providers array");
         assert!(providers.iter().any(|p| p["id"] == "mock"));
         assert!(providers.iter().any(|p| p["id"] == "claude"));
         assert!(providers.iter().any(|p| p["id"] == "codex"));
@@ -1246,7 +1659,9 @@ mod tests {
         let time_resp = dispatch_session_message(&time_req).await;
         assert_eq!(time_resp["type"], "agent/timeline/response");
         assert_eq!(time_resp["success"], true);
-        let items = time_resp["payload"]["items"].as_array().expect("timeline items");
+        let items = time_resp["payload"]["items"]
+            .as_array()
+            .expect("timeline items");
         assert_eq!(items.len(), 1);
 
         // 5. Query plugin usage metrics
@@ -1257,7 +1672,9 @@ mod tests {
         let usage_resp = dispatch_session_message(&usage_req).await;
         assert_eq!(usage_resp["type"], "plugins/usage/response");
         assert_eq!(usage_resp["success"], true);
-        let metrics = usage_resp["payload"]["metrics"].as_array().expect("metrics array");
+        let metrics = usage_resp["payload"]["metrics"]
+            .as_array()
+            .expect("metrics array");
         assert_eq!(metrics.len(), 9);
     }
 
@@ -1288,8 +1705,13 @@ mod tests {
         });
         let list_resp = dispatch_session_message(&list_req).await;
         assert_eq!(list_resp["type"], "project.list.response");
-        let projects = list_resp["payload"]["projects"].as_array().expect("projects array");
-        assert!(projects.iter().any(|p| p["projectDisplayName"] == "my-test-project" && p["projectIconRevision"] == "automatic:none:v1"));
+        let projects = list_resp["payload"]["projects"]
+            .as_array()
+            .expect("projects array");
+        assert!(projects
+            .iter()
+            .any(|p| p["projectDisplayName"] == "my-test-project"
+                && p["projectIconRevision"] == "automatic:none:v1"));
 
         // 3. Open project request
         let open_req = serde_json::json!({
@@ -1318,8 +1740,14 @@ mod tests {
         assert!(ws_create_resp["payload"]["error"].is_null());
         let created_ws = &ws_create_resp["payload"]["workspace"];
         assert_eq!(created_ws["name"], "my-test-project");
-        assert!(ws_create_resp["payload"]["agent"].is_object(), "agent must be returned in workspace.create.response");
-        assert!(ws_create_resp["payload"]["agent"]["id"].as_str().unwrap().starts_with("ag_"));
+        assert!(
+            ws_create_resp["payload"]["agent"].is_object(),
+            "agent must be returned in workspace.create.response"
+        );
+        assert!(ws_create_resp["payload"]["agent"]["id"]
+            .as_str()
+            .unwrap()
+            .starts_with("ag_"));
         let ag_create_req = serde_json::json!({
             "type": "agent.create.request",
             "requestId": "req-ag-create-1",
@@ -1334,7 +1762,10 @@ mod tests {
         assert!(created_ag["id"].as_str().unwrap().starts_with("ag_"));
         assert_eq!(created_ag["provider"], "opencode");
         assert_eq!(created_ag["model"], "opencode/deepseek-v4.1-flash-free");
-        assert_eq!(ag_create_resp["payload"]["creation"]["phase"], "prompt_started");
+        assert_eq!(
+            ag_create_resp["payload"]["creation"]["phase"],
+            "prompt_started"
+        );
 
         // Verify the initial prompt was recorded to the timeline
         let timeline_req = serde_json::json!({
@@ -1345,7 +1776,10 @@ mod tests {
         let tl_res = dispatch_session_message(&timeline_req).await;
         assert_eq!(tl_res["type"], "fetch_agent_timeline_response");
         let entries = tl_res["payload"]["entries"].as_array().unwrap();
-        assert!(!entries.is_empty(), "Timeline entries must contain the initial prompt");
+        assert!(
+            !entries.is_empty(),
+            "Timeline entries must contain the initial prompt"
+        );
         assert_eq!(entries[0]["item"]["text"], "Initialize test repo");
     }
 
@@ -1358,9 +1792,15 @@ mod tests {
             "events": ["project.update", "script_status_update"]
         });
         let sub_events_resp = dispatch_session_message(&sub_events_req).await;
-        assert_eq!(sub_events_resp["type"], "session.events.set_subscription.response");
+        assert_eq!(
+            sub_events_resp["type"],
+            "session.events.set_subscription.response"
+        );
         assert_eq!(sub_events_resp["payload"]["requestId"], "req-sub-events-1");
-        assert!(sub_events_resp["payload"]["subscriptionId"].as_str().unwrap().starts_with("sub-events-"));
+        assert!(sub_events_resp["payload"]["subscriptionId"]
+            .as_str()
+            .unwrap()
+            .starts_with("sub-events-"));
 
         // 2. fetch_workspaces_request (with subscribe)
         let ws_req = serde_json::json!({
@@ -1437,7 +1877,9 @@ mod tests {
         });
         let prov_snap_resp = dispatch_session_message(&prov_snap_req).await;
         assert_eq!(prov_snap_resp["type"], "get_providers_snapshot_response");
-        let entries = prov_snap_resp["payload"]["entries"].as_array().expect("entries array");
+        let entries = prov_snap_resp["payload"]["entries"]
+            .as_array()
+            .expect("entries array");
         assert!(!entries.is_empty());
         for entry in entries {
             let provider = entry["provider"].as_str().expect("provider id");
@@ -1455,8 +1897,12 @@ mod tests {
         });
         let list_prov_resp = dispatch_session_message(&list_prov_req).await;
         assert_eq!(list_prov_resp["type"], "list_available_providers_response");
-        let provs = list_prov_resp["payload"]["providers"].as_array().expect("providers array");
-        assert!(provs.iter().any(|p| p["provider"] == "codex" && p["available"].is_boolean()));
+        let provs = list_prov_resp["payload"]["providers"]
+            .as_array()
+            .expect("providers array");
+        assert!(provs
+            .iter()
+            .any(|p| p["provider"] == "codex" && p["available"].is_boolean()));
 
         // 10. refresh_providers_snapshot_request
         let ref_req = serde_json::json!({
@@ -1475,21 +1921,39 @@ mod tests {
         });
         let sub_prov_resp = dispatch_session_message(&sub_prov_req).await;
         assert_eq!(sub_prov_resp["type"], "subscribe_providers_response");
-        assert_eq!(sub_prov_resp["payload"]["subscriptionId"], "sub-providers-req-sub-prov-1");
-        
+        assert_eq!(
+            sub_prov_resp["payload"]["subscriptionId"],
+            "sub-providers-req-sub-prov-1"
+        );
+
         // Wait for pushed update frame
         let pushed_frame = tokio::time::timeout(std::time::Duration::from_secs(15), push_rx.recv())
             .await
             .expect("timeout waiting for providers_snapshot_update")
             .expect("recv error");
-        let parsed_update: serde_json::Value = serde_json::from_str(&pushed_frame).expect("valid json update");
+        let parsed_update: serde_json::Value =
+            serde_json::from_str(&pushed_frame).expect("valid json update");
         assert_eq!(parsed_update["type"], "session");
-        assert_eq!(parsed_update["message"]["type"], "providers_snapshot_update");
-        let pushed_entries = parsed_update["message"]["payload"]["entries"].as_array().expect("entries array");
-        assert!(!pushed_entries.is_empty(), "pushed entries must not be empty");
-        let codex_entry = pushed_entries.iter().find(|e| e["provider"] == "codex").expect("codex entry");
+        assert_eq!(
+            parsed_update["message"]["type"],
+            "providers_snapshot_update"
+        );
+        let pushed_entries = parsed_update["message"]["payload"]["entries"]
+            .as_array()
+            .expect("entries array");
+        assert!(
+            !pushed_entries.is_empty(),
+            "pushed entries must not be empty"
+        );
+        let codex_entry = pushed_entries
+            .iter()
+            .find(|e| e["provider"] == "codex")
+            .expect("codex entry");
         let codex_models = codex_entry["models"].as_array().expect("codex models");
-        assert!(!codex_models.is_empty(), "Codex must have models populated dynamically!");
+        assert!(
+            !codex_models.is_empty(),
+            "Codex must have models populated dynamically!"
+        );
         assert!(codex_models.iter().any(|m| m["id"] == "gpt-6-luna"));
         // 11. provider_diagnostic_request
         let diag_req = serde_json::json!({
@@ -1505,10 +1969,15 @@ mod tests {
     async fn test_discover_codex_models_live() {
         let entries = crate::kernel::server::get_provider_snapshot_entries(".").await;
         for e in entries {
-            eprintln!("PROVIDER: {} -> status={} models={}", e["provider"], e["status"], e["models"].as_array().map(|a| a.len()).unwrap_or(0));
+            eprintln!(
+                "PROVIDER: {} -> status={} models={}",
+                e["provider"],
+                e["status"],
+                e["models"].as_array().map(|a| a.len()).unwrap_or(0)
+            );
         }
     }
-    
+
     #[test]
     fn test_provider_metadata_contains_no_model_catalog() {
         let entries = crate::kernel::server::get_provider_snapshot_metadata_entries();
@@ -1566,10 +2035,13 @@ mod tests {
                 { "id": "default-only", "defaultReasoningEffort": "medium" }
             ] }
         }));
-        assert_eq!(models[0]["thinkingOptions"], serde_json::json!([
-            { "id": "low", "label": "low", "description": "Faster reasoning", "isDefault": false },
-            { "id": "high", "label": "high", "description": "Deeper reasoning", "isDefault": true }
-        ]));
+        assert_eq!(
+            models[0]["thinkingOptions"],
+            serde_json::json!([
+                { "id": "low", "label": "low", "description": "Faster reasoning", "isDefault": false },
+                { "id": "high", "label": "high", "description": "Deeper reasoning", "isDefault": true }
+            ])
+        );
         assert_eq!(models[0]["defaultThinkingOptionId"], "high");
         assert!(models[1].get("thinkingOptions").is_none());
         assert!(models[1].get("defaultThinkingOptionId").is_none());
@@ -1594,8 +2066,12 @@ mod tests {
             ]
         }));
         let ids = |model: &serde_json::Value| -> Vec<String> {
-            model["thinkingOptions"].as_array().unwrap().iter()
-                .map(|option| option["id"].as_str().unwrap().to_owned()).collect()
+            model["thinkingOptions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|option| option["id"].as_str().unwrap().to_owned())
+                .collect()
         };
         assert_eq!(ids(&models[0]), ["low", "high", "xhigh"]);
         assert_eq!(models[0]["defaultThinkingOptionId"], "high");
@@ -1621,11 +2097,22 @@ mod tests {
             ]
         }));
         let options = models[0]["thinkingOptions"].as_array().unwrap();
-        assert_eq!(options.iter().map(|option| option["id"].as_str().unwrap()).collect::<Vec<_>>(),
-            ["off", "auto", "high", "xhigh"]);
+        assert_eq!(
+            options
+                .iter()
+                .map(|option| option["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["off", "auto", "high", "xhigh"]
+        );
         assert_eq!(models[0]["defaultThinkingOptionId"], "xhigh");
-        assert_eq!(options.iter().filter(|option| option["isDefault"] == true)
-            .map(|option| option["id"].as_str().unwrap()).collect::<Vec<_>>(), ["xhigh"]);
+        assert_eq!(
+            options
+                .iter()
+                .filter(|option| option["isDefault"] == true)
+                .map(|option| option["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["xhigh"]
+        );
         for model in &models[1..] {
             assert!(model.get("thinkingOptions").is_none());
             assert!(model.get("defaultThinkingOptionId").is_none());
@@ -1634,7 +2121,8 @@ mod tests {
 
     #[test]
     fn test_opencode_verbose_catalog_uses_json_metadata_not_bare_ids() {
-        let models = crate::kernel::server::opencode_models_from_cli_output(r#"
+        let models = crate::kernel::server::opencode_models_from_cli_output(
+            r#"
 vendor/reasoning
 {
   "id": "reasoning",
@@ -1647,19 +2135,25 @@ vendor/reasoning
 vendor/plain
 {"id":"plain","providerID":"vendor","name":"Plain Model","variants":{}}
 vendor/bare-only
-"#);
+"#,
+        );
         assert_eq!(models.len(), 2);
         assert_eq!(models[0]["id"], "vendor/reasoning");
         assert_eq!(models[0]["label"], "Reasoning Model");
         assert_eq!(models[0]["contextWindowMaxTokens"], 123456);
-        assert_eq!(models[0]["thinkingOptions"], serde_json::json!([
-            { "id": "default", "label": "Default", "isDefault": true },
-            { "id": "deep", "label": "deep", "isDefault": false }
-        ]));
+        assert_eq!(
+            models[0]["thinkingOptions"],
+            serde_json::json!([
+                { "id": "default", "label": "Default", "isDefault": true },
+                { "id": "deep", "label": "deep", "isDefault": false }
+            ])
+        );
         assert_eq!(models[0]["defaultThinkingOptionId"], "default");
         assert!(models[1].get("thinkingOptions").is_none());
         assert!(models[1].get("defaultThinkingOptionId").is_none());
-        assert!(crate::kernel::server::opencode_models_from_cli_output("vendor/bare-only\n").is_empty());
+        assert!(
+            crate::kernel::server::opencode_models_from_cli_output("vendor/bare-only\n").is_empty()
+        );
     }
 
     #[test]
@@ -1675,12 +2169,21 @@ vendor/bare-only
                 }
             } }]
         }));
-        let reasoning = models.iter().find(|model| model["id"] == "vendor/reasoning").unwrap();
+        let reasoning = models
+            .iter()
+            .find(|model| model["id"] == "vendor/reasoning")
+            .unwrap();
         assert_eq!(reasoning["thinkingOptions"][1]["id"], "custom");
         assert_eq!(reasoning["defaultThinkingOptionId"], "default");
-        let plain = models.iter().find(|model| model["id"] == "vendor/plain").unwrap();
+        let plain = models
+            .iter()
+            .find(|model| model["id"] == "vendor/plain")
+            .unwrap();
         assert!(plain.get("thinkingOptions").is_none());
-        let nonreasoning = models.iter().find(|model| model["id"] == "vendor/nonreasoning").unwrap();
+        let nonreasoning = models
+            .iter()
+            .find(|model| model["id"] == "vendor/nonreasoning")
+            .unwrap();
         assert!(nonreasoning.get("thinkingOptions").is_none());
     }
 
@@ -1734,7 +2237,10 @@ vendor/bare-only
         assert_eq!(models.len(), 1);
         assert_eq!(models[0]["id"], "ollama/local-coder:latest");
         assert_eq!(models[0]["label"], "local-coder:latest (7B)");
-        assert_eq!(models[0]["description"], "Local Ollama model from the llama family");
+        assert_eq!(
+            models[0]["description"],
+            "Local Ollama model from the llama family"
+        );
         assert_eq!(models[0]["provider"], "ollama");
     }
 
@@ -1749,7 +2255,9 @@ vendor/bare-only
         .expect("write Claude settings");
 
         assert_eq!(
-            crate::kernel::server::read_claude_settings_model(dir.path()).await.as_deref(),
+            crate::kernel::server::read_claude_settings_model(dir.path())
+                .await
+                .as_deref(),
             Some("user-selected-model")
         );
     }
@@ -1787,8 +2295,13 @@ vendor/bare-only
                 && model["isDefault"] == true
                 && model["contextWindowMaxTokens"] == 96000
         }));
-        assert!(models.iter().any(|model| model["id"] == "api-provider/runtime-b"));
-        assert!(!models.iter().any(|model| model["id"].as_str().unwrap_or_default().contains("must-not-show")));
+        assert!(models
+            .iter()
+            .any(|model| model["id"] == "api-provider/runtime-b"));
+        assert!(!models.iter().any(|model| model["id"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("must-not-show")));
     }
     #[test]
     fn test_local_catalog_endpoints_accept_host_and_url_forms() {
@@ -1808,13 +2321,16 @@ vendor/bare-only
     #[test]
     fn test_copilot_metadata_has_empty_models_and_ready_status() {
         let entries = crate::kernel::server::get_provider_snapshot_metadata_entries();
-        let copilot = entries.iter().find(|e| {
-            e.get("provider").and_then(serde_json::Value::as_str) == Some("copilot")
-        });
+        let copilot = entries
+            .iter()
+            .find(|e| e.get("provider").and_then(serde_json::Value::as_str) == Some("copilot"));
         assert!(copilot.is_some(), "copilot entry must exist in metadata");
         let copilot = copilot.unwrap();
         assert_eq!(
-            copilot.get("models").and_then(serde_json::Value::as_array).map(Vec::len),
+            copilot
+                .get("models")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len),
             Some(0),
             "copilot metadata must ship with empty models; runtime fills availability"
         );
@@ -1827,7 +2343,10 @@ vendor/bare-only
         );
         // Must have at least the three standard Copilot ACP modes.
         let modes = copilot.get("modes").and_then(serde_json::Value::as_array);
-        assert!(modes.is_some_and(|m| m.len() >= 3), "copilot must have >= 3 modes");
+        assert!(
+            modes.is_some_and(|m| m.len() >= 3),
+            "copilot must have >= 3 modes"
+        );
     }
     #[tokio::test]
     async fn test_agent_wire_protocol_full_roundtrip() {
@@ -1862,41 +2381,17 @@ vendor/bare-only
         assert_eq!(fetch_res["type"], "fetch_agent_response");
         assert_eq!(fetch_res["payload"]["agent"]["id"], agent_id);
 
-        // 3. Send message to agent
-        let msg_req = serde_json::json!({
-            "type": "send_agent_message_request",
-            "requestId": "req-agent-msg-1",
-            "agentId": agent_id,
-            "text": "Hello, execute test suite"
-        });
-        let msg_res = dispatch_session_message(&msg_req).await;
-        assert_eq!(msg_res["type"], "send_agent_message_response");
-        assert_eq!(msg_res["payload"]["accepted"], true);
-        assert_eq!(msg_res["payload"]["requestId"], "req-agent-msg-1");
-        assert_eq!(msg_res["payload"]["agentId"], agent_id);
-        // Nullable is required on the wire; indexing alone treats missing keys as null.
-        assert_eq!(msg_res["payload"].get("error"), Some(&serde_json::Value::Null));
-
-        // 4. Fetch agent timeline
-        let timeline_req = serde_json::json!({
-            "type": "fetch_agent_timeline_request",
-            "requestId": "req-agent-timeline-1",
-            "agentId": agent_id
-        });
-        let timeline_res = dispatch_session_message(&timeline_req).await;
-        assert_eq!(timeline_res["type"], "fetch_agent_timeline_response");
-        let entries = timeline_res["payload"]["entries"].as_array().expect("entries array");
-        assert_eq!(entries.len(), 1, "Timeline should have user message");
-        assert_eq!(entries[0]["item"]["type"], "user_message");
-
-        // 5. Config, mode, skills, commands acknowledgments
+        // 3. Config, mode, skills, commands acknowledgments (while idle)
         let config_req = serde_json::json!({
             "type": "agent.config.apply.request",
             "requestId": "req-config-1",
             "agentId": agent_id,
             "config": { "mode": "auto" }
         });
-        assert_eq!(dispatch_session_message(&config_req).await["type"], "agent.config.apply.response");
+        assert_eq!(
+            dispatch_session_message(&config_req).await["type"],
+            "agent.config.apply.response"
+        );
 
         let mode_req = serde_json::json!({
             "type": "set_agent_mode_request",
@@ -1904,7 +2399,10 @@ vendor/bare-only
             "agentId": agent_id,
             "modeId": "auto"
         });
-        assert_eq!(dispatch_session_message(&mode_req).await["type"], "set_agent_mode_response");
+        assert_eq!(
+            dispatch_session_message(&mode_req).await["type"],
+            "set_agent_mode_response"
+        );
 
         let model_req = serde_json::json!({
             "type": "set_agent_model_request",
@@ -1923,7 +2421,10 @@ vendor/bare-only
             "agentId": agent_id
         });
         let verify_model_res = dispatch_session_message(&verify_model_req).await;
-        assert_eq!(verify_model_res["payload"]["agent"]["model"], "claude-3-5-sonnet");
+        assert_eq!(
+            verify_model_res["payload"]["agent"]["model"],
+            "claude-3-5-sonnet"
+        );
         assert_eq!(verify_model_res["payload"]["agent"]["provider"], "claude");
 
         let opencode_model_req = serde_json::json!({
@@ -1936,19 +2437,60 @@ vendor/bare-only
         assert_eq!(opencode_res["payload"]["accepted"], true);
         let verify_opencode = dispatch_session_message(&verify_model_req).await;
         assert_eq!(verify_opencode["payload"]["agent"]["provider"], "opencode");
-        assert_eq!(verify_opencode["payload"]["agent"]["model"], "opencode/deepseek-v4.1-flash-free");
+        assert_eq!(
+            verify_opencode["payload"]["agent"]["model"],
+            "opencode/deepseek-v4.1-flash-free"
+        );
         let cmd_req = serde_json::json!({
             "type": "list_commands_request",
             "requestId": "req-cmd-1",
             "agentId": agent_id
         });
-        assert_eq!(dispatch_session_message(&cmd_req).await["type"], "list_commands_response");
+        assert_eq!(
+            dispatch_session_message(&cmd_req).await["type"],
+            "list_commands_response"
+        );
+
+        // 4. Send message to agent
+        let msg_req = serde_json::json!({
+            "type": "send_agent_message_request",
+            "requestId": "req-agent-msg-1",
+            "agentId": agent_id,
+            "text": "Hello, execute test suite"
+        });
+        let msg_res = dispatch_session_message(&msg_req).await;
+        assert_eq!(msg_res["type"], "send_agent_message_response");
+        assert_eq!(msg_res["payload"]["accepted"], true);
+        assert_eq!(msg_res["payload"]["requestId"], "req-agent-msg-1");
+        assert_eq!(msg_res["payload"]["agentId"], agent_id);
+        // Nullable is required on the wire; indexing alone treats missing keys as null.
+        assert_eq!(
+            msg_res["payload"].get("error"),
+            Some(&serde_json::Value::Null)
+        );
+
+        // 5. Fetch agent timeline
+        let timeline_req = serde_json::json!({
+            "type": "fetch_agent_timeline_request",
+            "requestId": "req-agent-timeline-1",
+            "agentId": agent_id
+        });
+        let timeline_res = dispatch_session_message(&timeline_req).await;
+        assert_eq!(timeline_res["type"], "fetch_agent_timeline_response");
+        let entries = timeline_res["payload"]["entries"]
+            .as_array()
+            .expect("entries array");
+        assert_eq!(entries.len(), 1, "Timeline should have user message");
+        assert_eq!(entries[0]["item"]["type"], "user_message");
 
         let skills_req = serde_json::json!({
             "type": "agent.skills.get_status.request",
             "requestId": "req-skills-1"
         });
-        assert_eq!(dispatch_session_message(&skills_req).await["type"], "agent.skills.get_status.response");
+        assert_eq!(
+            dispatch_session_message(&skills_req).await["type"],
+            "agent.skills.get_status.response"
+        );
 
         // 6. Fetch agents list
         let list_req = serde_json::json!({
@@ -1957,7 +2499,9 @@ vendor/bare-only
         });
         let list_res = dispatch_session_message(&list_req).await;
         assert_eq!(list_res["type"], "fetch_agents_response");
-        let list_entries = list_res["payload"]["entries"].as_array().expect("entries array");
+        let list_entries = list_res["payload"]["entries"]
+            .as_array()
+            .expect("entries array");
         assert!(list_entries.iter().any(|e| e["agent"]["id"] == agent_id));
 
         // 7. Cancel agent
@@ -1991,14 +2535,20 @@ vendor/bare-only
                 "agentId": agent_id,
                 "text": "This message must not be stored"
             }
-        })).await;
+        }))
+        .await;
 
         assert_eq!(response["type"], "send_agent_message_response");
         assert_eq!(response["payload"]["requestId"], "send-missing-agent");
         assert_eq!(response["payload"]["agentId"], agent_id);
         assert_eq!(response["payload"]["accepted"], false);
-        assert!(!response["payload"]["error"].as_str().expect("rejection error string").is_empty());
-        assert!(crate::kernel::server::get_agent_manager().get_timeline(agent_id).is_empty());
+        assert!(!response["payload"]["error"]
+            .as_str()
+            .expect("rejection error string")
+            .is_empty());
+        assert!(crate::kernel::server::get_agent_manager()
+            .get_timeline(agent_id)
+            .is_empty());
     }
 
     #[tokio::test]
@@ -2016,7 +2566,12 @@ vendor/bare-only
         assert_eq!(fetch_res["payload"]["requestId"], "req-sessions-test-1");
         assert!(fetch_res["payload"]["entries"].is_array());
         assert_eq!(fetch_res["payload"]["filteredAlreadyImportedCount"], 0);
-        assert_eq!(fetch_res["payload"]["providerErrors"].as_array().map(|a| a.len()), Some(0));
+        assert_eq!(
+            fetch_res["payload"]["providerErrors"]
+                .as_array()
+                .map(|a| a.len()),
+            Some(0)
+        );
 
         // Test import_agent_request
         let import_req = serde_json::json!({
@@ -2038,14 +2593,18 @@ vendor/bare-only
         assert!(!imported_agent_id.is_empty());
     }
 
-
     #[tokio::test]
     async fn test_thinking_controls_update_snapshot_and_clear_setting() {
         let mgr = crate::kernel::server::get_agent_manager();
-        let agent = mgr.create_agent(
-            "codex", ".", None, None,
-            Some(serde_json::json!({"model": "runtime-model", "thinkingOptionId": "high"})),
-        ).unwrap();
+        let agent = mgr
+            .create_agent(
+                "codex",
+                ".",
+                None,
+                None,
+                Some(serde_json::json!({"model": "runtime-model", "thinkingOptionId": "high"})),
+            )
+            .unwrap();
         let initial = crate::kernel::server::agent_record_to_snapshot(&agent);
         assert_eq!(initial["thinkingOptionId"], "high");
         assert_eq!(initial["capabilities"]["supportsReasoningStream"], true);
@@ -2053,7 +2612,8 @@ vendor/bare-only
         let response = dispatch_session_message(&serde_json::json!({
             "type": "set_agent_thinking_request", "requestId": "thinking-update",
             "agentId": agent.id, "thinkingOptionId": "low",
-        })).await;
+        }))
+        .await;
         let updated = mgr.get_agent(&agent.id).unwrap();
         let stored = updated.config.as_ref().unwrap()["thinkingOptionId"].clone();
         let published = tokio::time::timeout(std::time::Duration::from_secs(2), async {
@@ -2071,28 +2631,39 @@ vendor/bare-only
                     Err(error) => panic!("Thinking update channel closed: {error}"),
                 }
             }
-        }).await.expect("Thinking update must publish this agent's state");
+        })
+        .await
+        .expect("Thinking update must publish this agent's state");
         let fetched = dispatch_session_message(&serde_json::json!({
             "type": "fetch_agent_request", "requestId": "thinking-fetch", "agentId": agent.id,
-        })).await;
+        }))
+        .await;
         let cleared = dispatch_session_message(&serde_json::json!({
             "type": "set_agent_thinking_request", "requestId": "thinking-clear",
             "payload": {"agentId": agent.id, "thinkingOptionId": null},
-        })).await;
+        }))
+        .await;
         let clear_config = mgr.get_agent(&agent.id).unwrap().config.unwrap();
         mgr.delete_agent(&agent.id).unwrap();
         assert_eq!(response["payload"]["accepted"], true);
         assert_eq!(stored, "low");
-        assert_eq!(published["message"]["payload"]["agent"]["thinkingOptionId"], "low");
+        assert_eq!(
+            published["message"]["payload"]["agent"]["thinkingOptionId"],
+            "low"
+        );
         assert_eq!(fetched["payload"]["agent"]["thinkingOptionId"], "low");
-        assert_eq!(fetched["payload"].get("error"), Some(&serde_json::Value::Null));
+        assert_eq!(
+            fetched["payload"].get("error"),
+            Some(&serde_json::Value::Null)
+        );
         assert_eq!(cleared["payload"]["accepted"], true);
         assert!(clear_config.get("thinkingOptionId").is_none());
         assert_eq!(clear_config["model"], "runtime-model");
         let rejected = dispatch_session_message(&serde_json::json!({
             "type": "set_agent_thinking_request", "requestId": "thinking-missing",
             "agentId": "missing-thinking-agent", "thinkingOptionId": "high",
-        })).await;
+        }))
+        .await;
         assert_eq!(rejected["payload"]["accepted"], false);
         assert!(rejected["payload"]["error"].is_string());
     }
@@ -2104,10 +2675,10 @@ vendor/bare-only
         let response = dispatch_session_message(&serde_json::json!({
             "type": "agent.config.apply.request", "requestId": "thinking-profile",
             "agentId": agent.id, "config": {"thinkingOptionId": "medium"},
-        })).await;
-        let snapshot = crate::kernel::server::agent_record_to_snapshot(
-            &mgr.get_agent(&agent.id).unwrap(),
-        );
+        }))
+        .await;
+        let snapshot =
+            crate::kernel::server::agent_record_to_snapshot(&mgr.get_agent(&agent.id).unwrap());
         mgr.delete_agent(&agent.id).unwrap();
         assert_eq!(response["payload"]["accepted"], true);
         assert_eq!(snapshot["thinkingOptionId"], "medium");
@@ -2121,15 +2692,198 @@ vendor/bare-only
                 "provider": "pi", "cwd": "C:/thinking-test", "model": "runtime-model",
                 "thinkingOptionId": "high",
             },
-        })).await;
+        }))
+        .await;
         let agent = &response["payload"]["agent"];
         let id = agent["id"].as_str().unwrap();
-        crate::kernel::server::get_agent_manager().delete_agent(id).unwrap();
+        crate::kernel::server::get_agent_manager()
+            .delete_agent(id)
+            .unwrap();
         assert_eq!(agent["provider"], "pi");
         assert_eq!(agent["cwd"], "C:/thinking-test");
         assert_eq!(agent["model"], "runtime-model");
         assert_eq!(agent["thinkingOptionId"], "high");
     }
+    #[tokio::test]
+    async fn test_embedded_daemon_browser_proxy_preserves_single_use_response() {
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        let visits = Arc::new(AtomicUsize::new(0));
+        let upstream = axum::Router::new().route("/once", axum::routing::get({
+            let visits = visits.clone();
+            move || {
+                let visits = visits.clone();
+                async move {
+                    use axum::response::IntoResponse;
+                    if visits.fetch_add(1, Ordering::SeqCst) == 0 {
+                        axum::response::Html("<h1>One-use private document</h1>").into_response()
+                    } else { axum::http::StatusCode::GONE.into_response() }
+                }
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let task = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap(); });
+        let daemon = EmbeddedDaemon::start_test(0).await.unwrap();
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{}", daemon.port);
+        let issued: serde_json::Value = client.post(format!("{base}/api/browser-proxy/navigation"))
+            .bearer_auth(&daemon.access.local_credential)
+            .json(&serde_json::json!({"url":format!("http://127.0.0.1:{port}/once")}))
+            .send().await.unwrap().json().await.unwrap();
+        let rendered = client.get(format!("{base}{}", issued["url"].as_str().unwrap())).send().await.unwrap();
+        assert_eq!(rendered.status(), reqwest::StatusCode::OK);
+        assert!(rendered.text().await.unwrap().contains("One-use private document"));
+        assert_eq!(visits.load(Ordering::SeqCst), 1);
+        daemon.stop().await;
+        task.abort();
+    }
 
+    #[tokio::test]
+    async fn test_embedded_daemon_fetch_agent_history_request() {
+        let mgr = crate::kernel::server::get_agent_manager();
+        let agent = mgr.create_agent("codex", ".", Some("History Test Agent".to_string()), None, None).unwrap();
+
+        let req = serde_json::json!({
+            "type": "fetch_agent_history_request",
+            "requestId": "hist-req-1",
+            "sort": [{ "key": "updated_at", "direction": "desc" }],
+            "page": { "limit": 20 }
+        });
+
+        let resp = dispatch_session_message(&req).await;
+        assert_eq!(resp["type"], "fetch_agent_history_response");
+        assert_eq!(resp["payload"]["requestId"], "hist-req-1");
+        let entries = resp["payload"]["entries"].as_array().expect("entries array");
+        assert!(entries.iter().any(|e| e["agent"]["id"] == agent.id));
+        assert_eq!(resp["payload"]["pageInfo"]["hasMore"], false);
+
+        // Test search matching
+        let search_req = serde_json::json!({
+            "type": "fetch_agent_history_request",
+            "requestId": "hist-req-2",
+            "search": "History Test",
+            "page": { "limit": 20 }
+        });
+        let search_resp = dispatch_session_message(&search_req).await;
+        let search_entries = search_resp["payload"]["entries"].as_array().unwrap();
+        assert!(search_entries.iter().any(|e| e["agent"]["id"] == agent.id));
+
+        // Test search non-matching
+        let no_match_req = serde_json::json!({
+            "type": "fetch_agent_history_request",
+            "requestId": "hist-req-3",
+            "search": "NonExistentTermXYZ123",
+            "page": { "limit": 20 }
+        });
+        let no_match_resp = dispatch_session_message(&no_match_req).await;
+        let no_match_entries = no_match_resp["payload"]["entries"].as_array().unwrap();
+        assert_eq!(no_match_entries.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_schedule_lifecycle() {
+        // 1. Initial schedule list should succeed
+        let list_req = serde_json::json!({
+            "type": "schedule/list",
+            "requestId": "sched-test-list-1"
+        });
+        let list_resp = dispatch_session_message(&list_req).await;
+        assert_eq!(list_resp["type"], "schedule/list/response");
+        assert_eq!(list_resp["payload"]["requestId"], "sched-test-list-1");
+        assert!(list_resp["payload"]["error"].is_null());
+
+        // 2. Create schedule
+        let create_req = serde_json::json!({
+            "type": "schedule/create",
+            "requestId": "sched-test-create-1",
+            "name": "Hourly Health Check",
+            "prompt": "Check all services and report status",
+            "cadence": {
+                "type": "every",
+                "everyMs": 3600000
+            },
+            "target": {
+                "type": "new-agent",
+                "config": {
+                    "provider": "codex",
+                    "cwd": "."
+                }
+            }
+        });
+        let create_resp = dispatch_session_message(&create_req).await;
+        assert_eq!(create_resp["type"], "schedule/create/response");
+        assert!(create_resp["payload"]["error"].is_null());
+        let sched = &create_resp["payload"]["schedule"];
+        let sched_id = sched["id"].as_str().expect("schedule id string");
+        assert_eq!(sched["status"], "active");
+        assert_eq!(sched["name"], "Hourly Health Check");
+
+        // 3. Inspect schedule
+        let inspect_req = serde_json::json!({
+            "type": "schedule/inspect",
+            "requestId": "sched-test-inspect-1",
+            "scheduleId": sched_id
+        });
+        let inspect_resp = dispatch_session_message(&inspect_req).await;
+        assert_eq!(inspect_resp["type"], "schedule/inspect/response");
+        assert_eq!(inspect_resp["payload"]["schedule"]["id"], sched_id);
+        assert!(inspect_resp["payload"]["schedule"]["runs"].is_array());
+
+        // 4. Logs
+        let logs_req = serde_json::json!({
+            "type": "schedule/logs",
+            "requestId": "sched-test-logs-1",
+            "scheduleId": sched_id
+        });
+        let logs_resp = dispatch_session_message(&logs_req).await;
+        assert_eq!(logs_resp["type"], "schedule/logs/response");
+        assert!(logs_resp["payload"]["runs"].is_array());
+
+        // 5. Pause
+        let pause_req = serde_json::json!({
+            "type": "schedule/pause",
+            "requestId": "sched-test-pause-1",
+            "scheduleId": sched_id
+        });
+        let pause_resp = dispatch_session_message(&pause_req).await;
+        assert_eq!(pause_resp["type"], "schedule/pause/response");
+        assert_eq!(pause_resp["payload"]["schedule"]["status"], "paused");
+
+        // 6. Resume
+        let resume_req = serde_json::json!({
+            "type": "schedule/resume",
+            "requestId": "sched-test-resume-1",
+            "scheduleId": sched_id
+        });
+        let resume_resp = dispatch_session_message(&resume_req).await;
+        assert_eq!(resume_resp["type"], "schedule/resume/response");
+        assert_eq!(resume_resp["payload"]["schedule"]["status"], "active");
+
+        // 7. Update
+        let update_req = serde_json::json!({
+            "type": "schedule/update",
+            "requestId": "sched-test-update-1",
+            "scheduleId": sched_id,
+            "name": "Updated Check Name",
+            "prompt": "Updated prompt text"
+        });
+        let update_resp = dispatch_session_message(&update_req).await;
+        assert_eq!(update_resp["type"], "schedule/update/response");
+        assert_eq!(update_resp["payload"]["schedule"]["name"], "Updated Check Name");
+        assert_eq!(update_resp["payload"]["schedule"]["prompt"], "Updated prompt text");
+
+        // 8. Delete
+        let delete_req = serde_json::json!({
+            "type": "schedule/delete",
+            "requestId": "sched-test-delete-1",
+            "scheduleId": sched_id
+        });
+        let delete_resp = dispatch_session_message(&delete_req).await;
+        assert_eq!(delete_resp["type"], "schedule/delete/response");
+        assert_eq!(delete_resp["payload"]["scheduleId"], sched_id);
+
+        // 9. Inspect deleted should return not found error
+        let inspect_deleted_resp = dispatch_session_message(&inspect_req).await;
+        assert!(inspect_deleted_resp["payload"]["error"].is_string());
+    }
 }
-

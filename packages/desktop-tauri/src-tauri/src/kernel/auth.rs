@@ -20,24 +20,42 @@ pub fn verify_daemon_password(candidate: &str, hash: &str) -> bool {
 pub fn write_local_credential(home: &Path) -> std::io::Result<String> {
     fs::create_dir_all(home)?;
 
-    // Generate 32 cryptographically random bytes
-    let mut bytes = [0u8; 32];
-    getrandom_bytes(&mut bytes)?;
-    let token = base64_url_encode(&bytes);
+    let token = generate_local_credential()?;
 
-    let temp_file_path = home.join(format!("{LOCAL_CREDENTIAL_FILE}.{}.tmp", std::process::id()));
-    fs::write(&temp_file_path, format!("{token}\n"))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&temp_file_path, fs::Permissions::from_mode(0o600));
+    use std::io::Write;
+    static NEXT_TEMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nonce = NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp_file_path = home.join(format!(
+        "{LOCAL_CREDENTIAL_FILE}.{}.{nonce}.tmp",
+        std::process::id()
+    ));
+    let result = (|| {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp_file_path)?;
+        file.write_all(token.as_bytes())?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temp_file_path, home.join(LOCAL_CREDENTIAL_FILE))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_file_path);
     }
-
-    let final_path = home.join(LOCAL_CREDENTIAL_FILE);
-    fs::rename(&temp_file_path, &final_path)?;
+    result?;
 
     Ok(token)
+}
+
+pub fn generate_local_credential() -> std::io::Result<String> {
+    let mut bytes = [0u8; 32];
+    getrandom_bytes(&mut bytes)?;
+    Ok(base64_url_encode(&bytes))
 }
 
 /// Reads the local credential token from `{home}/local-credential`.

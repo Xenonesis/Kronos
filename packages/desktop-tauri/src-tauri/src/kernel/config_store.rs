@@ -129,7 +129,6 @@ impl DaemonConfigStore {
         Ok(removed)
     }
 
-
     pub fn add_workspace(&self, workspace: WorkspaceRecord) -> std::io::Result<()> {
         let mut map = self.workspaces.write().unwrap();
         map.insert(workspace.id.clone(), workspace);
@@ -144,7 +143,10 @@ impl DaemonConfigStore {
         self.workspaces.read().unwrap().values().cloned().collect()
     }
 
-    pub fn remove_workspaces_for_project(&self, project_id: &str) -> std::io::Result<Vec<WorkspaceRecord>> {
+    pub fn remove_workspaces_for_project(
+        &self,
+        project_id: &str,
+    ) -> std::io::Result<Vec<WorkspaceRecord>> {
         let mut map = self.workspaces.write().unwrap();
         let mut removed = Vec::new();
         map.retain(|_, ws| {
@@ -216,20 +218,114 @@ pub fn get_config_store() -> &'static DaemonConfigStore {
 }
 
 pub fn atomic_write(target_path: &Path, content: &[u8]) -> std::io::Result<()> {
-    if let Some(parent) = target_path.parent() {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+
+    if let Some(parent) = target_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent)?;
     }
-
-    let temp_path = target_path.with_extension(format!("tmp.{}", std::process::id()));
-    fs::write(&temp_path, content)?;
-    fs::rename(&temp_path, target_path)?;
-    Ok(())
+    let name = target_path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Atomic write requires a file name",
+        )
+    })?;
+    let (temp_path, mut file) = loop {
+        let mut temp_name = name.to_os_string();
+        temp_name.push(format!(
+            ".{}.{}.tmp",
+            std::process::id(),
+            NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+        ));
+        let path = target_path.with_file_name(temp_name);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => break (path, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    };
+    let written = file.write_all(content).and_then(|()| file.sync_all());
+    // Windows replacement requires releasing our temporary-file handle first.
+    drop(file);
+    let committed = written.and_then(|()| fs::rename(&temp_path, target_path));
+    if committed.is_err() {
+        if let Err(cleanup) = fs::remove_file(&temp_path) {
+            if cleanup.kind() != std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "Atomic write cleanup failed for {}: {cleanup}",
+                    temp_path.display()
+                );
+            }
+        }
+    }
+    // File contents are synced before replacement. This does not promise a
+    // cross-file transaction or parent-directory crash durability on all hosts.
+    committed
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn atomic_write_replaces_content_and_cleans_failed_temporary_files() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("store.json");
+        atomic_write(&target, b"old").unwrap();
+        atomic_write(&target, b"new").unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        let blocked = dir.path().join("blocked.json");
+        fs::create_dir(&blocked).unwrap();
+        assert!(atomic_write(&blocked, b"never committed").is_err());
+        let mut names: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                std::ffi::OsString::from("blocked.json"),
+                std::ffi::OsString::from("store.json")
+            ]
+        );
+    }
+
+    #[test]
+    fn concurrent_atomic_writes_use_distinct_temporary_files() {
+        let dir = tempdir().unwrap();
+        let target = std::sync::Arc::new(dir.path().join("store.json"));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let writers: Vec<_> = (0..4)
+            .map(|value| {
+                let target = target.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let content = vec![value; 64 * 1024];
+                    barrier.wait();
+                    for _ in 0..8 {
+                        atomic_write(&target, &content).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let content = fs::read(&*target).unwrap();
+        assert_eq!(content.len(), 64 * 1024);
+        assert!(content.iter().all(|&value| value == content[0]));
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 
     #[test]
     fn test_daemon_config_store_lifecycle() {

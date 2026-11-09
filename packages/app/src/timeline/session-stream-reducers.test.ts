@@ -4535,4 +4535,66 @@ describe("createAgentStreamReducerQueue", () => {
     expect(commits).toEqual(["agent-1:queued"]);
     expect(scheduler.size).toBe(0);
   });
+
+  it("handles string timestamps safely during timeline window item reconciliation", () => {
+    const timestampStr = "2026-05-15T00:00:00.500Z";
+    const currentTail: StreamItem[] = [
+      {
+        ...makeAssistantItem("projected response", "loaded-assistant"),
+        messageId: "assistant-message",
+        timestamp: timestampStr as unknown as Date,
+        timelineCursor: { epoch: "epoch-1", seq: 500 },
+      },
+    ];
+    const result = processTimelineResponse({
+      ...baseTimelineInput,
+      currentTail,
+      currentCursor: { epoch: "epoch-1", startSeq: 400, endSeq: 500 },
+      payload: {
+        ...baseTimelineInput.payload,
+        direction: "before",
+        projection: "projected",
+        mergeWindow: true,
+        epoch: "epoch-1",
+        startCursor: { seq: 1 },
+        endCursor: { seq: 40 },
+        hasOlder: false,
+        hasNewer: true,
+        entries: [
+          {
+            ...makeTimelineEntry(1, "projected response"),
+            item: {
+              type: "assistant_message",
+              text: "projected response",
+              messageId: "assistant-message",
+            },
+            timestamp: timestampStr,
+            seqEnd: 500,
+            sourceSeqRanges: [
+              { startSeq: 1, endSeq: 1 },
+              { startSeq: 500, endSeq: 500 },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(
+      result.tail
+        .filter((item) => item.kind === "assistant_message")
+        .map(({ id, text, messageId, timelineCursor }) => ({
+          id,
+          text,
+          messageId,
+          timelineCursor,
+        })),
+    ).toEqual([
+      {
+        id: "loaded-assistant",
+        text: "projected response",
+        messageId: "assistant-message",
+        timelineCursor: { epoch: "epoch-1", seq: 500 },
+      },
+    ]);
+  });
 });

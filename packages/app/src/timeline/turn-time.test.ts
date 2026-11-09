@@ -247,3 +247,29 @@ it("times a heartbeat that ends with tools and no assistant text", () => {
   });
   assert.equal(timing.byItemId.get("last")?.durationMs, 5000);
 });
+
+it("tolerates items with string timestamps without crashing on closeTurn or equality checks", () => {
+  const trigger = {
+    kind: "user_message" as const,
+    id: "user-1",
+    timestamp: "2026-05-15T00:00:00Z" as unknown as Date,
+    text: "hello",
+  };
+  const assistant = {
+    kind: "assistant_message" as const,
+    id: "msg-1",
+    timestamp: "2026-05-15T00:00:05Z" as unknown as Date,
+    text: "Hi!",
+  };
+  const timing = deriveStreamTurnTiming({
+    tail: [trigger as unknown as StreamItem, assistant as unknown as StreamItem],
+    head: [],
+    isTurnActive: false,
+    activeTurnStartedAt: null,
+  });
+  assert.equal(timing.byItemId.get("msg-1")?.durationMs, 5000);
+  assert.equal(
+    timing.byItemId.get("msg-1")?.completedAt.getTime(),
+    new Date("2026-05-15T00:00:05Z").getTime(),
+  );
+});

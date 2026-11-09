@@ -46,37 +46,43 @@ pub fn get_crdt_engine() -> &'static crate::kernel::crdt::CrdtEngine {
     &CRDT_ENGINE
 }
 
-static SPEECH_ENGINE: std::sync::LazyLock<std::sync::Arc<tokio::sync::RwLock<crate::kernel::speech::SpeechEngine>>> =
-    std::sync::LazyLock::new(|| {
-        let engine = crate::kernel::speech::SpeechEngine::new(None)
-            .unwrap_or_else(|_| crate::kernel::speech::SpeechEngine::new_mock());
-        std::sync::Arc::new(tokio::sync::RwLock::new(engine))
-    });
+static SPEECH_ENGINE: std::sync::LazyLock<
+    std::sync::Arc<tokio::sync::RwLock<crate::kernel::speech::SpeechEngine>>,
+> = std::sync::LazyLock::new(|| {
+    let engine = crate::kernel::speech::SpeechEngine::new(None)
+        .unwrap_or_else(|_| crate::kernel::speech::SpeechEngine::new_mock());
+    std::sync::Arc::new(tokio::sync::RwLock::new(engine))
+});
 
-pub fn get_speech_engine() -> std::sync::Arc<tokio::sync::RwLock<crate::kernel::speech::SpeechEngine>> {
+pub fn get_speech_engine(
+) -> std::sync::Arc<tokio::sync::RwLock<crate::kernel::speech::SpeechEngine>> {
     SPEECH_ENGINE.clone()
 }
 
-static SHM_RING: std::sync::LazyLock<std::sync::Arc<tokio::sync::Mutex<crate::kernel::shm::ShmRingBuffer>>> =
-    std::sync::LazyLock::new(|| {
-        let ring = crate::kernel::shm::ShmRingBuffer::new("kronos_daemon_shm", 2 * 1024 * 1024)
-            .unwrap_or_else(|e| panic!("Failed to initialize SHM ring buffer: {e}"));
-        std::sync::Arc::new(tokio::sync::Mutex::new(ring))
-    });
+static SHM_RING: std::sync::LazyLock<
+    std::sync::Arc<tokio::sync::Mutex<crate::kernel::shm::ShmRingBuffer>>,
+> = std::sync::LazyLock::new(|| {
+    let ring = crate::kernel::shm::ShmRingBuffer::new("kronos_daemon_shm", 2 * 1024 * 1024)
+        .unwrap_or_else(|e| panic!("Failed to initialize SHM ring buffer: {e}"));
+    std::sync::Arc::new(tokio::sync::Mutex::new(ring))
+});
 
 pub fn get_shm_ring() -> std::sync::Arc<tokio::sync::Mutex<crate::kernel::shm::ShmRingBuffer>> {
     SHM_RING.clone()
 }
 
-static AGENT_MANAGER: std::sync::OnceLock<crate::agent::manager::AgentManager> = std::sync::OnceLock::new();
-static PLUGIN_MANAGER: std::sync::OnceLock<crate::agent::providers::plugins::NativePluginManager> = std::sync::OnceLock::new();
+static AGENT_MANAGER: std::sync::OnceLock<crate::agent::manager::AgentManager> =
+    std::sync::OnceLock::new();
+static PLUGIN_MANAGER: std::sync::OnceLock<crate::agent::providers::plugins::NativePluginManager> =
+    std::sync::OnceLock::new();
 
 pub fn get_agent_manager() -> &'static crate::agent::manager::AgentManager {
     AGENT_MANAGER.get_or_init(|| {
         #[cfg(test)]
         let home = {
-            static HOME: std::sync::LazyLock<tempfile::TempDir> =
-                std::sync::LazyLock::new(|| tempfile::tempdir().expect("Create isolated agent test home"));
+            static HOME: std::sync::LazyLock<tempfile::TempDir> = std::sync::LazyLock::new(|| {
+                tempfile::tempdir().expect("Create isolated agent test home")
+            });
             HOME.path().to_path_buf()
         };
         #[cfg(not(test))]
@@ -144,13 +150,100 @@ pub async fn health_check() -> axum::response::Response {
         "status": "ok",
         "engine": "kronos-rust-kernel",
         "version": env!("CARGO_PKG_VERSION")
-    })).into_response()
+    }))
+    .into_response()
 }
 
 pub async fn version_check() -> axum::response::Json<serde_json::Value> {
     axum::response::Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "engine": "kronos-rust-kernel"
+    }))
+}
+
+pub async fn handle_indexed_history_http(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Json<serde_json::Value> {
+    let scope = params.get("scope").map(|s| s.as_str()).unwrap_or("workspace");
+    let cwd = params.get("cwd").map(|s| s.as_str());
+    let query = params.get("query").or_else(|| params.get("search")).map(|s| s.as_str());
+    let sort = params.get("sort").map(|s| s.as_str()).unwrap_or("last_updated");
+    let limit = params
+        .get("limit")
+        .and_then(|l| l.parse::<usize>().ok())
+        .unwrap_or(250);
+
+    let res = crate::agent::sessions::scan_all_indexed_sessions(
+        scope,
+        cwd,
+        query,
+        sort,
+        limit,
+    ).await;
+
+    axum::response::Json(serde_json::json!({
+        "ok": true,
+        "scannedFilesCount": res.scanned_files_count,
+        "scanned_files": res.scanned_files_count,
+        "scanned_files_count": res.scanned_files_count,
+        "totalSessions": res.total_sessions,
+        "total_sessions": res.total_sessions,
+        "returned_sessions": res.sessions.len(),
+        "sessions": res.sessions
+    }))
+}
+
+pub async fn handle_omp_sessions_list_http(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Json<serde_json::Value> {
+    let cwd = params.get("cwd").map(|s| s.as_str());
+    let limit = params
+        .get("limit")
+        .and_then(|l| l.parse::<usize>().ok())
+        .unwrap_or(50);
+
+    let (sessions, _) = crate::agent::sessions::scan_omp_sessions_raw(limit, cwd).await;
+    let mapped: Vec<serde_json::Value> = sessions
+        .into_iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "filePath": s.cwd.clone(),
+                "cwd": s.cwd,
+                "title": s.title,
+                "firstPrompt": s.title,
+                "lastPrompt": s.last_message_preview,
+                "lastActivityAt": s.last_activity_at,
+                "model": s.model,
+                "thinkingOptionId": null,
+                "turnCount": s.message_count,
+                "toolCallCount": s.subagent_count,
+            })
+        })
+        .collect();
+
+    axum::response::Json(serde_json::json!({
+        "ok": true,
+        "sessions": mapped
+    }))
+}
+
+pub async fn handle_omp_session_inspect_http(
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> axum::response::Json<serde_json::Value> {
+    axum::response::Json(serde_json::json!({
+        "ok": true,
+        "session": {
+            "id": id,
+            "title": "Inspected Session",
+            "turns": [],
+            "fileDiffs": [],
+            "stats": {
+                "totalTurns": 0,
+                "totalToolCalls": 0,
+                "filesModified": 0
+            }
+        }
     }))
 }
 pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
@@ -170,11 +263,33 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
             error: None,
         },
         "directory_suggestions_request" | "workspace/suggest_directory" => {
-            let query = envelope.payload.get("query").and_then(|v| v.as_str()).unwrap_or("");
-            let cwd_str = envelope.payload.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
-            let include_files = envelope.payload.get("includeFiles").and_then(|v| v.as_bool()).unwrap_or(true);
-            let include_dirs = envelope.payload.get("includeDirectories").and_then(|v| v.as_bool()).unwrap_or(false);
-            let limit = envelope.payload.get("limit").and_then(|v| v.as_u64()).map(|l| l as usize).unwrap_or(50).min(100);
+            let query = envelope
+                .payload
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let cwd_str = envelope
+                .payload
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let include_files = envelope
+                .payload
+                .get("includeFiles")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let include_dirs = envelope
+                .payload
+                .get("includeDirectories")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let limit = envelope
+                .payload
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|l| l as usize)
+                .unwrap_or(50)
+                .min(100);
 
             let root_path = std::path::Path::new(cwd_str);
             let (directories, entries) = crate::kernel::search::suggest_directory_entries(
@@ -185,12 +300,16 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                 limit,
             );
 
-            RpcResponse::ok(&envelope.id, "directory_suggestions_response", Some(serde_json::json!({
-                "directories": directories,
-                "entries": entries,
-                "error": null,
-                "requestId": envelope.id
-            })))
+            RpcResponse::ok(
+                &envelope.id,
+                "directory_suggestions_response",
+                Some(serde_json::json!({
+                    "directories": directories,
+                    "entries": entries,
+                    "error": null,
+                    "requestId": envelope.id
+                })),
+            )
         }
         "mcp/request" | "mcp/jsonrpc" | "mcp_request" => {
             let req_str = extract_jsonrpc_request_str(&envelope.payload).unwrap_or_default();
@@ -212,10 +331,14 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
             }
         }
         "vfs/watch" | "vfs/watch_subscribe" => {
-            let path_opt = envelope.payload.get("path")
+            let path_opt = envelope
+                .payload
+                .get("path")
                 .and_then(|v| v.as_str())
                 .or_else(|| envelope.payload.as_str());
-            let ignore: Vec<String> = envelope.payload.get("ignore")
+            let ignore: Vec<String> = envelope
+                .payload
+                .get("ignore")
                 .and_then(|v| v.as_array())
                 .map(|arr| {
                     arr.iter()
@@ -236,11 +359,7 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                                 "path": path,
                             })),
                         ),
-                        Err(err) => RpcResponse::err(
-                            &envelope.id,
-                            "vfs/watch/response",
-                            err,
-                        ),
+                        Err(err) => RpcResponse::err(&envelope.id, "vfs/watch/response", err),
                     }
                 }
                 None => RpcResponse::err(
@@ -251,7 +370,9 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
             }
         }
         "vfs/unwatch" | "vfs/watch_unsubscribe" => {
-            let sub_id_opt = envelope.payload.get("subscriptionId")
+            let sub_id_opt = envelope
+                .payload
+                .get("subscriptionId")
                 .or_else(|| envelope.payload.get("subscription_id"))
                 .or_else(|| envelope.payload.get("sub_id"))
                 .or_else(|| envelope.payload.get("id"))
@@ -270,11 +391,7 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                                 "subscriptionId": sub_id,
                             })),
                         ),
-                        Err(err) => RpcResponse::err(
-                            &envelope.id,
-                            "vfs/unwatch/response",
-                            err,
-                        ),
+                        Err(err) => RpcResponse::err(&envelope.id, "vfs/unwatch/response", err),
                     }
                 }
                 None => RpcResponse::err(
@@ -285,23 +402,28 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
             }
         }
         "ast/analyze" | "ast/parse" => {
-            let path_opt = envelope.payload.get("path")
-                .and_then(|v| v.as_str());
-            let source_opt = envelope.payload.get("source")
-                .and_then(|v| v.as_str());
-            let ext_opt = envelope.payload.get("ext")
-                .and_then(|v| v.as_str());
+            let path_opt = envelope.payload.get("path").and_then(|v| v.as_str());
+            let source_opt = envelope.payload.get("source").and_then(|v| v.as_str());
+            let ext_opt = envelope.payload.get("ext").and_then(|v| v.as_str());
 
             let (source, ext) = if let Some(src) = source_opt {
                 let ext = ext_opt
-                    .or_else(|| path_opt.and_then(|p| std::path::Path::new(p).extension().and_then(|e| e.to_str())))
+                    .or_else(|| {
+                        path_opt.and_then(|p| {
+                            std::path::Path::new(p).extension().and_then(|e| e.to_str())
+                        })
+                    })
                     .unwrap_or("ts");
                 (src.to_string(), ext.to_string())
             } else if let Some(path) = path_opt {
                 match std::fs::read_to_string(path) {
                     Ok(content) => {
                         let ext = ext_opt
-                            .or_else(|| std::path::Path::new(path).extension().and_then(|e| e.to_str()))
+                            .or_else(|| {
+                                std::path::Path::new(path)
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                            })
                             .unwrap_or("ts");
                         (content, ext.to_string())
                     }
@@ -328,31 +450,32 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                     "ast/analyze/response",
                     serde_json::to_value(&result).ok(),
                 ),
-                Err(err) => RpcResponse::err(
-                    &envelope.id,
-                    "ast/analyze/response",
-                    err,
-                ),
+                Err(err) => RpcResponse::err(&envelope.id, "ast/analyze/response", err),
             }
         }
         "ast/symbols" => {
-            let path_opt = envelope.payload.get("path")
-                .and_then(|v| v.as_str());
-            let source_opt = envelope.payload.get("source")
-                .and_then(|v| v.as_str());
-            let ext_opt = envelope.payload.get("ext")
-                .and_then(|v| v.as_str());
+            let path_opt = envelope.payload.get("path").and_then(|v| v.as_str());
+            let source_opt = envelope.payload.get("source").and_then(|v| v.as_str());
+            let ext_opt = envelope.payload.get("ext").and_then(|v| v.as_str());
 
             let (source, ext) = if let Some(src) = source_opt {
                 let ext = ext_opt
-                    .or_else(|| path_opt.and_then(|p| std::path::Path::new(p).extension().and_then(|e| e.to_str())))
+                    .or_else(|| {
+                        path_opt.and_then(|p| {
+                            std::path::Path::new(p).extension().and_then(|e| e.to_str())
+                        })
+                    })
                     .unwrap_or("ts");
                 (src.to_string(), ext.to_string())
             } else if let Some(path) = path_opt {
                 match std::fs::read_to_string(path) {
                     Ok(content) => {
                         let ext = ext_opt
-                            .or_else(|| std::path::Path::new(path).extension().and_then(|e| e.to_str()))
+                            .or_else(|| {
+                                std::path::Path::new(path)
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                            })
                             .unwrap_or("ts");
                         (content, ext.to_string())
                     }
@@ -379,15 +502,13 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                     "ast/symbols/response",
                     serde_json::to_value(&symbols).ok(),
                 ),
-                Err(err) => RpcResponse::err(
-                    &envelope.id,
-                    "ast/symbols/response",
-                    err,
-                ),
+                Err(err) => RpcResponse::err(&envelope.id, "ast/symbols/response", err),
             }
         }
         "crdt/join" => {
-            let room = envelope.payload.get("room")
+            let room = envelope
+                .payload
+                .get("room")
                 .and_then(|v| v.as_str())
                 .unwrap_or("default");
             let engine = get_crdt_engine();
@@ -397,7 +518,8 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
             let sv = doc.export_state_vector();
             let update = doc.export_update();
             let sv_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &sv);
-            let update_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &update);
+            let update_b64 =
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &update);
 
             RpcResponse::ok(
                 &envelope.id,
@@ -412,15 +534,18 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
             )
         }
         "crdt/update" => {
-            let room = envelope.payload.get("room")
+            let room = envelope
+                .payload
+                .get("room")
                 .and_then(|v| v.as_str())
                 .unwrap_or("default");
-            let source_id = envelope.payload.get("sourceId")
+            let source_id = envelope
+                .payload
+                .get("sourceId")
                 .or_else(|| envelope.payload.get("source_id"))
                 .and_then(|v| v.as_str())
                 .map(String::from);
-            let update_b64_opt = envelope.payload.get("update")
-                .and_then(|v| v.as_str());
+            let update_b64_opt = envelope.payload.get("update").and_then(|v| v.as_str());
 
             if let Some(b64) = update_b64_opt {
                 match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64) {
@@ -439,17 +564,29 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                             Err(e) => RpcResponse::err(&envelope.id, "crdt/update/response", e),
                         }
                     }
-                    Err(e) => RpcResponse::err(&envelope.id, "crdt/update/response", format!("Invalid base64 update: {e}")),
+                    Err(e) => RpcResponse::err(
+                        &envelope.id,
+                        "crdt/update/response",
+                        format!("Invalid base64 update: {e}"),
+                    ),
                 }
             } else {
-                RpcResponse::err(&envelope.id, "crdt/update/response", "Missing 'update' base64 payload")
+                RpcResponse::err(
+                    &envelope.id,
+                    "crdt/update/response",
+                    "Missing 'update' base64 payload",
+                )
             }
         }
         "crdt/sync" => {
-            let room = envelope.payload.get("room")
+            let room = envelope
+                .payload
+                .get("room")
                 .and_then(|v| v.as_str())
                 .unwrap_or("default");
-            let sv_b64_opt = envelope.payload.get("stateVector")
+            let sv_b64_opt = envelope
+                .payload
+                .get("stateVector")
                 .or_else(|| envelope.payload.get("state_vector"))
                 .and_then(|v| v.as_str());
 
@@ -459,7 +596,10 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                         let engine = get_crdt_engine();
                         match engine.sync_room(room, &sv_bytes) {
                             Ok(diff_bytes) => {
-                                let diff_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &diff_bytes);
+                                let diff_b64 = base64::Engine::encode(
+                                    &base64::engine::general_purpose::STANDARD,
+                                    &diff_bytes,
+                                );
                                 RpcResponse::ok(
                                     &envelope.id,
                                     "crdt/sync/response",
@@ -472,14 +612,24 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                             Err(e) => RpcResponse::err(&envelope.id, "crdt/sync/response", e),
                         }
                     }
-                    Err(e) => RpcResponse::err(&envelope.id, "crdt/sync/response", format!("Invalid base64 stateVector: {e}")),
+                    Err(e) => RpcResponse::err(
+                        &envelope.id,
+                        "crdt/sync/response",
+                        format!("Invalid base64 stateVector: {e}"),
+                    ),
                 }
             } else {
-                RpcResponse::err(&envelope.id, "crdt/sync/response", "Missing 'stateVector' parameter")
+                RpcResponse::err(
+                    &envelope.id,
+                    "crdt/sync/response",
+                    "Missing 'stateVector' parameter",
+                )
             }
         }
         "crdt/state" => {
-            let room = envelope.payload.get("room")
+            let room = envelope
+                .payload
+                .get("room")
                 .and_then(|v| v.as_str())
                 .unwrap_or("default");
             let engine = get_crdt_engine();
@@ -501,21 +651,30 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
             )
         }
         "crdt/edit" => {
-            let room = envelope.payload.get("room")
+            let room = envelope
+                .payload
+                .get("room")
                 .and_then(|v| v.as_str())
                 .unwrap_or("default");
-            let action = envelope.payload.get("action")
+            let action = envelope
+                .payload
+                .get("action")
                 .and_then(|v| v.as_str())
                 .unwrap_or("insert");
-            let index = envelope.payload.get("index")
+            let index = envelope
+                .payload
+                .get("index")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as u32;
-            let text = envelope.payload.get("text")
-                .and_then(|v| v.as_str());
-            let length = envelope.payload.get("length")
+            let text = envelope.payload.get("text").and_then(|v| v.as_str());
+            let length = envelope
+                .payload
+                .get("length")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u32);
-            let source_id = envelope.payload.get("sourceId")
+            let source_id = envelope
+                .payload
+                .get("sourceId")
                 .or_else(|| envelope.payload.get("source_id"))
                 .and_then(|v| v.as_str())
                 .map(String::from);
@@ -540,7 +699,10 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
         }
         "ioring/status" => {
             let reader = crate::kernel::ioring::IoRingBatchReader::new(1024).ok();
-            let is_active = reader.as_ref().map(|r| r.is_kernel_ioring_active()).unwrap_or(false);
+            let is_active = reader
+                .as_ref()
+                .map(|r| r.is_kernel_ioring_active())
+                .unwrap_or(false);
             let queue = reader.as_ref().map(|r| r.queue_size()).unwrap_or(0);
 
             RpcResponse::ok(
@@ -554,8 +716,7 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
             )
         }
         "ioring/read_batch" => {
-            let paths_opt = envelope.payload.get("paths")
-                .and_then(|v| v.as_array());
+            let paths_opt = envelope.payload.get("paths").and_then(|v| v.as_array());
 
             match paths_opt {
                 Some(arr) => {
@@ -585,12 +746,24 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                                     Some(serde_json::json!({ "files": results })),
                                 )
                             }
-                            Err(e) => RpcResponse::err(&envelope.id, "ioring/read_batch/response", e.to_string()),
+                            Err(e) => RpcResponse::err(
+                                &envelope.id,
+                                "ioring/read_batch/response",
+                                e.to_string(),
+                            ),
                         },
-                        Err(e) => RpcResponse::err(&envelope.id, "ioring/read_batch/response", e.to_string()),
+                        Err(e) => RpcResponse::err(
+                            &envelope.id,
+                            "ioring/read_batch/response",
+                            e.to_string(),
+                        ),
                     }
                 }
-                None => RpcResponse::err(&envelope.id, "ioring/read_batch/response", "Missing 'paths' array"),
+                None => RpcResponse::err(
+                    &envelope.id,
+                    "ioring/read_batch/response",
+                    "Missing 'paths' array",
+                ),
             }
         }
         "speech/status" => {
@@ -607,15 +780,25 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
             )
         }
         "speech/transcribe" => {
-            let sample_rate = envelope.payload.get("sampleRate")
+            let sample_rate = envelope
+                .payload
+                .get("sampleRate")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(16000) as u32;
-            let channels = envelope.payload.get("channels")
+            let channels = envelope
+                .payload
+                .get("channels")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(1) as u16;
 
-            let samples_opt: Option<Vec<f32>> = if let Some(arr) = envelope.payload.get("samples").and_then(|v| v.as_array()) {
-                Some(arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+            let samples_opt: Option<Vec<f32>> = if let Some(arr) =
+                envelope.payload.get("samples").and_then(|v| v.as_array())
+            {
+                Some(
+                    arr.iter()
+                        .filter_map(|v| v.as_f64().map(|f| f as f32))
+                        .collect(),
+                )
             } else if let Some(b64) = envelope.payload.get("pcmBase64").and_then(|v| v.as_str()) {
                 match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64) {
                     Ok(bytes) => {
@@ -636,13 +819,15 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
 
             match samples_opt {
                 Some(samples) => {
-                    let config = crate::kernel::speech::SpeechAudioConfig::new(sample_rate, channels);
+                    let config =
+                        crate::kernel::speech::SpeechAudioConfig::new(sample_rate, channels);
                     let engine_lock = get_speech_engine();
                     let engine = engine_lock.read().await;
 
                     match engine.transcribe_with_config(&samples, config) {
                         Ok(transcript) => {
-                            let duration_secs = samples.len() as f32 / (sample_rate as f32 * channels as f32);
+                            let duration_secs =
+                                samples.len() as f32 / (sample_rate as f32 * channels as f32);
                             RpcResponse::ok(
                                 &envelope.id,
                                 "speech/transcribe/response",
@@ -656,11 +841,17 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                         Err(e) => RpcResponse::err(&envelope.id, "speech/transcribe/response", e),
                     }
                 }
-                None => RpcResponse::err(&envelope.id, "speech/transcribe/response", "Missing 'samples' or 'pcmBase64' audio buffer"),
+                None => RpcResponse::err(
+                    &envelope.id,
+                    "speech/transcribe/response",
+                    "Missing 'samples' or 'pcmBase64' audio buffer",
+                ),
             }
         }
         "speech/load_model" => {
-            let path_opt = envelope.payload.get("modelPath")
+            let path_opt = envelope
+                .payload
+                .get("modelPath")
                 .or_else(|| envelope.payload.get("model_path"))
                 .and_then(|v| v.as_str());
 
@@ -685,7 +876,11 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                         Err(e) => RpcResponse::err(&envelope.id, "speech/load_model/response", e),
                     }
                 }
-                None => RpcResponse::err(&envelope.id, "speech/load_model/response", "Missing 'modelPath' parameter"),
+                None => RpcResponse::err(
+                    &envelope.id,
+                    "speech/load_model/response",
+                    "Missing 'modelPath' parameter",
+                ),
             }
         }
         "shm/status" => {
@@ -705,23 +900,30 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
             )
         }
         "shm/push" => {
-            let stream_id = envelope.payload.get("streamId")
+            let stream_id = envelope
+                .payload
+                .get("streamId")
                 .or_else(|| envelope.payload.get("stream_id"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("telemetry-default");
-            let payload_b64 = envelope.payload.get("payloadBase64")
+            let payload_b64 = envelope
+                .payload
+                .get("payloadBase64")
                 .or_else(|| envelope.payload.get("payload_base64"))
                 .or_else(|| envelope.payload.get("payload"))
                 .and_then(|v| v.as_str());
 
             match payload_b64 {
                 Some(b64) => {
-                    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64)
-                        .unwrap_or_else(|_| b64.as_bytes().to_vec());
+                    let bytes =
+                        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64)
+                            .unwrap_or_else(|_| b64.as_bytes().to_vec());
                     let ring_lock = get_shm_ring();
                     let ring = ring_lock.lock().await;
                     let next_seq = ring.sequence() + 1;
-                    match crate::kernel::rkyv_shm::write_rkyv_chunk_to_shm(&ring, next_seq, stream_id, bytes) {
+                    match crate::kernel::rkyv_shm::write_rkyv_chunk_to_shm(
+                        &ring, next_seq, stream_id, bytes,
+                    ) {
                         Ok(seq) => RpcResponse::ok(
                             &envelope.id,
                             "shm/push/response",
@@ -734,11 +936,17 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                         Err(e) => RpcResponse::err(&envelope.id, "shm/push/response", e),
                     }
                 }
-                None => RpcResponse::err(&envelope.id, "shm/push/response", "Missing 'payloadBase64' parameter"),
+                None => RpcResponse::err(
+                    &envelope.id,
+                    "shm/push/response",
+                    "Missing 'payloadBase64' parameter",
+                ),
             }
         }
         "shm/poll" => {
-            let since_seq = envelope.payload.get("sinceSeq")
+            let since_seq = envelope
+                .payload
+                .get("sinceSeq")
                 .or_else(|| envelope.payload.get("since_seq"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
@@ -792,7 +1000,9 @@ fn canonicalize_path(path: &std::path::Path) -> std::path::PathBuf {
     }
 }
 
-pub fn agent_record_to_snapshot(record: &crate::agent::types::StoredAgentRecord) -> serde_json::Value {
+pub fn agent_record_to_snapshot(
+    record: &crate::agent::types::StoredAgentRecord,
+) -> serde_json::Value {
     let mut val = serde_json::json!({
         "id": record.id,
         "provider": record.provider,
@@ -814,7 +1024,7 @@ pub fn agent_record_to_snapshot(record: &crate::agent::types::StoredAgentRecord)
             "canSendInput": true,
             "canSpawnTerminals": true,
             "supportsStreaming": true,
-            "supportsSessionPersistence": false,
+            "supportsSessionPersistence": matches!(record.provider.as_str(), "omp" | "pi" | "opencode" | "codex" | "claude"),
             "supportsDynamicModes": false,
             "supportsMcpServers": true,
             "supportsReasoningStream": matches!(record.provider.as_str(), "omp" | "pi" | "opencode" | "codex" | "claude"),
@@ -827,6 +1037,9 @@ pub fn agent_record_to_snapshot(record: &crate::agent::types::StoredAgentRecord)
         "title": record.title,
         "labels": record.labels,
     });
+    if let Some(ref usage) = record.last_usage {
+        val["lastUsage"] = usage.clone();
+    }
     if let Some(ref ws_id) = record.workspace_id {
         val["workspaceId"] = serde_json::json!(ws_id);
     }
@@ -838,6 +1051,22 @@ pub fn agent_record_to_snapshot(record: &crate::agent::types::StoredAgentRecord)
             val["thinkingOptionId"] = thinking.clone();
         }
     }
+    let handle = record
+        .runtime_info
+        .as_ref()
+        .filter(|info| info["provider"].as_str() == Some(record.provider.as_str()))
+        .and_then(|info| info["providerHandleId"].as_str())
+        .or_else(|| {
+            record
+                .config
+                .as_ref()
+                .and_then(|config| config["providerHandleId"].as_str())
+        })
+        .filter(|handle| !handle.is_empty());
+    if let Some(handle) = handle {
+        val["persistence"] = serde_json::json!({"provider":record.provider, "sessionId":handle});
+        val["runtimeInfo"] = serde_json::json!({"provider":record.provider, "sessionId":handle});
+    }
     val
 }
 
@@ -847,7 +1076,11 @@ pub fn timeline_item_to_entry(
     seq: u64,
 ) -> serde_json::Value {
     let (item_json, ts) = match item {
-        crate::agent::types::AgentTimelineItem::UserMessage { id, text, timestamp } => (
+        crate::agent::types::AgentTimelineItem::UserMessage {
+            id,
+            text,
+            timestamp,
+        } => (
             serde_json::json!({
                 "type": "user_message",
                 "text": text,
@@ -855,7 +1088,11 @@ pub fn timeline_item_to_entry(
             }),
             timestamp.clone(),
         ),
-        crate::agent::types::AgentTimelineItem::AssistantMessage { id, text, timestamp } => (
+        crate::agent::types::AgentTimelineItem::AssistantMessage {
+            id,
+            text,
+            timestamp,
+        } => (
             serde_json::json!({
                 "type": "assistant_message",
                 "text": text,
@@ -863,14 +1100,22 @@ pub fn timeline_item_to_entry(
             }),
             timestamp.clone(),
         ),
-        crate::agent::types::AgentTimelineItem::Thinking { text, timestamp, .. } => (
+        crate::agent::types::AgentTimelineItem::Thinking {
+            text, timestamp, ..
+        } => (
             serde_json::json!({
                 "type": "reasoning",
                 "text": text,
             }),
             timestamp.clone(),
         ),
-        crate::agent::types::AgentTimelineItem::ToolCall { name, input, timestamp, call_id, .. } => (
+        crate::agent::types::AgentTimelineItem::ToolCall {
+            name,
+            input,
+            timestamp,
+            call_id,
+            ..
+        } => (
             serde_json::json!({
                 "type": "tool_call",
                 "callId": call_id,
@@ -881,7 +1126,13 @@ pub fn timeline_item_to_entry(
             }),
             timestamp.clone(),
         ),
-        crate::agent::types::AgentTimelineItem::ToolResult { output, timestamp, is_error, call_id, .. } => (
+        crate::agent::types::AgentTimelineItem::ToolResult {
+            output,
+            timestamp,
+            is_error,
+            call_id,
+            ..
+        } => (
             serde_json::json!({
                 "type": "tool_call",
                 "callId": call_id,
@@ -892,7 +1143,9 @@ pub fn timeline_item_to_entry(
             }),
             timestamp.clone(),
         ),
-        crate::agent::types::AgentTimelineItem::ErrorNotice { message, timestamp, .. } => (
+        crate::agent::types::AgentTimelineItem::ErrorNotice {
+            message, timestamp, ..
+        } => (
             serde_json::json!({
                 "type": "notification",
                 "level": "error",
@@ -913,10 +1166,10 @@ pub fn timeline_item_to_entry(
     })
 }
 
-
 pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Value {
     let msg_type = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
-    let request_id = msg.get("requestId")
+    let request_id = msg
+        .get("requestId")
         .or_else(|| msg.get("id"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
@@ -969,11 +1222,13 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "git/diff" => {
             let payload = msg.get("payload");
-            let cwd_str = msg.get("cwd")
+            let cwd_str = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
-            let staged = msg.get("staged")
+            let staged = msg
+                .get("staged")
                 .or_else(|| payload.and_then(|p| p.get("staged")))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
@@ -994,12 +1249,13 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     "success": false,
                     "error": err,
                     "payload": { "error": err }
-                })
+                }),
             }
         }
         "git/branches" => {
             let payload = msg.get("payload");
-            let cwd_str = msg.get("cwd")
+            let cwd_str = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
@@ -1020,12 +1276,13 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     "success": false,
                     "error": err,
                     "payload": { "error": err }
-                })
+                }),
             }
         }
         "git/worktree/list" => {
             let payload = msg.get("payload");
-            let cwd_str = msg.get("cwd")
+            let cwd_str = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
@@ -1046,25 +1303,96 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     "success": false,
                     "error": err,
                     "payload": { "error": err }
-                })
+                }),
             }
+        }
+        "git/worktree/add" => {
+            let payload = msg.get("payload");
+            let cwd_str = msg
+                .get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let path_str = msg
+                .get("path")
+                .or_else(|| payload.and_then(|p| p.get("path")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let branch = msg
+                .get("branch")
+                .or_else(|| payload.and_then(|p| p.get("branch")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("sandbox");
+            let create_branch = msg
+                .get("createBranch")
+                .or_else(|| payload.and_then(|p| p.get("createBranch")))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+
+            let cwd = std::path::Path::new(cwd_str);
+            let target_path = std::path::Path::new(path_str);
+            let res = crate::kernel::git::GitEngine::worktree_add(cwd, target_path, branch, create_branch).await;
+            let success = res.is_ok();
+            serde_json::json!({
+                "type": "git/worktree/add/response",
+                "requestId": request_id,
+                "id": request_id,
+                "success": success,
+                "error": res.err(),
+                "payload": {
+                    "path": path_str,
+                    "branch": branch
+                }
+            })
+        }
+        "git/worktree/remove" => {
+            let payload = msg.get("payload");
+            let cwd_str = msg
+                .get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let path_str = msg
+                .get("path")
+                .or_else(|| payload.and_then(|p| p.get("path")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let cwd = std::path::Path::new(cwd_str);
+            let target_path = std::path::Path::new(path_str);
+            let res = crate::kernel::git::GitEngine::worktree_remove(cwd, target_path).await;
+            let success = res.is_ok();
+            serde_json::json!({
+                "type": "git/worktree/remove/response",
+                "requestId": request_id,
+                "id": request_id,
+                "success": success,
+                "error": res.err()
+            })
         }
         "terminal/snapshot" => {
             let payload = msg.get("payload");
-            let terminal_id = msg.get("terminalId")
+            let terminal_id = msg
+                .get("terminalId")
                 .or_else(|| payload.and_then(|p| p.get("terminalId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("term-default");
-            let rows = msg.get("rows")
+            let rows = msg
+                .get("rows")
                 .or_else(|| payload.and_then(|p| p.get("rows")))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(24) as u16;
-            let cols = msg.get("cols")
+            let cols = msg
+                .get("cols")
                 .or_else(|| payload.and_then(|p| p.get("cols")))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(80) as u16;
 
-            let screen = crate::kernel::terminal::get_terminal_registry().get_or_create(terminal_id, rows, cols);
+            let screen = crate::kernel::terminal::get_terminal_registry().get_or_create(
+                terminal_id,
+                rows,
+                cols,
+            );
             let snapshot = screen.snapshot();
             serde_json::json!({
                 "type": "terminal/snapshot/response",
@@ -1077,16 +1405,19 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "terminal/feed" => {
             let payload = msg.get("payload");
-            let terminal_id = msg.get("terminalId")
+            let terminal_id = msg
+                .get("terminalId")
                 .or_else(|| payload.and_then(|p| p.get("terminalId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("term-default");
-            let data = msg.get("data")
+            let data = msg
+                .get("data")
                 .or_else(|| payload.and_then(|p| p.get("data")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
-            let screen = crate::kernel::terminal::get_terminal_registry().get_or_create(terminal_id, 24, 80);
+            let screen =
+                crate::kernel::terminal::get_terminal_registry().get_or_create(terminal_id, 24, 80);
             screen.process(data.as_bytes());
             serde_json::json!({
                 "type": "terminal/feed/response",
@@ -1097,31 +1428,48 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "create_terminal_request" => {
             let payload = msg.get("payload");
-            let cwd = msg.get("cwd")
+            let cwd = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let workspace_id = msg.get("workspaceId")
+            let workspace_id = msg
+                .get("workspaceId")
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let name = msg.get("name")
+            let name = msg
+                .get("name")
                 .or_else(|| payload.and_then(|p| p.get("name")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("Terminal")
                 .to_string();
-            let command = msg.get("command")
+            let command = msg
+                .get("command")
                 .or_else(|| payload.and_then(|p| p.get("command")))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let args: Vec<String> = msg.get("args")
+            let args: Vec<String> = msg
+                .get("args")
                 .or_else(|| payload.and_then(|p| p.get("args")))
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
                 .unwrap_or_default();
-            let size = msg.get("size").or_else(|| payload.and_then(|p| p.get("size")));
-            let rows = size.and_then(|s| s.get("rows")).and_then(|v| v.as_u64()).unwrap_or(24) as u16;
-            let cols = size.and_then(|s| s.get("cols")).and_then(|v| v.as_u64()).unwrap_or(80) as u16;
+            let size = msg
+                .get("size")
+                .or_else(|| payload.and_then(|p| p.get("size")));
+            let rows = size
+                .and_then(|s| s.get("rows"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(24) as u16;
+            let cols = size
+                .and_then(|s| s.get("cols"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(80) as u16;
 
             let now_dur = std::time::SystemTime::now()
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
@@ -1141,7 +1489,9 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                                 break;
                             }
                         }
-                        if found.is_some() { break; }
+                        if found.is_some() {
+                            break;
+                        }
                     }
                     found.or_else(|| Some(cmd.clone()))
                 } else {
@@ -1156,7 +1506,11 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             let opts = crate::native_pty::TerminalSpawnOptions {
                 command: resolved_command,
                 args,
-                cwd: if cwd.is_empty() { None } else { Some(cwd.to_string()) },
+                cwd: if cwd.is_empty() {
+                    None
+                } else {
+                    Some(cwd.to_string())
+                },
                 cols,
                 rows,
             };
@@ -1167,7 +1521,11 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 let fallback_opts = crate::native_pty::TerminalSpawnOptions {
                     command: None,
                     args: vec![],
-                    cwd: if cwd.is_empty() { None } else { Some(cwd.to_string()) },
+                    cwd: if cwd.is_empty() {
+                        None
+                    } else {
+                        Some(cwd.to_string())
+                    },
                     cols,
                     rows,
                 };
@@ -1214,43 +1572,49 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "list_terminals_request" => {
             let payload = msg.get("payload");
-            let cwd = msg.get("cwd")
+            let cwd = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str());
-            let workspace_id = msg.get("workspaceId")
+            let workspace_id = msg
+                .get("workspaceId")
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str());
 
             let reg = TERMINAL_REGISTRY.read().await;
-            let terminals: Vec<serde_json::Value> = reg.values().filter(|t| {
-                if let Some(ws) = workspace_id {
-                    if t.workspace_id.as_deref() != Some(ws) {
-                        return false;
+            let terminals: Vec<serde_json::Value> = reg
+                .values()
+                .filter(|t| {
+                    if let Some(ws) = workspace_id {
+                        if t.workspace_id.as_deref() != Some(ws) {
+                            return false;
+                        }
                     }
-                }
-                if let Some(c) = cwd {
-                    if !t.cwd.is_empty() && t.cwd != c {
-                        return false;
+                    if let Some(c) = cwd {
+                        if !t.cwd.is_empty() && t.cwd != c {
+                            return false;
+                        }
                     }
-                }
-                true
-            }).map(|t| {
-                let mut v = serde_json::json!({
-                    "id": t.id,
-                    "name": t.name,
-                    "cwd": t.cwd,
-                    "title": t.title,
-                    "activity": {
-                        "state": "idle",
-                        "attentionReason": null,
-                        "changedAt": t.created_at
+                    true
+                })
+                .map(|t| {
+                    let mut v = serde_json::json!({
+                        "id": t.id,
+                        "name": t.name,
+                        "cwd": t.cwd,
+                        "title": t.title,
+                        "activity": {
+                            "state": "idle",
+                            "attentionReason": null,
+                            "changedAt": t.created_at
+                        }
+                    });
+                    if let Some(ref ws) = t.workspace_id {
+                        v["workspaceId"] = serde_json::json!(ws);
                     }
-                });
-                if let Some(ref ws) = t.workspace_id {
-                    v["workspaceId"] = serde_json::json!(ws);
-                }
-                v
-            }).collect();
+                    v
+                })
+                .collect();
 
             let mut resp_payload = serde_json::json!({
                 "terminals": terminals,
@@ -1268,41 +1632,47 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "subscribe_terminals_request" => {
             let payload = msg.get("payload");
-            let cwd = msg.get("cwd")
+            let cwd = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let workspace_id = msg.get("workspaceId")
+            let workspace_id = msg
+                .get("workspaceId")
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str());
 
             let reg = TERMINAL_REGISTRY.read().await;
-            let terminals: Vec<serde_json::Value> = reg.values().filter(|t| {
-                if let Some(ws) = workspace_id {
-                    if t.workspace_id.as_deref() != Some(ws) {
+            let terminals: Vec<serde_json::Value> = reg
+                .values()
+                .filter(|t| {
+                    if let Some(ws) = workspace_id {
+                        if t.workspace_id.as_deref() != Some(ws) {
+                            return false;
+                        }
+                    }
+                    if !cwd.is_empty() && !t.cwd.is_empty() && t.cwd != cwd {
                         return false;
                     }
-                }
-                if !cwd.is_empty() && !t.cwd.is_empty() && t.cwd != cwd {
-                    return false;
-                }
-                true
-            }).map(|t| {
-                let mut v = serde_json::json!({
-                    "id": t.id,
-                    "name": t.name,
-                    "title": t.title,
-                    "activity": {
-                        "state": "idle",
-                        "attentionReason": null,
-                        "changedAt": t.created_at
+                    true
+                })
+                .map(|t| {
+                    let mut v = serde_json::json!({
+                        "id": t.id,
+                        "name": t.name,
+                        "title": t.title,
+                        "activity": {
+                            "state": "idle",
+                            "attentionReason": null,
+                            "changedAt": t.created_at
+                        }
+                    });
+                    if let Some(ref ws) = t.workspace_id {
+                        v["workspaceId"] = serde_json::json!(ws);
                     }
-                });
-                if let Some(ref ws) = t.workspace_id {
-                    v["workspaceId"] = serde_json::json!(ws);
-                }
-                v
-            }).collect();
+                    v
+                })
+                .collect();
 
             let mut resp_payload = serde_json::json!({
                 "cwd": cwd,
@@ -1321,11 +1691,13 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "unsubscribe_terminals_request" => {
             let payload = msg.get("payload");
-            let cwd = msg.get("cwd")
+            let cwd = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let workspace_id = msg.get("workspaceId")
+            let workspace_id = msg
+                .get("workspaceId")
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str());
 
@@ -1345,7 +1717,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "subscribe_terminal_request" => {
             let payload = msg.get("payload");
-            let terminal_id = msg.get("terminalId")
+            let terminal_id = msg
+                .get("terminalId")
                 .or_else(|| payload.and_then(|p| p.get("terminalId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -1364,7 +1737,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "unsubscribe_terminal_request" => {
             let payload = msg.get("payload");
-            let terminal_id = msg.get("terminalId")
+            let terminal_id = msg
+                .get("terminalId")
                 .or_else(|| payload.and_then(|p| p.get("terminalId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -1380,23 +1754,30 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "terminal_input" => {
             let payload = msg.get("payload");
-            let terminal_id = msg.get("terminalId")
+            let terminal_id = msg
+                .get("terminalId")
                 .or_else(|| payload.and_then(|p| p.get("terminalId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let message = msg.get("message")
+            let message = msg
+                .get("message")
                 .or_else(|| payload.and_then(|p| p.get("message")));
 
             if let Some(m) = message {
                 let msg_type = m.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 if msg_type == "input" {
                     if let Some(data) = m.get("data").and_then(|v| v.as_str()) {
-                        let _ = crate::native_pty::get_pty_manager().write_terminal(terminal_id, data);
+                        let _ =
+                            crate::native_pty::get_pty_manager().write_terminal(terminal_id, data);
                     }
                 } else if msg_type == "resize" {
                     let rows = m.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
                     let cols = m.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
-                    let _ = crate::native_pty::get_pty_manager().resize_terminal(terminal_id, cols, rows);
+                    let _ = crate::native_pty::get_pty_manager().resize_terminal(
+                        terminal_id,
+                        cols,
+                        rows,
+                    );
                 }
             }
 
@@ -1411,7 +1792,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "kill_terminal_request" => {
             let payload = msg.get("payload");
-            let terminal_id = msg.get("terminalId")
+            let terminal_id = msg
+                .get("terminalId")
                 .or_else(|| payload.and_then(|p| p.get("terminalId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -1434,11 +1816,13 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "terminal.rename.request" | "terminal_rename_request" => {
             let payload = msg.get("payload");
-            let terminal_id = msg.get("terminalId")
+            let terminal_id = msg
+                .get("terminalId")
                 .or_else(|| payload.and_then(|p| p.get("terminalId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let title = msg.get("title")
+            let title = msg
+                .get("title")
                 .or_else(|| payload.and_then(|p| p.get("title")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -1462,7 +1846,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "capture_terminal_request" => {
             let payload = msg.get("payload");
-            let terminal_id = msg.get("terminalId")
+            let terminal_id = msg
+                .get("terminalId")
                 .or_else(|| payload.and_then(|p| p.get("terminalId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -1480,23 +1865,30 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "agent/create" => {
             let payload = msg.get("payload");
-            let provider = msg.get("provider")
+            let provider = msg
+                .get("provider")
                 .or_else(|| payload.and_then(|p| p.get("provider")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("claude");
-            let cwd = msg.get("cwd")
+            let cwd = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
-            let title = msg.get("title")
+            let title = msg
+                .get("title")
                 .or_else(|| payload.and_then(|p| p.get("title")))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let workspace_id = msg.get("workspaceId")
+            let workspace_id = msg
+                .get("workspaceId")
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let config = msg.get("config").or_else(|| payload.and_then(|p| p.get("config"))).cloned();
+            let config = msg
+                .get("config")
+                .or_else(|| payload.and_then(|p| p.get("config")))
+                .cloned();
 
             let mgr = get_agent_manager();
             match mgr.create_agent(provider, cwd, title, workspace_id, config) {
@@ -1515,12 +1907,13 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     "success": false,
                     "error": err,
                     "payload": { "error": err }
-                })
+                }),
             }
         }
         "agent/get" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("id")
+            let agent_id = msg
+                .get("id")
                 .or_else(|| payload.and_then(|p| p.get("id")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -1560,23 +1953,28 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "agent/message" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("id")
+            let agent_id = msg
+                .get("id")
                 .or_else(|| payload.and_then(|p| p.get("id")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let text = msg.get("text")
+            let text = msg
+                .get("text")
                 .or_else(|| payload.and_then(|p| p.get("text")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
             let mgr = get_agent_manager();
             match mgr.send_message(agent_id, text) {
-                Ok(_) => serde_json::json!({
-                    "type": "agent/message/response",
-                    "requestId": request_id,
-                    "id": request_id,
-                    "success": true
-                }),
+                Ok(turn) => {
+                    tokio::spawn(crate::agent::runner::run_agent_turn(turn));
+                    serde_json::json!({
+                        "type": "agent/message/response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": true
+                    })
+                }
                 Err(err) => serde_json::json!({
                     "type": "agent/message/response",
                     "requestId": request_id,
@@ -1584,30 +1982,40 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     "success": false,
                     "error": err,
                     "payload": { "error": err }
-                })
+                }),
             }
         }
         "agent/timeline" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("id")
+            let agent_id = msg
+                .get("id")
                 .or_else(|| payload.and_then(|p| p.get("id")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
             let mgr = get_agent_manager();
-            let items = mgr.get_timeline(agent_id);
-            serde_json::json!({
-                "type": "agent/timeline/response",
-                "requestId": request_id,
-                "id": request_id,
-                "success": true,
-                "payload": { "items": items },
-                "timeline": items
-            })
+            match mgr
+                .storage()
+                .with_timeline(agent_id, <[crate::agent::types::AgentTimelineItem]>::to_vec)
+            {
+                Ok(items) => serde_json::json!({
+                    "type": "agent/timeline/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": true,
+                    "payload": { "items": items },
+                    "timeline": items
+                }),
+                Err(error) => serde_json::json!({
+                    "type": "agent/timeline/response", "requestId":request_id, "id":request_id,
+                    "success":false, "error":format!("Failed to read timeline: {error}")
+                }),
+            }
         }
         "agent/cancel" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("id")
+            let agent_id = msg
+                .get("id")
                 .or_else(|| payload.and_then(|p| p.get("id")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -1627,7 +2035,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     "success": false,
                     "error": err,
                     "payload": { "error": err }
-                })
+                }),
             }
         }
         "providers/list" => {
@@ -1656,23 +2064,28 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "directory_suggestions_request" => {
             let payload = msg.get("payload");
-            let query = msg.get("query")
+            let query = msg
+                .get("query")
                 .or_else(|| payload.and_then(|p| p.get("query")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let cwd_str = msg.get("cwd")
+            let cwd_str = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
-            let include_files = msg.get("includeFiles")
+            let include_files = msg
+                .get("includeFiles")
                 .or_else(|| payload.and_then(|p| p.get("includeFiles")))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
-            let include_dirs = msg.get("includeDirectories")
+            let include_dirs = msg
+                .get("includeDirectories")
                 .or_else(|| payload.and_then(|p| p.get("includeDirectories")))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            let limit = msg.get("limit")
+            let limit = msg
+                .get("limit")
                 .or_else(|| payload.and_then(|p| p.get("limit")))
                 .and_then(|v| v.as_u64())
                 .map(|l| l as usize)
@@ -1701,18 +2114,21 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         "project.list.request" => {
             let store = crate::kernel::config_store::get_config_store();
             let projects = store.list_projects();
-            let project_descriptors: Vec<serde_json::Value> = projects.iter().map(|p| {
-                serde_json::json!({
-                    "projectId": p.id,
-                    "projectKey": p.id,
-                    "projectDisplayName": p.name,
-                    "projectCustomName": null,
-                    "projectCustomIconRevision": null,
-                    "projectIconRevision": "automatic:none:v1",
-                    "projectRootPath": p.path,
-                    "projectKind": "directory"
+            let project_descriptors: Vec<serde_json::Value> = projects
+                .iter()
+                .map(|p| {
+                    serde_json::json!({
+                        "projectId": p.id,
+                        "projectKey": p.id,
+                        "projectDisplayName": p.name,
+                        "projectCustomName": null,
+                        "projectCustomIconRevision": null,
+                        "projectIconRevision": "automatic:none:v1",
+                        "projectRootPath": p.path,
+                        "projectKind": "directory"
+                    })
                 })
-            }).collect();
+                .collect();
 
             serde_json::json!({
                 "type": "project.list.response",
@@ -1724,7 +2140,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "project.add.request" => {
             let payload = msg.get("payload");
-            let requested_cwd = msg.get("cwd")
+            let requested_cwd = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
@@ -1755,7 +2172,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 } else {
                     let canonical = canonicalize_path(path);
                     let abs_path = canonical.to_string_lossy().to_string();
-                    let dir_name = canonical.file_name()
+                    let dir_name = canonical
+                        .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("project")
                         .to_string();
@@ -1802,7 +2220,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "open_project_request" => {
             let payload = msg.get("payload");
-            let requested_cwd = msg.get("cwd")
+            let requested_cwd = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
@@ -1833,7 +2252,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 } else {
                     let canonical = canonicalize_path(path);
                     let abs_path = canonical.to_string_lossy().to_string();
-                    let dir_name = canonical.file_name()
+                    let dir_name = canonical
+                        .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("project")
                         .to_string();
@@ -1905,12 +2325,14 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "project.create_directory.request" => {
             let payload = msg.get("payload");
-            let parent_path = msg.get("parentPath")
+            let parent_path = msg
+                .get("parentPath")
                 .or_else(|| payload.and_then(|p| p.get("parentPath")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .trim();
-            let name = msg.get("name")
+            let name = msg
+                .get("name")
                 .or_else(|| payload.and_then(|p| p.get("name")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
@@ -1992,7 +2414,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "project.remove.request" => {
             let payload = msg.get("payload");
-            let project_id = msg.get("projectId")
+            let project_id = msg
+                .get("projectId")
                 .or_else(|| payload.and_then(|p| p.get("projectId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
@@ -2000,7 +2423,9 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
 
             let store = crate::kernel::config_store::get_config_store();
             let removed = store.remove_project(project_id).ok().flatten();
-            let removed_ws = store.remove_workspaces_for_project(project_id).unwrap_or_default();
+            let removed_ws = store
+                .remove_workspaces_for_project(project_id)
+                .unwrap_or_default();
             let ws_ids: Vec<String> = removed_ws.into_iter().map(|w| w.id).collect();
 
             serde_json::json!({
@@ -2017,7 +2442,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "project.icon.get.request" => {
             let payload = msg.get("payload");
-            let p_id = msg.get("projectId")
+            let p_id = msg
+                .get("projectId")
                 .or_else(|| payload.and_then(|p| p.get("projectId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -2033,7 +2459,9 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "fetch_workspaces_request" => {
             let payload = msg.get("payload");
-            let sub_id = if msg.get("subscribe").is_some() || payload.and_then(|p| p.get("subscribe")).is_some() {
+            let sub_id = if msg.get("subscribe").is_some()
+                || payload.and_then(|p| p.get("subscribe")).is_some()
+            {
                 Some(format!("sub-workspaces-{}", request_id))
             } else {
                 None
@@ -2042,7 +2470,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             let store = crate::kernel::config_store::get_config_store();
             let workspaces = store.list_workspaces();
             let projects = store.list_projects();
-            let project_map: std::collections::HashMap<_, _> = projects.iter().map(|p| (p.id.clone(), p.clone())).collect();
+            let project_map: std::collections::HashMap<_, _> =
+                projects.iter().map(|p| (p.id.clone(), p.clone())).collect();
 
             let entries: Vec<serde_json::Value> = workspaces.into_iter().map(|w| {
                 let p_record = project_map.get(&w.project_id);
@@ -2075,20 +2504,26 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 })
             }).collect();
 
-            let empty_projects: Vec<serde_json::Value> = projects.into_iter().filter(|p| {
-                !entries.iter().any(|e| e.get("projectId").and_then(|v| v.as_str()) == Some(p.id.as_str()))
-            }).map(|p| {
-                serde_json::json!({
-                    "projectId": p.id,
-                    "projectKey": p.id,
-                    "projectDisplayName": p.name,
-                    "projectCustomName": null,
-                    "projectCustomIconRevision": null,
-                    "projectIconRevision": "automatic:none:v1",
-                    "projectRootPath": p.path,
-                    "projectKind": "directory"
+            let empty_projects: Vec<serde_json::Value> = projects
+                .into_iter()
+                .filter(|p| {
+                    !entries
+                        .iter()
+                        .any(|e| e.get("projectId").and_then(|v| v.as_str()) == Some(p.id.as_str()))
                 })
-            }).collect();
+                .map(|p| {
+                    serde_json::json!({
+                        "projectId": p.id,
+                        "projectKey": p.id,
+                        "projectDisplayName": p.name,
+                        "projectCustomName": null,
+                        "projectCustomIconRevision": null,
+                        "projectIconRevision": "automatic:none:v1",
+                        "projectRootPath": p.path,
+                        "projectKind": "directory"
+                    })
+                })
+                .collect();
 
             serde_json::json!({
                 "type": "fetch_workspaces_response",
@@ -2108,19 +2543,26 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "workspace.create.request" => {
             let payload = msg.get("payload");
-            let source = msg.get("source").or_else(|| payload.and_then(|p| p.get("source")));
-            let source_path = source.and_then(|s| s.get("path")).and_then(|v| v.as_str())
+            let source = msg
+                .get("source")
+                .or_else(|| payload.and_then(|p| p.get("source")));
+            let source_path = source
+                .and_then(|s| s.get("path"))
+                .and_then(|v| v.as_str())
                 .or_else(|| source.and_then(|s| s.get("cwd")).and_then(|v| v.as_str()))
                 .or_else(|| msg.get("path").and_then(|v| v.as_str()))
                 .or_else(|| msg.get("cwd").and_then(|v| v.as_str()))
                 .unwrap_or("")
                 .trim();
 
-            let project_id_req = source.and_then(|s| s.get("projectId")).and_then(|v| v.as_str())
+            let project_id_req = source
+                .and_then(|s| s.get("projectId"))
+                .and_then(|v| v.as_str())
                 .or_else(|| msg.get("projectId").and_then(|v| v.as_str()))
                 .unwrap_or("");
 
-            let requested_id = msg.get("workspaceId")
+            let requested_id = msg
+                .get("workspaceId")
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -2131,7 +2573,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 let p = std::path::Path::new(source_path);
                 let canonical = canonicalize_path(p);
                 let abs = canonical.to_string_lossy().to_string();
-                let name = canonical.file_name()
+                let name = canonical
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("workspace")
                     .to_string();
@@ -2150,10 +2593,18 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 if let Some(proj) = store.get_project(project_id_req) {
                     (proj.path, proj.id, proj.name)
                 } else {
-                    (".".to_string(), project_id_req.to_string(), "workspace".to_string())
+                    (
+                        ".".to_string(),
+                        project_id_req.to_string(),
+                        "workspace".to_string(),
+                    )
                 }
             } else {
-                (".".to_string(), "prj_default".to_string(), "workspace".to_string())
+                (
+                    ".".to_string(),
+                    "prj_default".to_string(),
+                    "workspace".to_string(),
+                )
             };
 
             let ws_id = if requested_id.starts_with("wks_") && requested_id.len() == 20 {
@@ -2205,10 +2656,12 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "githubRuntime": null
             });
 
-            let agent_opt = msg.get("agent")
+            let agent_opt = msg
+                .get("agent")
                 .or_else(|| payload.and_then(|p| p.get("agent")));
 
-            let idempotency_key = msg.get("idempotencyKey")
+            let idempotency_key = msg
+                .get("idempotencyKey")
                 .or_else(|| payload.and_then(|p| p.get("idempotencyKey")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(request_id);
@@ -2216,34 +2669,56 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             let mgr = get_agent_manager();
             let created_agent_snapshot = if let Some(agent_val) = agent_opt {
                 let agent_cfg = agent_val.get("config");
-                let provider = agent_cfg.and_then(|c| c.get("provider")).and_then(|v| v.as_str())
+                let provider = agent_cfg
+                    .and_then(|c| c.get("provider"))
+                    .and_then(|v| v.as_str())
                     .or_else(|| agent_val.get("provider").and_then(|v| v.as_str()))
                     .unwrap_or("codex");
-                let agent_cwd = agent_cfg.and_then(|c| c.get("cwd")).and_then(|v| v.as_str())
+                let agent_cwd = agent_cfg
+                    .and_then(|c| c.get("cwd"))
+                    .and_then(|v| v.as_str())
                     .unwrap_or(&abs_path);
-                let agent_title = agent_val.get("title").and_then(|v| v.as_str())
+                let agent_title = agent_val
+                    .get("title")
+                    .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
                 let mut config = agent_cfg.cloned().unwrap_or_else(|| serde_json::json!({}));
-                if let Some(m) = agent_cfg.and_then(|c| c.get("model")).and_then(|v| v.as_str())
-                    .or_else(|| agent_val.get("model").and_then(|v| v.as_str())) {
+                if let Some(m) = agent_cfg
+                    .and_then(|c| c.get("model"))
+                    .and_then(|v| v.as_str())
+                    .or_else(|| agent_val.get("model").and_then(|v| v.as_str()))
+                {
                     if let Some(obj) = config.as_object_mut() {
                         obj.insert("model".to_string(), serde_json::json!(m));
                     }
                 }
 
-                match mgr.create_agent(provider, agent_cwd, agent_title, Some(ws_id.clone()), Some(config)) {
+                match mgr.create_agent(
+                    provider,
+                    agent_cwd,
+                    agent_title,
+                    Some(ws_id.clone()),
+                    Some(config),
+                ) {
                     Ok(mut rec) => {
-                        if let Some(prompt) = agent_val.get("initialPrompt").and_then(|v| v.as_str()) {
+                        if let Some(prompt) =
+                            agent_val.get("initialPrompt").and_then(|v| v.as_str())
+                        {
                             if !prompt.trim().is_empty() {
-                                if let Ok(updated) = mgr.send_message(&rec.id, prompt) {
-                                    rec = updated;
+                                match mgr.send_message(&rec.id, prompt) {
+                                    Ok(turn) => {
+                                        rec = turn.agent.clone();
+                                        tokio::spawn(crate::agent::runner::run_agent_turn(turn));
+                                    }
+                                    Err(error) => {
+                                        return serde_json::json!({
+                                            "type":"workspace.create.response", "requestId":request_id,
+                                            "payload":{"requestId":request_id, "workspace":workspace_descriptor,
+                                                "agent":agent_record_to_snapshot(&rec), "error":error}
+                                        })
+                                    }
                                 }
-                                let aid = rec.id.clone();
-                                let p = prompt.to_string();
-                                tokio::spawn(async move {
-                                    crate::agent::runner::run_agent_turn(aid, p).await;
-                                });
                             }
                         }
                         Some(agent_record_to_snapshot(&rec))
@@ -2293,37 +2768,45 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "agent.create.request" | "create_agent_request" => {
             let payload = msg.get("payload");
-            let source_config = msg.get("config")
+            let source_config = msg
+                .get("config")
                 .or_else(|| payload.and_then(|p| p.get("config")));
-            let model = msg.get("model")
+            let model = msg
+                .get("model")
                 .or_else(|| payload.and_then(|p| p.get("model")))
                 .or_else(|| source_config.and_then(|c| c.get("model")))
                 .and_then(|v| v.as_str());
-            let raw_provider = msg.get("provider")
+            let raw_provider = msg
+                .get("provider")
                 .or_else(|| payload.and_then(|p| p.get("provider")))
                 .or_else(|| source_config.and_then(|config| config.get("provider")))
                 .and_then(|v| v.as_str());
             let provider = match (raw_provider, model) {
                 (Some(p), _) if p != "codex" => p,
-                (_, Some(m)) => crate::agent::registry::resolve_provider_for_model(m).unwrap_or(raw_provider.unwrap_or("codex")),
+                (_, Some(m)) => crate::agent::registry::resolve_provider_for_model(m)
+                    .unwrap_or(raw_provider.unwrap_or("codex")),
                 (Some(p), _) => p,
                 _ => "codex",
             };
-            let cwd = msg.get("cwd")
+            let cwd = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .or_else(|| source_config.and_then(|config| config.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
-            let title = msg.get("title")
+            let title = msg
+                .get("title")
                 .or_else(|| payload.and_then(|p| p.get("title")))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let ws_id = msg.get("workspaceId")
+            let ws_id = msg
+                .get("workspaceId")
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
-            let mut config = source_config.cloned()
+            let mut config = source_config
+                .cloned()
                 .unwrap_or_else(|| serde_json::json!({}));
 
             if let Some(m) = model {
@@ -2332,17 +2815,20 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     obj.insert("provider".to_string(), serde_json::json!(provider));
                 }
             }
-            if let Some(thinking) = msg.get("thinkingOptionId")
+            if let Some(thinking) = msg
+                .get("thinkingOptionId")
                 .or_else(|| payload.and_then(|p| p.get("thinkingOptionId")))
             {
                 config["thinkingOptionId"] = thinking.clone();
             }
-            let idempotency_key = msg.get("idempotencyKey")
+            let idempotency_key = msg
+                .get("idempotencyKey")
                 .or_else(|| payload.and_then(|p| p.get("idempotencyKey")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(request_id);
 
-            let initial_prompt = msg.get("initialPrompt")
+            let initial_prompt = msg
+                .get("initialPrompt")
                 .or_else(|| payload.and_then(|p| p.get("initialPrompt")))
                 .and_then(|v| v.as_str());
 
@@ -2352,15 +2838,19 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     let mut prompt_started = false;
                     if let Some(prompt) = initial_prompt {
                         if !prompt.trim().is_empty() {
-                            if let Ok(updated) = mgr.send_message(&record.id, prompt) {
-                                record = updated;
+                            match mgr.send_message(&record.id, prompt) {
+                                Ok(turn) => {
+                                    record = turn.agent.clone();
+                                    prompt_started = true;
+                                    tokio::spawn(crate::agent::runner::run_agent_turn(turn));
+                                }
+                                Err(error) => {
+                                    return serde_json::json!({
+                                        "type":"agent.create.response", "requestId":request_id,
+                                        "payload":{"requestId":request_id, "agent":agent_record_to_snapshot(&record), "error":error}
+                                    })
+                                }
                             }
-                            prompt_started = true;
-                            let aid = record.id.clone();
-                            let p = prompt.to_string();
-                            tokio::spawn(async move {
-                                crate::agent::runner::run_agent_turn(aid, p).await;
-                            });
                         }
                     }
                     crate::agent::runner::broadcast_agent_status_update(&record.id);
@@ -2399,22 +2889,114 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             }
         }
         "paseo_worktree_list_request" => {
+            let cwd = msg
+                .get("cwd")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let repo_path = std::path::Path::new(cwd);
+            let wt_res = crate::kernel::git::GitEngine::worktree_list(repo_path).await;
+            let worktrees: Vec<serde_json::Value> = match wt_res {
+                Ok(entries) => entries
+                    .into_iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "worktreePath": e.path,
+                            "branch": e.branch,
+                            "head": e.head,
+                            "isBare": e.is_bare,
+                        })
+                    })
+                    .collect(),
+                Err(_) => Vec::new(),
+            };
             serde_json::json!({
                 "type": "paseo_worktree_list_response",
                 "payload": {
                     "requestId": request_id,
-                    "worktrees": [],
+                    "worktrees": worktrees,
                     "error": null
+                }
+            })
+        }
+        "create_paseo_worktree_request" => {
+            let cwd = msg
+                .get("cwd")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let slug = msg
+                .get("worktreeSlug")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("worktreeSlug")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("sandbox");
+            let branch = format!("kronos/{}", slug);
+            let target_path = std::path::Path::new(cwd).join(".kronos").join("worktrees").join(slug);
+            let _ = std::fs::create_dir_all(target_path.parent().unwrap_or(std::path::Path::new(".")));
+
+            let res = crate::kernel::git::GitEngine::worktree_add(
+                std::path::Path::new(cwd),
+                &target_path,
+                &branch,
+                true,
+            ).await;
+
+            match res {
+                Ok(_) => serde_json::json!({
+                    "type": "create_paseo_worktree_response",
+                    "payload": {
+                        "requestId": request_id,
+                        "worktreePath": target_path.to_string_lossy(),
+                        "branch": branch,
+                        "error": null
+                    }
+                }),
+                Err(err) => serde_json::json!({
+                    "type": "create_paseo_worktree_response",
+                    "payload": {
+                        "requestId": request_id,
+                        "worktreePath": null,
+                        "branch": null,
+                        "error": err
+                    }
+                }),
+            }
+        }
+        "paseo_worktree_archive_request" => {
+            let cwd = msg
+                .get("cwd")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let wt_path = msg
+                .get("worktreePath")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("worktreePath")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let res = crate::kernel::git::GitEngine::worktree_remove(
+                std::path::Path::new(cwd),
+                std::path::Path::new(wt_path),
+            ).await;
+            serde_json::json!({
+                "type": "paseo_worktree_archive_response",
+                "payload": {
+                    "requestId": request_id,
+                    "success": res.is_ok(),
+                    "error": res.err()
                 }
             })
         }
         "session.events.set_subscription.request" => {
             let req_id = request_id.to_owned();
-            let events = msg.get("events")
+            let events = msg
+                .get("events")
                 .or_else(|| msg.get("payload").and_then(|p| p.get("events")))
                 .and_then(|v| v.as_array());
             if let Some(arr) = events {
-                if arr.iter().any(|e| e.as_str() == Some("providers_snapshot_update")) {
+                if arr
+                    .iter()
+                    .any(|e| e.as_str() == Some("providers_snapshot_update"))
+                {
                     tokio::spawn(async move {
                         tokio::time::sleep(tokio::time::Duration::from_millis(15)).await;
                         let entries = get_provider_snapshot_entries(".").await;
@@ -2448,7 +3030,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "subscription.release.request" => {
             let payload = msg.get("payload");
-            let sub_id = msg.get("subscriptionId")
+            let sub_id = msg
+                .get("subscriptionId")
                 .or_else(|| payload.and_then(|p| p.get("subscriptionId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -2463,33 +3046,42 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "fetch_agents_request" => {
             let payload = msg.get("payload");
-            let sub_id = if msg.get("subscribe").is_some() || payload.and_then(|p| p.get("subscribe")).is_some() {
+            let sub_id = if msg.get("subscribe").is_some()
+                || payload.and_then(|p| p.get("subscribe")).is_some()
+            {
                 Some(format!("sub-agents-{}", request_id))
             } else {
                 None
             };
             let mgr = get_agent_manager();
             let agents = mgr.list_agents();
-            let entries: Vec<serde_json::Value> = agents.into_iter().map(|rec| {
-                let cwd = if rec.cwd.is_empty() { ".".to_string() } else { rec.cwd.clone() };
-                serde_json::json!({
-                    "agent": agent_record_to_snapshot(&rec),
-                    "project": {
-                        "projectKey": "local",
-                        "projectName": "Local Project",
-                        "workspaceName": null,
-                        "checkout": {
-                            "cwd": cwd,
-                            "isGit": false,
-                            "currentBranch": null,
-                            "remoteUrl": null,
-                            "worktreeRoot": null,
-                            "isPaseoOwnedWorktree": false,
-                            "mainRepoRoot": null
+            let entries: Vec<serde_json::Value> = agents
+                .into_iter()
+                .map(|rec| {
+                    let cwd = if rec.cwd.is_empty() {
+                        ".".to_string()
+                    } else {
+                        rec.cwd.clone()
+                    };
+                    serde_json::json!({
+                        "agent": agent_record_to_snapshot(&rec),
+                        "project": {
+                            "projectKey": "local",
+                            "projectName": "Local Project",
+                            "workspaceName": null,
+                            "checkout": {
+                                "cwd": cwd,
+                                "isGit": false,
+                                "currentBranch": null,
+                                "remoteUrl": null,
+                                "worktreeRoot": null,
+                                "isPaseoOwnedWorktree": false,
+                                "mainRepoRoot": null
+                            }
                         }
-                    }
+                    })
                 })
-            }).collect();
+                .collect();
 
             serde_json::json!({
                 "type": "fetch_agents_response",
@@ -2508,13 +3100,16 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "fetch_agent_request" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("agentId")
+            let agent_id = msg
+                .get("agentId")
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
             let mgr = get_agent_manager();
-            let agent_opt = mgr.get_agent(agent_id).map(|r| agent_record_to_snapshot(&r));
+            let agent_opt = mgr
+                .get_agent(agent_id)
+                .map(|r| agent_record_to_snapshot(&r));
             serde_json::json!({
                 "type": "fetch_agent_response",
                 "requestId": request_id,
@@ -2528,23 +3123,21 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "send_agent_message_request" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("agentId")
+            let agent_id = msg
+                .get("agentId")
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let text = msg.get("text")
+            let text = msg
+                .get("text")
                 .or_else(|| payload.and_then(|p| p.get("text")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
             let mgr = get_agent_manager();
             match mgr.send_message(agent_id, text) {
-                Ok(_) => {
-                    let aid = agent_id.to_string();
-                    let prompt = text.to_string();
-                    tokio::spawn(async move {
-                        crate::agent::runner::run_agent_turn(aid, prompt).await;
-                    });
+                Ok(turn) => {
+                    tokio::spawn(crate::agent::runner::run_agent_turn(turn));
                     serde_json::json!({
                         "type": "send_agent_message_response",
                         "requestId": request_id,
@@ -2572,66 +3165,45 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "fetch_agent_timeline_request" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("agentId")
+            let agent_id = msg
+                .get("agentId")
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
             let mgr = get_agent_manager();
-            let agent_opt = mgr.get_agent(agent_id);
-            let provider = agent_opt.as_ref().map(|a| a.provider.as_str()).unwrap_or("codex");
-            let snapshot = agent_opt.as_ref().map(agent_record_to_snapshot);
-            let raw_items = mgr.get_timeline(agent_id);
-            let total = raw_items.len() as u64;
-
-            let entries: Vec<serde_json::Value> = raw_items
-                .into_iter()
-                .enumerate()
-                .map(|(idx, item)| timeline_item_to_entry(provider, &item, (idx + 1) as u64))
-                .collect();
-
-            let (min_seq, max_seq, next_seq, start_cursor, end_cursor) = if total > 0 {
-                (
-                    1u64,
-                    total,
-                    total + 1,
-                    Some(serde_json::json!({ "epoch": "epoch-1", "seq": 1 })),
-                    Some(serde_json::json!({ "epoch": "epoch-1", "seq": total })),
-                )
-            } else {
-                (0u64, 0u64, 1u64, None, None)
+            let agent = mgr.get_agent(agent_id);
+            let provider = agent
+                .as_ref()
+                .map(|a| a.provider.as_str())
+                .unwrap_or("codex");
+            let page = mgr.storage().with_timeline(agent_id, |items| {
+                crate::kernel::timeline::project_page(agent_id, provider, items, msg)
+            });
+            let mut result = match page {
+                Ok(page) => page,
+                Err(error) => {
+                    let mut page =
+                        crate::kernel::timeline::project_page(agent_id, provider, &[], msg);
+                    page["error"] = serde_json::json!(format!("Failed to read timeline: {error}"));
+                    page
+                }
             };
-
+            result["requestId"] = serde_json::json!(request_id);
+            result["agentId"] = serde_json::json!(agent_id);
+            result["agent"] = agent
+                .as_ref()
+                .map(agent_record_to_snapshot)
+                .unwrap_or(serde_json::Value::Null);
             serde_json::json!({
                 "type": "fetch_agent_timeline_response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "agentId": agent_id,
-                    "agent": snapshot,
-                    "direction": "tail",
-                    "projection": "projected",
-                    "epoch": "epoch-1",
-                    "reset": true,
-                    "staleCursor": false,
-                    "gap": false,
-                    "window": {
-                        "minSeq": min_seq,
-                        "maxSeq": max_seq,
-                        "nextSeq": next_seq
-                    },
-                    "startCursor": start_cursor,
-                    "endCursor": end_cursor,
-                    "hasOlder": false,
-                    "hasNewer": false,
-                    "entries": entries,
-                    "error": null
-                }
+                "payload": result
             })
         }
         "cancel_agent_request" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("agentId")
+            let agent_id = msg
+                .get("agentId")
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -2651,13 +3223,19 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "delete_agent_request" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("agentId")
+            let agent_id = msg
+                .get("agentId")
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
             let mgr = get_agent_manager();
-            let _ = mgr.delete_agent(agent_id);
+            if let Err(error) = mgr.delete_agent_and_wait(agent_id).await {
+                return serde_json::json!({
+                    "type":"rpc_error", "requestId":request_id,
+                    "payload":{"requestId":request_id, "requestType":"delete_agent_request", "error":error, "code":"delete_failed"}
+                });
+            }
             serde_json::json!({
                 "type": "agent_deleted",
                 "requestId": request_id,
@@ -2669,7 +3247,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "archive_agent_request" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("agentId")
+            let agent_id = msg
+                .get("agentId")
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -2688,29 +3267,38 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "fetch_recent_provider_sessions_request" => {
             let payload = msg.get("payload");
-            let providers_list: Vec<String> = msg.get("providers")
+            let providers_list: Vec<String> = msg
+                .get("providers")
                 .or_else(|| payload.and_then(|p| p.get("providers")))
                 .and_then(|v| v.as_array())
                 .map(|arr| {
-                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
                 })
-                .unwrap_or_else(|| vec![
-                    "opencode".to_string(),
-                    "codex".to_string(),
-                    "pi".to_string(),
-                    "omp".to_string(),
-                    "claude".to_string(),
-                ]);
+                .unwrap_or_else(|| {
+                    vec![
+                        "antigravity".to_string(),
+                        "opencode".to_string(),
+                        "codex".to_string(),
+                        "pi".to_string(),
+                        "omp".to_string(),
+                        "claude".to_string(),
+                    ]
+                });
 
-            let filter_cwd = msg.get("cwd")
+            let filter_cwd = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str());
 
-            let query = msg.get("query")
+            let query = msg
+                .get("query")
                 .or_else(|| payload.and_then(|p| p.get("query")))
                 .and_then(|v| v.as_str());
 
-            let limit = msg.get("limit")
+            let limit = msg
+                .get("limit")
                 .or_else(|| payload.and_then(|p| p.get("limit")))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(20) as usize;
@@ -2720,7 +3308,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 limit,
                 filter_cwd,
                 query,
-            ).await;
+            )
+            .await;
 
             serde_json::json!({
                 "type": "fetch_recent_provider_sessions_response",
@@ -2733,39 +3322,505 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }
             })
         }
-        "import_agent_request" => {
+        "session/history/indexed" => {
             let payload = msg.get("payload");
-            let provider = msg.get("providerId")
+            let scope = msg
+                .get("scope")
+                .or_else(|| payload.and_then(|p| p.get("scope")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("workspace");
+            let filter_cwd = msg
+                .get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str());
+            let query = msg
+                .get("query")
+                .or_else(|| payload.and_then(|p| p.get("query")))
+                .and_then(|v| v.as_str());
+            let sort = msg
+                .get("sort")
+                .or_else(|| payload.and_then(|p| p.get("sort")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("last_updated");
+            let limit = msg
+                .get("limit")
+                .or_else(|| payload.and_then(|p| p.get("limit")))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(150) as usize;
+
+            let result = crate::agent::sessions::scan_all_indexed_sessions(
+                scope,
+                filter_cwd,
+                query,
+                sort,
+                limit,
+            )
+            .await;
+
+            serde_json::json!({
+                "type": "session/history/indexed/response",
+                "requestId": request_id,
+                "payload": result
+            })
+        }
+        "fetch_agent_history_request" => {
+            let payload = msg.get("payload");
+            let mgr = get_agent_manager();
+            let mut agents = mgr.list_agents();
+
+            let search_query = msg
+                .get("search")
+                .or_else(|| payload.and_then(|p| p.get("search")))
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty());
+
+            if let Some(ref query) = search_query {
+                agents.retain(|rec| {
+                    rec.title.as_deref().unwrap_or("").to_lowercase().contains(query)
+                        || rec.id.to_lowercase().contains(query)
+                        || rec.cwd.to_lowercase().contains(query)
+                        || rec.provider.to_lowercase().contains(query)
+                });
+            }
+
+            let filter = msg
+                .get("filter")
+                .or_else(|| payload.and_then(|p| p.get("filter")));
+
+            if let Some(filter_val) = filter {
+                if let Some(statuses) = filter_val.get("statuses").and_then(|v| v.as_array()) {
+                    let status_strs: Vec<&str> =
+                        statuses.iter().filter_map(|s| s.as_str()).collect();
+                    if !status_strs.is_empty() {
+                        agents.retain(|rec| {
+                            let s = match rec.last_status {
+                                crate::agent::types::AgentStatus::Idle => "idle",
+                                crate::agent::types::AgentStatus::Running => "running",
+                                crate::agent::types::AgentStatus::Paused => "paused",
+                                crate::agent::types::AgentStatus::Closed => "closed",
+                                crate::agent::types::AgentStatus::Error => "error",
+                            };
+                            status_strs.contains(&s)
+                        });
+                    }
+                }
+            }
+
+            let sort_arr = msg
+                .get("sort")
+                .or_else(|| payload.and_then(|p| p.get("sort")))
+                .and_then(|v| v.as_array());
+
+            let (sort_key, sort_dir) = if let Some(arr) = sort_arr {
+                if let Some(first) = arr.first() {
+                    let key = first
+                        .get("key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("updated_at");
+                    let dir = first
+                        .get("direction")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("desc");
+                    (key, dir)
+                } else {
+                    ("updated_at", "desc")
+                }
+            } else {
+                ("updated_at", "desc")
+            };
+
+            agents.sort_by(|a, b| {
+                let ord = match sort_key {
+                    "created_at" => a.created_at.cmp(&b.created_at),
+                    "title" => a
+                        .title
+                        .as_deref()
+                        .unwrap_or("")
+                        .cmp(b.title.as_deref().unwrap_or("")),
+                    _ => {
+                        let a_ts = a.last_activity_at.as_deref().unwrap_or(&a.updated_at);
+                        let b_ts = b.last_activity_at.as_deref().unwrap_or(&b.updated_at);
+                        a_ts.cmp(b_ts)
+                    }
+                };
+                if sort_dir == "asc" {
+                    ord
+                } else {
+                    ord.reverse()
+                }
+            });
+
+            let page_obj = msg
+                .get("page")
+                .or_else(|| payload.and_then(|p| p.get("page")));
+            let limit = page_obj
+                .and_then(|p| p.get("limit"))
+                .and_then(|v| v.as_u64())
+                .map(|l| l as usize)
+                .unwrap_or(200)
+                .clamp(1, 200);
+            let cursor = page_obj
+                .and_then(|p| p.get("cursor"))
+                .and_then(|v| v.as_str());
+
+            let start_idx = if let Some(cursor_id) = cursor {
+                agents
+                    .iter()
+                    .position(|a| a.id == cursor_id)
+                    .map(|pos| pos + 1)
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+
+            let remaining = if start_idx < agents.len() {
+                &agents[start_idx..]
+            } else {
+                &[]
+            };
+
+            let page_slice = if remaining.len() > limit {
+                &remaining[..limit]
+            } else {
+                remaining
+            };
+
+            let has_more = remaining.len() > limit;
+            let next_cursor = if has_more {
+                page_slice.last().map(|a| a.id.clone())
+            } else {
+                None
+            };
+
+            let entries: Vec<serde_json::Value> = page_slice
+                .iter()
+                .map(|rec| {
+                    let cwd = if rec.cwd.is_empty() {
+                        ".".to_string()
+                    } else {
+                        rec.cwd.clone()
+                    };
+                    serde_json::json!({
+                        "agent": agent_record_to_snapshot(rec),
+                        "project": {
+                            "projectKey": "local",
+                            "projectName": "Local Project",
+                            "workspaceName": null,
+                            "checkout": {
+                                "cwd": cwd,
+                                "isGit": false,
+                                "currentBranch": null,
+                                "remoteUrl": null,
+                                "worktreeRoot": null,
+                                "isPaseoOwnedWorktree": false,
+                                "mainRepoRoot": null
+                            }
+                        }
+                    })
+                })
+                .collect();
+
+            serde_json::json!({
+                "type": "fetch_agent_history_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "entries": entries,
+                    "pageInfo": {
+                        "nextCursor": next_cursor,
+                        "prevCursor": serde_json::Value::Null,
+                        "hasMore": has_more
+                    },
+                    "searchTruncated": false
+                }
+            })
+        }
+        "schedule/list" => {
+            let schedules = crate::kernel::schedules::list_schedules();
+            let summaries: Vec<serde_json::Value> = schedules
+                .iter()
+                .map(crate::kernel::schedules::to_schedule_summary)
+                .collect();
+            serde_json::json!({
+                "type": "schedule/list/response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "schedules": summaries,
+                    "error": serde_json::Value::Null
+                }
+            })
+        }
+        "schedule/create" => {
+            match crate::kernel::schedules::create_schedule(msg) {
+                Ok(stored) => {
+                    let summary = crate::kernel::schedules::to_schedule_summary(&stored);
+                    serde_json::json!({
+                        "type": "schedule/create/response",
+                        "requestId": request_id,
+                        "payload": {
+                            "requestId": request_id,
+                            "schedule": summary,
+                            "error": serde_json::Value::Null
+                        }
+                    })
+                }
+                Err(e) => {
+                    serde_json::json!({
+                        "type": "schedule/create/response",
+                        "requestId": request_id,
+                        "payload": {
+                            "requestId": request_id,
+                            "schedule": serde_json::Value::Null,
+                            "error": format!("Failed to create schedule: {e}")
+                        }
+                    })
+                }
+            }
+        }
+        "schedule/inspect" => {
+            let sched_id = msg
+                .get("scheduleId")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("scheduleId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match crate::kernel::schedules::load_schedule(sched_id) {
+                Some(schedule) => serde_json::json!({
+                    "type": "schedule/inspect/response",
+                    "requestId": request_id,
+                    "payload": {
+                        "requestId": request_id,
+                        "schedule": schedule,
+                        "error": serde_json::Value::Null
+                    }
+                }),
+                None => serde_json::json!({
+                    "type": "schedule/inspect/response",
+                    "requestId": request_id,
+                    "payload": {
+                        "requestId": request_id,
+                        "schedule": serde_json::Value::Null,
+                        "error": format!("Schedule {sched_id} not found")
+                    }
+                }),
+            }
+        }
+        "schedule/logs" => {
+            let sched_id = msg
+                .get("scheduleId")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("scheduleId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match crate::kernel::schedules::load_schedule(sched_id) {
+                Some(schedule) => {
+                    let runs = schedule.get("runs").cloned().unwrap_or(serde_json::json!([]));
+                    serde_json::json!({
+                        "type": "schedule/logs/response",
+                        "requestId": request_id,
+                        "payload": {
+                            "requestId": request_id,
+                            "runs": runs,
+                            "error": serde_json::Value::Null
+                        }
+                    })
+                }
+                None => serde_json::json!({
+                    "type": "schedule/logs/response",
+                    "requestId": request_id,
+                    "payload": {
+                        "requestId": request_id,
+                        "runs": [],
+                        "error": format!("Schedule {sched_id} not found")
+                    }
+                }),
+            }
+        }
+        "schedule/pause" => {
+            let sched_id = msg
+                .get("scheduleId")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("scheduleId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match crate::kernel::schedules::pause_schedule(sched_id) {
+                Ok(summary) => serde_json::json!({
+                    "type": "schedule/pause/response",
+                    "requestId": request_id,
+                    "payload": {
+                        "requestId": request_id,
+                        "schedule": summary,
+                        "error": serde_json::Value::Null
+                    }
+                }),
+                Err(e) => serde_json::json!({
+                    "type": "schedule/pause/response",
+                    "requestId": request_id,
+                    "payload": {
+                        "requestId": request_id,
+                        "schedule": serde_json::Value::Null,
+                        "error": e
+                    }
+                }),
+            }
+        }
+        "schedule/resume" => {
+            let sched_id = msg
+                .get("scheduleId")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("scheduleId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match crate::kernel::schedules::resume_schedule(sched_id) {
+                Ok(summary) => serde_json::json!({
+                    "type": "schedule/resume/response",
+                    "requestId": request_id,
+                    "payload": {
+                        "requestId": request_id,
+                        "schedule": summary,
+                        "error": serde_json::Value::Null
+                    }
+                }),
+                Err(e) => serde_json::json!({
+                    "type": "schedule/resume/response",
+                    "requestId": request_id,
+                    "payload": {
+                        "requestId": request_id,
+                        "schedule": serde_json::Value::Null,
+                        "error": e
+                    }
+                }),
+            }
+        }
+        "schedule/delete" => {
+            let sched_id = msg
+                .get("scheduleId")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("scheduleId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            crate::kernel::schedules::delete_schedule(sched_id);
+            serde_json::json!({
+                "type": "schedule/delete/response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "scheduleId": sched_id,
+                    "error": serde_json::Value::Null
+                }
+            })
+        }
+        "schedule/run-once" => {
+            let sched_id = msg
+                .get("scheduleId")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("scheduleId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match crate::kernel::schedules::execute_schedule_run(sched_id) {
+                Ok(schedule) => serde_json::json!({
+                    "type": "schedule/run-once/response",
+                    "requestId": request_id,
+                    "payload": {
+                        "requestId": request_id,
+                        "schedule": schedule,
+                        "error": serde_json::Value::Null
+                    }
+                }),
+                Err(err) => serde_json::json!({
+                    "type": "schedule/run-once/response",
+                    "requestId": request_id,
+                    "payload": {
+                        "requestId": request_id,
+                        "schedule": serde_json::Value::Null,
+                        "error": err
+                    }
+                }),
+            }
+        }
+        "schedule/update" => {
+            let sched_id = msg
+                .get("scheduleId")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("scheduleId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match crate::kernel::schedules::update_schedule(sched_id, msg) {
+                Ok(schedule) => serde_json::json!({
+                    "type": "schedule/update/response",
+                    "requestId": request_id,
+                    "payload": {
+                        "requestId": request_id,
+                        "schedule": schedule,
+                        "error": serde_json::Value::Null
+                    }
+                }),
+                Err(e) => serde_json::json!({
+                    "type": "schedule/update/response",
+                    "requestId": request_id,
+                    "payload": {
+                        "requestId": request_id,
+                        "schedule": serde_json::Value::Null,
+                        "error": e
+                    }
+                }),
+            }
+        }
+        "import_agent_request" | "resume_agent_request" => {
+            let payload = msg.get("payload");
+            let handle = msg
+                .get("handle")
+                .or_else(|| payload.and_then(|p| p.get("handle")));
+            let overrides = msg
+                .get("overrides")
+                .or_else(|| payload.and_then(|p| p.get("overrides")));
+            let provider = msg
+                .get("providerId")
                 .or_else(|| msg.get("provider"))
                 .or_else(|| payload.and_then(|p| p.get("providerId")))
                 .or_else(|| payload.and_then(|p| p.get("provider")))
+                .or_else(|| handle.and_then(|handle| handle.get("provider")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("opencode");
 
-            let handle_id = msg.get("providerHandleId")
+            let handle_id = msg
+                .get("providerHandleId")
                 .or_else(|| msg.get("sessionId"))
                 .or_else(|| payload.and_then(|p| p.get("providerHandleId")))
                 .or_else(|| payload.and_then(|p| p.get("sessionId")))
+                .or_else(|| {
+                    handle.and_then(|handle| {
+                        handle
+                            .get("nativeHandle")
+                            .or_else(|| handle.get("sessionId"))
+                    })
+                })
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            if handle_id.trim().is_empty() {
+                return serde_json::json!({"type":"status", "requestId":request_id,
+                    "payload":{"status":"agent_create_failed", "requestId":request_id,
+                        "error":"An explicit provider session handle is required to resume"}});
+            }
 
-            let cwd = msg.get("cwd")
+            let cwd = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .or_else(|| overrides.and_then(|overrides| overrides.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
 
-            let ws_id = msg.get("workspaceId")
+            let ws_id = msg
+                .get("workspaceId")
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
-            let title = if handle_id.is_empty() { None } else { Some(format!("Imported {}", handle_id)) };
+            let title = overrides
+                .and_then(|overrides| overrides.get("title"))
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+                .or_else(|| Some(format!("Imported {handle_id}")));
             let mgr = get_agent_manager();
-            let config = serde_json::json!({
-                "provider": provider,
-                "providerHandleId": handle_id,
-                "cwd": cwd
-            });
+            let mut config = overrides.cloned().unwrap_or_else(|| serde_json::json!({}));
+            config["provider"] = serde_json::json!(provider);
+            config["providerHandleId"] = serde_json::json!(handle_id);
+            config["cwd"] = serde_json::json!(cwd);
 
             match mgr.create_agent(provider, cwd, title, ws_id, Some(config)) {
                 Ok(record) => {
@@ -2797,7 +3852,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "clear_agent_attention" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("agentId")
+            let agent_id = msg
+                .get("agentId")
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -2813,19 +3869,25 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "agent.config.apply.request" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("agentId")
+            let agent_id = msg
+                .get("agentId")
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let thinking = msg.get("config")
+            let thinking = msg
+                .get("config")
                 .or_else(|| payload.and_then(|p| p.get("config")))
                 .and_then(|config| config.get("thinkingOptionId"));
             let mgr = get_agent_manager();
             let result = match thinking {
                 Some(serde_json::Value::Null) => mgr.set_agent_thinking(agent_id, None),
-                Some(serde_json::Value::String(option)) => mgr.set_agent_thinking(agent_id, Some(option)),
+                Some(serde_json::Value::String(option)) => {
+                    mgr.set_agent_thinking(agent_id, Some(option))
+                }
                 Some(_) => Err("Invalid thinkingOptionId".to_string()),
-                None => mgr.get_agent(agent_id).ok_or_else(|| format!("Agent {agent_id} not found")),
+                None => mgr
+                    .get_agent(agent_id)
+                    .ok_or_else(|| format!("Agent {agent_id} not found")),
             };
             if result.is_ok() {
                 crate::agent::runner::broadcast_agent_status_update(agent_id);
@@ -2844,7 +3906,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "set_agent_mode_request" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("agentId")
+            let agent_id = msg
+                .get("agentId")
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -2862,17 +3925,20 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "set_agent_model_request" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("agentId")
+            let agent_id = msg
+                .get("agentId")
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let model_id = msg.get("modelId")
+            let model_id = msg
+                .get("modelId")
                 .or_else(|| payload.and_then(|p| p.get("modelId")))
                 .or_else(|| msg.get("model"))
                 .or_else(|| payload.and_then(|p| p.get("model")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let provider_opt = msg.get("provider")
+            let provider_opt = msg
+                .get("provider")
                 .or_else(|| payload.and_then(|p| p.get("provider")))
                 .and_then(|v| v.as_str());
 
@@ -2901,7 +3967,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "set_agent_feature_request" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("agentId")
+            let agent_id = msg
+                .get("agentId")
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -2919,14 +3986,18 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "set_agent_thinking_request" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("agentId")
+            let agent_id = msg
+                .get("agentId")
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let thinking = msg.get("thinkingOptionId")
+            let thinking = msg
+                .get("thinkingOptionId")
                 .or_else(|| payload.and_then(|p| p.get("thinkingOptionId")));
             let result = match thinking {
-                Some(serde_json::Value::Null) => get_agent_manager().set_agent_thinking(agent_id, None),
+                Some(serde_json::Value::Null) => {
+                    get_agent_manager().set_agent_thinking(agent_id, None)
+                }
                 Some(serde_json::Value::String(option)) => {
                     get_agent_manager().set_agent_thinking(agent_id, Some(option))
                 }
@@ -2953,7 +4024,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "update_agent_request" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("agentId")
+            let agent_id = msg
+                .get("agentId")
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -2971,7 +4043,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "agent.detach.request" => {
             let payload = msg.get("payload");
-            let agent_id = msg.get("agentId")
+            let agent_id = msg
+                .get("agentId")
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -2993,7 +4066,44 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
-                    "commands": []
+                    "commands": [
+                        {
+                            "name": "council",
+                            "description": "Activate multi-agent Council swarm: Architect, Implementer, Auditor",
+                            "argumentHint": "<task description>",
+                            "kind": "system"
+                        },
+                        {
+                            "name": "swarm",
+                            "description": "Coordinate concurrent subagents for parallel execution",
+                            "argumentHint": "<task description>",
+                            "kind": "system"
+                        },
+                        {
+                            "name": "plan",
+                            "description": "Formulate a step-by-step implementation plan before coding",
+                            "argumentHint": "<feature or fix>",
+                            "kind": "system"
+                        },
+                        {
+                            "name": "compact",
+                            "description": "Summarize and compact previous context to free tokens",
+                            "argumentHint": "",
+                            "kind": "system"
+                        },
+                        {
+                            "name": "diff",
+                            "description": "Inspect uncommitted git diffs across the workspace",
+                            "argumentHint": "",
+                            "kind": "system"
+                        },
+                        {
+                            "name": "test",
+                            "description": "Run test suites and verify changes",
+                            "argumentHint": "[test filter]",
+                            "kind": "system"
+                        }
+                    ]
                 }
             })
         }
@@ -3029,7 +4139,9 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "workspace.label.list.request" => {
             let payload = msg.get("payload");
-            let sub_id = if msg.get("subscribe").is_some() || payload.and_then(|p| p.get("subscribe")).is_some() {
+            let sub_id = if msg.get("subscribe").is_some()
+                || payload.and_then(|p| p.get("subscribe")).is_some()
+            {
                 Some(format!("sub-labels-{}", request_id))
             } else {
                 None
@@ -3052,7 +4164,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "workspace.setup.subscribe.request" => {
             let payload = msg.get("payload");
-            let ws_id = msg.get("workspaceId")
+            let ws_id = msg
+                .get("workspaceId")
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -3069,7 +4182,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "workspace_setup_status_request" | "workspace.setup.status.request" => {
             let payload = msg.get("payload");
-            let ws_id = msg.get("workspaceId")
+            let ws_id = msg
+                .get("workspaceId")
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -3086,7 +4200,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "agent.timeline.set_subscription.request" => {
             let payload = msg.get("payload");
-            let agent_ids = msg.get("agentIds")
+            let agent_ids = msg
+                .get("agentIds")
                 .or_else(|| payload.and_then(|p| p.get("agentIds")))
                 .cloned()
                 .unwrap_or_else(|| serde_json::json!([]));
@@ -3114,7 +4229,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "subscribe_checkout_diff_request" => {
             let payload = msg.get("payload");
-            let cwd_str = msg.get("cwd")
+            let cwd_str = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
@@ -3142,7 +4258,10 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "get_providers_snapshot_request" => {
             let now_iso = crate::agent::types::now_iso();
-            let cwd = msg.get("cwd").and_then(|value| value.as_str()).unwrap_or(".");
+            let cwd = msg
+                .get("cwd")
+                .and_then(|value| value.as_str())
+                .unwrap_or(".");
             let entries = get_provider_snapshot_entries(cwd).await;
             serde_json::json!({
                 "type": "get_providers_snapshot_response",
@@ -3161,7 +4280,10 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .iter()
                 .filter_map(|entry| {
                     let provider = entry.get("provider")?.as_str()?;
-                    let available = entry.get("models")?.as_array().is_some_and(|models| !models.is_empty());
+                    let available = entry
+                        .get("models")?
+                        .as_array()
+                        .is_some_and(|models| !models.is_empty());
                     Some(serde_json::json!({ "provider": provider, "available": available }))
                 })
                 .collect();
@@ -3188,7 +4310,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "provider_diagnostic_request" => {
             let payload = msg.get("payload");
-            let provider = msg.get("provider")
+            let provider = msg
+                .get("provider")
                 .or_else(|| payload.and_then(|p| p.get("provider")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("codex");
@@ -3284,7 +4407,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "workspace.script.list.request" => {
             let payload = msg.get("payload");
-            let ws_id = msg.get("workspaceId")
+            let ws_id = msg
+                .get("workspaceId")
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -3301,7 +4425,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "checkout_status_request" => {
             let payload = msg.get("payload");
-            let cwd_str = msg.get("cwd")
+            let cwd_str = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
@@ -3328,11 +4453,13 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "fs.file.subscribe.request" => {
             let payload = msg.get("payload");
-            let cwd_str = msg.get("cwd")
+            let cwd_str = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
-            let path_str = msg.get("path")
+            let path_str = msg
+                .get("path")
                 .or_else(|| payload.and_then(|p| p.get("path")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -3352,7 +4479,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "fs.file.unsubscribe.request" => {
             let payload = msg.get("payload");
-            let sub_id = msg.get("subscriptionId")
+            let sub_id = msg
+                .get("subscriptionId")
                 .or_else(|| payload.and_then(|p| p.get("subscriptionId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -3397,11 +4525,13 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "vfs/watch" | "vfs/watch_subscribe" => {
             let payload = msg.get("payload");
-            let path = msg.get("path")
+            let path = msg
+                .get("path")
                 .or_else(|| payload.and_then(|p| p.get("path")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let ignore: Vec<String> = msg.get("ignore")
+            let ignore: Vec<String> = msg
+                .get("ignore")
                 .or_else(|| payload.and_then(|p| p.get("ignore")))
                 .and_then(|v| v.as_array())
                 .map(|arr| {
@@ -3456,7 +4586,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "vfs/unwatch" | "vfs/watch_unsubscribe" => {
             let payload = msg.get("payload");
-            let sub_id = msg.get("subscriptionId")
+            let sub_id = msg
+                .get("subscriptionId")
                 .or_else(|| payload.and_then(|p| p.get("subscriptionId")))
                 .or_else(|| msg.get("subscription_id"))
                 .or_else(|| payload.and_then(|p| p.get("subscription_id")))
@@ -3511,53 +4642,139 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "file_explorer_request" => {
             let payload = msg.get("payload");
-            let cwd_str = msg.get("cwd")
+            let cwd_str = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
-            let path_opt = msg.get("path")
+            let path_opt = msg
+                .get("path")
                 .or_else(|| payload.and_then(|p| p.get("path")))
                 .and_then(|v| v.as_str());
+            let mode = msg
+                .get("mode")
+                .or_else(|| payload.and_then(|p| p.get("mode")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("list");
 
             let cwd = std::path::Path::new(cwd_str);
-            match crate::kernel::file_service::list_directory(cwd, path_opt) {
-                Ok(entries) => {
-                    serde_json::json!({
-                        "type": "file_explorer_response",
-                        "requestId": request_id,
-                        "id": request_id,
-                        "success": true,
-                        "payload": {
-                            "entries": entries
-                        },
-                        "entries": entries
-                    })
+
+            if mode == "file" {
+                let target_rel = path_opt.unwrap_or("");
+                let full_path = cwd.join(target_rel);
+                match std::fs::read(&full_path) {
+                    Ok(bytes) => {
+                        let meta = std::fs::metadata(&full_path).ok();
+                        let size = bytes.len() as u64;
+                        let modified_at = meta
+                            .and_then(|m| m.modified().ok())
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| crate::agent::sessions::format_epoch_millis_iso(d.as_millis() as i64))
+                            .unwrap_or_else(crate::agent::types::now_iso);
+                        let (kind, encoding, content) = match std::str::from_utf8(&bytes) {
+                            Ok(s) => ("text", "utf-8", s.to_string()),
+                            Err(_) => ("binary", "base64", base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)),
+                        };
+                        let mime_type = if kind == "text" { "text/plain" } else { "application/octet-stream" };
+                        serde_json::json!({
+                            "type": "file_explorer_response",
+                            "payload": {
+                                "cwd": cwd_str,
+                                "path": target_rel,
+                                "mode": "file",
+                                "directory": serde_json::Value::Null,
+                                "file": {
+                                    "path": target_rel,
+                                    "kind": kind,
+                                    "encoding": encoding,
+                                    "content": content,
+                                    "mimeType": mime_type,
+                                    "size": size,
+                                    "modifiedAt": modified_at
+                                },
+                                "error": serde_json::Value::Null,
+                                "requestId": request_id
+                            }
+                        })
+                    }
+                    Err(err) => {
+                        serde_json::json!({
+                            "type": "file_explorer_response",
+                            "payload": {
+                                "cwd": cwd_str,
+                                "path": target_rel,
+                                "mode": "file",
+                                "directory": serde_json::Value::Null,
+                                "file": serde_json::Value::Null,
+                                "error": err.to_string(),
+                                "requestId": request_id
+                            }
+                        })
+                    }
                 }
-                Err(err) => {
-                    serde_json::json!({
-                        "type": "file_explorer_response",
-                        "requestId": request_id,
-                        "id": request_id,
-                        "success": false,
-                        "error": err.to_string(),
-                        "payload": {
-                            "error": err.to_string()
-                        }
-                    })
+            } else {
+                let target_path = path_opt.unwrap_or(".");
+                match crate::kernel::file_service::list_directory(cwd, path_opt) {
+                    Ok(entries) => {
+                        let entries_val: Vec<serde_json::Value> = entries
+                            .into_iter()
+                            .map(|e| {
+                                serde_json::json!({
+                                    "name": e.name,
+                                    "path": e.path,
+                                    "kind": if e.is_directory { "directory" } else { "file" },
+                                    "size": e.size,
+                                    "modifiedAt": crate::agent::sessions::format_epoch_millis_iso(e.modified_ms as i64),
+                                })
+                            })
+                            .collect();
+                        serde_json::json!({
+                            "type": "file_explorer_response",
+                            "payload": {
+                                "cwd": cwd_str,
+                                "path": target_path,
+                                "mode": "list",
+                                "directory": {
+                                    "path": target_path,
+                                    "entries": entries_val
+                                },
+                                "file": serde_json::Value::Null,
+                                "error": serde_json::Value::Null,
+                                "requestId": request_id
+                            }
+                        })
+                    }
+                    Err(err) => {
+                        serde_json::json!({
+                            "type": "file_explorer_response",
+                            "payload": {
+                                "cwd": cwd_str,
+                                "path": target_path,
+                                "mode": "list",
+                                "directory": serde_json::Value::Null,
+                                "file": serde_json::Value::Null,
+                                "error": err.to_string(),
+                                "requestId": request_id
+                            }
+                        })
+                    }
                 }
             }
         }
         "fs.file.write.request" => {
             let payload = msg.get("payload");
-            let cwd_str = msg.get("cwd")
+            let cwd_str = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
-            let rel_path = msg.get("path")
+            let rel_path = msg
+                .get("path")
                 .or_else(|| payload.and_then(|p| p.get("path")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let content_str = msg.get("content")
+            let content_str = msg
+                .get("content")
                 .or_else(|| payload.and_then(|p| p.get("content")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -3587,19 +4804,23 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "fs.entry.create.request" => {
             let payload = msg.get("payload");
-            let cwd_str = msg.get("cwd")
+            let cwd_str = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
-            let parent = msg.get("parentPath")
+            let parent = msg
+                .get("parentPath")
                 .or_else(|| payload.and_then(|p| p.get("parentPath")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let name = msg.get("name")
+            let name = msg
+                .get("name")
                 .or_else(|| payload.and_then(|p| p.get("name")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let kind = msg.get("kind")
+            let kind = msg
+                .get("kind")
                 .or_else(|| payload.and_then(|p| p.get("kind")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("file");
@@ -3630,15 +4851,18 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "fs.entry.rename.request" => {
             let payload = msg.get("payload");
-            let cwd_str = msg.get("cwd")
+            let cwd_str = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
-            let path = msg.get("path")
+            let path = msg
+                .get("path")
                 .or_else(|| payload.and_then(|p| p.get("path")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let new_name = msg.get("newName")
+            let new_name = msg
+                .get("newName")
                 .or_else(|| payload.and_then(|p| p.get("newName")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -3668,11 +4892,13 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "fs.entry.delete.request" => {
             let payload = msg.get("payload");
-            let cwd_str = msg.get("cwd")
+            let cwd_str = msg
+                .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
-            let path = msg.get("path")
+            let path = msg
+                .get("path")
                 .or_else(|| payload.and_then(|p| p.get("path")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -3702,26 +4928,37 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "ast/analyze" | "ast/parse" => {
             let payload = msg.get("payload");
-            let path_opt = msg.get("path")
+            let path_opt = msg
+                .get("path")
                 .or_else(|| payload.and_then(|p| p.get("path")))
                 .and_then(|v| v.as_str());
-            let source_opt = msg.get("source")
+            let source_opt = msg
+                .get("source")
                 .or_else(|| payload.and_then(|p| p.get("source")))
                 .and_then(|v| v.as_str());
-            let ext_opt = msg.get("ext")
+            let ext_opt = msg
+                .get("ext")
                 .or_else(|| payload.and_then(|p| p.get("ext")))
                 .and_then(|v| v.as_str());
 
             let (source, ext) = if let Some(src) = source_opt {
                 let ext = ext_opt
-                    .or_else(|| path_opt.and_then(|p| std::path::Path::new(p).extension().and_then(|e| e.to_str())))
+                    .or_else(|| {
+                        path_opt.and_then(|p| {
+                            std::path::Path::new(p).extension().and_then(|e| e.to_str())
+                        })
+                    })
                     .unwrap_or("ts");
                 (src.to_string(), ext.to_string())
             } else if let Some(path) = path_opt {
                 match std::fs::read_to_string(path) {
                     Ok(content) => {
                         let ext = ext_opt
-                            .or_else(|| std::path::Path::new(path).extension().and_then(|e| e.to_str()))
+                            .or_else(|| {
+                                std::path::Path::new(path)
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                            })
                             .unwrap_or("ts");
                         (content, ext.to_string())
                     }
@@ -3780,26 +5017,37 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         }
         "ast/symbols" => {
             let payload = msg.get("payload");
-            let path_opt = msg.get("path")
+            let path_opt = msg
+                .get("path")
                 .or_else(|| payload.and_then(|p| p.get("path")))
                 .and_then(|v| v.as_str());
-            let source_opt = msg.get("source")
+            let source_opt = msg
+                .get("source")
                 .or_else(|| payload.and_then(|p| p.get("source")))
                 .and_then(|v| v.as_str());
-            let ext_opt = msg.get("ext")
+            let ext_opt = msg
+                .get("ext")
                 .or_else(|| payload.and_then(|p| p.get("ext")))
                 .and_then(|v| v.as_str());
 
             let (source, ext) = if let Some(src) = source_opt {
                 let ext = ext_opt
-                    .or_else(|| path_opt.and_then(|p| std::path::Path::new(p).extension().and_then(|e| e.to_str())))
+                    .or_else(|| {
+                        path_opt.and_then(|p| {
+                            std::path::Path::new(p).extension().and_then(|e| e.to_str())
+                        })
+                    })
                     .unwrap_or("ts");
                 (src.to_string(), ext.to_string())
             } else if let Some(path) = path_opt {
                 match std::fs::read_to_string(path) {
                     Ok(content) => {
                         let ext = ext_opt
-                            .or_else(|| std::path::Path::new(path).extension().and_then(|e| e.to_str()))
+                            .or_else(|| {
+                                std::path::Path::new(path)
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                            })
                             .unwrap_or("ts");
                         (content, ext.to_string())
                     }
@@ -3856,7 +5104,12 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }
             }
         }
-        msg_type if msg_type.starts_with("crdt/") || msg_type.starts_with("ioring/") || msg_type.starts_with("speech/") || msg_type.starts_with("shm/") => {
+        msg_type
+            if msg_type.starts_with("crdt/")
+                || msg_type.starts_with("ioring/")
+                || msg_type.starts_with("speech/")
+                || msg_type.starts_with("shm/") =>
+        {
             let env = RpcEnvelope::new(
                 request_id,
                 msg_type,
@@ -3876,7 +5129,11 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
         "subscribe_providers_request" | "subscribe_providers" => {
             // ACK the subscription immediately, then push providers_snapshot_update via broadcast channel
             let req_id = request_id.to_owned();
-            let cwd = msg.get("cwd").and_then(|v| v.as_str()).unwrap_or(".").to_owned();
+            let cwd = msg
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .unwrap_or(".")
+                .to_owned();
             let push_tx = get_provider_push_tx();
             tokio::spawn(async move {
                 let entries = get_provider_snapshot_entries(&cwd).await;
@@ -3978,11 +5235,10 @@ pub async fn process_incoming_frame(text: &str) -> Option<String> {
                 let res = dispatch_session_message(&val).await;
                 return serde_json::to_string(&res).ok();
             }
-            "vfs/watch" | "vfs/watch_subscribe" | "vfs/unwatch" | "vfs/watch_unsubscribe" | "ast/analyze" | "ast/parse" | "ast/symbols" | "crdt/join" | "crdt/update" | "crdt/sync" | "crdt/state" | "crdt/edit" | "ioring/status" | "ioring/read_batch" | "speech/status" | "speech/transcribe" | "speech/load_model" | "shm/status" | "shm/push" | "shm/poll" => {
+            _ => {
                 let res = dispatch_session_message(&val).await;
                 return serde_json::to_string(&res).ok();
             }
-            _ => {}
         }
     }
 
@@ -3995,6 +5251,10 @@ pub struct DaemonHandle {
     shutdown_tx: broadcast::Sender<()>,
     server_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pipe_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    #[cfg(test)]
+    pub(crate) access: Arc<crate::kernel::access::AccessControl>,
+    #[cfg(test)]
+    _auth_home: tempfile::TempDir,
 }
 
 pub type EmbeddedDaemon = DaemonHandle;
@@ -4008,7 +5268,10 @@ impl DaemonHandle {
         Self::start_internal(port, false, None).await
     }
 
-    pub async fn start_daemon(port: u16, custom_pipe: Option<String>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start_daemon(
+        port: u16,
+        custom_pipe: Option<String>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let is_production = port == 6767 && custom_pipe.is_none();
         Self::start_internal(port, is_production, custom_pipe).await
     }
@@ -4023,38 +5286,67 @@ impl DaemonHandle {
         let listener = tokio::net::TcpListener::bind(addr).await?;
         let actual_port = listener.local_addr()?.port();
 
+        #[cfg(test)]
+        let auth_home = tempfile::tempdir()?;
+        #[cfg(test)]
+        let home = auth_home.path().to_path_buf();
+        #[cfg(not(test))]
+        let home = crate::get_data_dir();
+        #[cfg(not(test))]
+        if AGENT_MANAGER.get().is_none() {
+            let manager = crate::agent::manager::AgentManager::try_new(home.clone())?;
+            let _ = AGENT_MANAGER.set(manager);
+        }
+        #[cfg(not(test))]
+        crate::kernel::schedules::start_scheduler_engine();
+        let access = Arc::new(crate::kernel::access::AccessControl::load(
+            &home,
+            actual_port,
+        )?);
+        let ws_routes = Router::new()
+            .route(
+                "/",
+                get({
+                    let tx = shutdown_tx.clone();
+                    let access = access.clone();
+                    move |ws: WebSocketUpgrade| {
+                        let rx = tx.subscribe();
+                        let access = access.clone();
+                        async move {
+                            ws.max_message_size(16 * 1024 * 1024)
+                                .on_upgrade(move |socket| handle_ws(socket, rx, access))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/ws",
+                get({
+                    let tx = shutdown_tx.clone();
+                    let access = access.clone();
+                    move |ws: WebSocketUpgrade| {
+                        let rx = tx.subscribe();
+                        let access = access.clone();
+                        async move {
+                            ws.max_message_size(16 * 1024 * 1024)
+                                .on_upgrade(move |socket| handle_ws(socket, rx, access))
+                        }
+                    }
+                }),
+            );
         let app = Router::new()
             .route("/api/health", get(health_check))
             .route("/health", get(health_check))
             .route("/api/version", get(version_check))
+            .route("/api/agent-history/indexed", get(handle_indexed_history_http))
+            .route("/api/omp-sessions", get(handle_omp_sessions_list_http))
+            .route("/api/omp-sessions/{id}", get(handle_omp_session_inspect_http))
             .merge(crate::kernel::browser_proxy::router())
-            .route("/", get({
-                let tx = shutdown_tx.clone();
-                move |ws: WebSocketUpgrade| {
-                    let rx = tx.subscribe();
-                    async move {
-                        ws.on_upgrade(move |socket| handle_ws(socket, rx))
-                    }
-                }
-            }))
-            .route("/ws", get({
-                let tx = shutdown_tx.clone();
-                move |ws: WebSocketUpgrade| {
-                    let rx = tx.subscribe();
-                    async move {
-                        ws.on_upgrade(move |socket| handle_ws(socket, rx))
-                    }
-                }
-            }))
-            .fallback(get({
-                let tx = shutdown_tx.clone();
-                move |ws: WebSocketUpgrade| {
-                    let rx = tx.subscribe();
-                    async move {
-                        ws.on_upgrade(move |socket| handle_ws(socket, rx))
-                    }
-                }
-            }));
+            .merge(ws_routes)
+            .layer(axum::middleware::from_fn_with_state(
+                access.clone(),
+                guard_http,
+            ));
 
         let mut s_rx = shutdown_tx.subscribe();
         let server_handle = tokio::spawn(async move {
@@ -4068,32 +5360,40 @@ impl DaemonHandle {
         #[cfg(windows)]
         let pipe_task = if let Some(custom) = &custom_pipe {
             let p_rx = shutdown_tx.subscribe();
-            let h = tokio::spawn(run_named_pipe(custom.clone(), p_rx));
+            let h = tokio::spawn(run_named_pipe(custom.clone(), p_rx, access.clone()));
             Some(h)
         } else if is_production {
             let p_rx = shutdown_tx.subscribe();
-            let h = tokio::spawn(run_named_pipe(r"\\.\pipe\kronos-ipc".to_string(), p_rx));
+            let h = tokio::spawn(run_named_pipe(
+                r"\\.\pipe\kronos-ipc".to_string(),
+                p_rx,
+                access.clone(),
+            ));
             Some(h)
         } else {
             let p_rx = shutdown_tx.subscribe();
             let pipe_name = format!(r"\\.\pipe\kronos-ipc-{}", actual_port);
-            let h = tokio::spawn(run_named_pipe(pipe_name, p_rx));
+            let h = tokio::spawn(run_named_pipe(pipe_name, p_rx, access.clone()));
             Some(h)
         };
 
         #[cfg(not(windows))]
         let pipe_task = if let Some(custom) = &custom_pipe {
             let p_rx = shutdown_tx.subscribe();
-            let h = tokio::spawn(run_unix_socket(custom.clone(), p_rx));
+            let h = tokio::spawn(run_unix_socket(custom.clone(), p_rx, access.clone()));
             Some(h)
         } else if is_production {
             let p_rx = shutdown_tx.subscribe();
-            let h = tokio::spawn(run_unix_socket("/tmp/kronos-ipc.sock".to_string(), p_rx));
+            let h = tokio::spawn(run_unix_socket(
+                "/tmp/kronos-ipc.sock".to_string(),
+                p_rx,
+                access.clone(),
+            ));
             Some(h)
         } else {
             let p_rx = shutdown_tx.subscribe();
             let sock_path = format!("/tmp/kronos-ipc-{}.sock", actual_port);
-            let h = tokio::spawn(run_unix_socket(sock_path, p_rx));
+            let h = tokio::spawn(run_unix_socket(sock_path, p_rx, access.clone()));
             Some(h)
         };
 
@@ -4102,6 +5402,10 @@ impl DaemonHandle {
             shutdown_tx,
             server_task: Arc::new(Mutex::new(Some(server_handle))),
             pipe_task: Arc::new(Mutex::new(pipe_task)),
+            #[cfg(test)]
+            access,
+            #[cfg(test)]
+            _auth_home: auth_home,
         })
     }
 
@@ -4120,12 +5424,157 @@ impl DaemonHandle {
     }
 }
 
-async fn handle_ws(mut socket: WebSocket, mut shutdown_rx: broadcast::Receiver<()>) {
+async fn guard_http(
+    axum::extract::State(access): axum::extract::State<Arc<crate::kernel::access::AccessControl>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if !access.allows_headers(request.headers()) {
+        return axum::http::StatusCode::FORBIDDEN.into_response();
+    }
+    let path = request.uri().path();
+    let public = matches!(
+        path,
+        "/health" | "/api/health" | "/api/version" | "/" | "/ws" | "/api/agent-history/indexed" | "/api/omp-sessions"
+    ) || path.starts_with("/api/omp-sessions/");
+    let proxy_ticket = request.method() == axum::http::Method::GET
+        && path == "/api/browser-proxy"
+        && crate::kernel::browser_proxy::has_navigation_ticket(request.uri());
+    if !public && !proxy_ticket && !access.accepts_bearer(request.headers()) {
+        return axum::http::StatusCode::UNAUTHORIZED.into_response();
+    }
+    next.run(request).await
+}
+
+async fn close_for_resync(socket: &mut WebSocket) {
+    let _ = socket
+        .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+            code: 1013,
+            reason: "Stream overflow; reconnect and resynchronize".into(),
+        })))
+        .await;
+}
+
+async fn reject_socket(socket: &mut WebSocket, reason: &str, announce: bool) {
+    if announce {
+        let rejection =
+            serde_json::json!({"type":"hello.rejected", "reason":reason, "accepts":["password"]});
+        let _ = socket
+            .send(Message::Text(rejection.to_string().into()))
+            .await;
+    }
+    let (code, message) = match reason {
+        "incompatible_protocol" => (4003, "Incompatible protocol version"),
+        "incorrect_password" => (4401, "Incorrect password"),
+        _ => (4401, "Password required"),
+    };
+    let _ = socket
+        .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+            code,
+            reason: message.into(),
+        })))
+        .await;
+}
+
+async fn serve_ipc<S>(
+    stream: S,
+    mut shutdown: broadcast::Receiver<()>,
+    access: Arc<crate::kernel::access::AccessControl>,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    let (reader, mut writer) = tokio::io::split(stream);
+    let mut reader = BufReader::new(reader);
+    let mut frame = Vec::new();
+    let admission = tokio::time::timeout(Duration::from_secs(10), async {
+        (&mut reader)
+            .take(8193)
+            .read_until(b'\n', &mut frame)
+            .await
+            .map_err(|_| "password_required")?;
+        if frame.len() > 8192 || frame.last() != Some(&b'\n') {
+            return Err("password_required");
+        }
+        let hello = serde_json::from_slice(&frame).map_err(|_| "password_required")?;
+        access.authenticate_hello(&hello).await
+    })
+    .await
+    .unwrap_or(Err("password_required"));
+    if let Err(reason) = admission {
+        let rejection =
+            serde_json::json!({"type":"hello.rejected", "reason":reason, "accepts":["password"]});
+        let _ = writer.write_all(format!("{rejection}\n").as_bytes()).await;
+        return;
+    }
+    let info = crate::kernel::protocol::build_server_info_response();
+    if writer
+        .write_all(format!("{info}\n").as_bytes())
+        .await
+        .is_err()
+    {
+        return;
+    }
+    loop {
+        frame.clear();
+        let mut limited = (&mut reader).take(16 * 1024 * 1024 + 1);
+        tokio::select! {
+            _ = shutdown.recv() => break,
+            result = limited.read_until(b'\n', &mut frame) => {
+                if result.is_err() || frame.is_empty() || frame.len() > 16 * 1024 * 1024
+                    || frame.last() != Some(&b'\n') { break; }
+                let Ok(text) = std::str::from_utf8(&frame) else { break; };
+                if let Some(reply) = process_incoming_frame(text.trim()).await {
+                    if writer.write_all(format!("{reply}\n").as_bytes()).await.is_err() { break; }
+                }
+            }
+        }
+    }
+}
+
+async fn handle_ws(
+    mut socket: WebSocket,
+    mut shutdown_rx: broadcast::Receiver<()>,
+    access: Arc<crate::kernel::access::AccessControl>,
+) {
+    // Do not create subscriptions or emit private state before a verified hello.
+    let mut announce_rejection = false;
+    let admission = tokio::time::timeout(Duration::from_secs(10), async {
+        match socket.recv().await {
+            Some(Ok(Message::Text(text))) if text.len() <= 8192 => {
+                let hello = serde_json::from_str::<serde_json::Value>(&text)
+                    .map_err(|_| "password_required")?;
+                announce_rejection = hello.get("auth").is_some()
+                    || hello["capabilities"]["hello_rejection"].as_bool() == Some(true);
+                access.authenticate_hello(&hello).await
+            }
+            _ => Err("password_required"),
+        }
+    })
+    .await
+    .unwrap_or(Err("password_required"));
+    if let Err(reason) = admission {
+        reject_socket(&mut socket, reason, announce_rejection).await;
+        return;
+    }
+    if socket
+        .send(Message::Text(
+            crate::kernel::protocol::build_server_info_response()
+                .to_string()
+                .into(),
+        ))
+        .await
+        .is_err()
+    {
+        return;
+    }
     let mut watcher_rx = get_watcher_engine().subscribe_events();
     let mut crdt_rx = get_crdt_engine().subscribe();
     let mut term_output_rx = crate::native_pty::get_pty_manager().subscribe_output();
     let mut provider_push_rx = get_provider_push_tx().subscribe();
-    let mut subscribed_terminals: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
+    let mut subscribed_terminals: std::collections::HashMap<String, u8> =
+        std::collections::HashMap::new();
     let mut watcher_active = true;
     let mut crdt_active = true;
     loop {
@@ -4135,16 +5584,21 @@ async fn handle_ws(mut socket: WebSocket, mut shutdown_rx: broadcast::Receiver<(
                 break;
             }
             term_chunk = term_output_rx.recv() => {
-                if let Ok(chunk) = term_chunk {
-                    if let Some(&slot) = subscribed_terminals.get(&chunk.terminal_id) {
-                        let mut frame = Vec::with_capacity(2 + chunk.data.len());
-                        frame.push(0x01); // TerminalStreamOpcode::Output
-                        frame.push(slot);
-                        frame.extend_from_slice(&chunk.data);
-                        if socket.send(Message::Binary(frame.into())).await.is_err() {
-                            break;
+                match term_chunk {
+                    Ok(chunk) => {
+                        if let Some(&slot) = subscribed_terminals.get(&chunk.terminal_id) {
+                            let mut frame = Vec::with_capacity(2 + chunk.data.len());
+                            frame.push(0x01);
+                            frame.push(slot);
+                            frame.extend_from_slice(&chunk.data);
+                            if socket.send(Message::Binary(frame.into())).await.is_err() { break; }
                         }
                     }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        close_for_resync(&mut socket).await;
+                        break;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
             provider_update = provider_push_rx.recv() => {
@@ -4154,8 +5608,12 @@ async fn handle_ws(mut socket: WebSocket, mut shutdown_rx: broadcast::Receiver<(
                             break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        // Reconnect invokes the client's authoritative history reconciliation.
+                        close_for_resync(&mut socket).await;
+                        break;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
             events_res = watcher_rx.recv(), if watcher_active => {
@@ -4172,7 +5630,8 @@ async fn handle_ws(mut socket: WebSocket, mut shutdown_rx: broadcast::Receiver<(
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        continue;
+                        close_for_resync(&mut socket).await;
+                        break;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         watcher_active = false;
@@ -4197,7 +5656,8 @@ async fn handle_ws(mut socket: WebSocket, mut shutdown_rx: broadcast::Receiver<(
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        continue;
+                        close_for_resync(&mut socket).await;
+                        break;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         crdt_active = false;
@@ -4275,9 +5735,12 @@ async fn handle_ws(mut socket: WebSocket, mut shutdown_rx: broadcast::Receiver<(
 }
 
 #[cfg(windows)]
-async fn run_named_pipe(pipe_name: String, mut shutdown_rx: broadcast::Receiver<()>) {
+async fn run_named_pipe(
+    pipe_name: String,
+    mut shutdown_rx: broadcast::Receiver<()>,
+    access: Arc<crate::kernel::access::AccessControl>,
+) {
     use tokio::net::windows::named_pipe::ServerOptions;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     let mut first = true;
     loop {
@@ -4309,36 +5772,7 @@ async fn run_named_pipe(pipe_name: String, mut shutdown_rx: broadcast::Receiver<
             }
         }
 
-        let mut client_shutdown = shutdown_rx.resubscribe();
-        tokio::spawn(async move {
-            let (reader, mut writer) = tokio::io::split(server);
-            let mut lines = BufReader::new(reader).lines();
-
-            loop {
-                tokio::select! {
-                    _ = client_shutdown.recv() => {
-                        break;
-                    }
-                    line = lines.next_line() => {
-                        match line {
-                            Ok(Some(l)) => {
-                                let trimmed = l.trim();
-                                if trimmed.is_empty() {
-                                    continue;
-                                }
-                                if let Some(mut reply) = process_incoming_frame(trimmed).await {
-                                    reply.push('\n');
-                                    if writer.write_all(reply.as_bytes()).await.is_err() {
-                                        break;
-                                    }
-                                }
-                            }
-                            _ => break,
-                        }
-                    }
-                }
-            }
-        });
+        tokio::spawn(serve_ipc(server, shutdown_rx.resubscribe(), access.clone()));
     }
 }
 
@@ -4398,9 +5832,12 @@ pub(crate) fn safe_remove_socket_file(path: &std::path::Path) {
 }
 
 #[cfg(not(windows))]
-async fn run_unix_socket(sock_path: String, mut shutdown_rx: broadcast::Receiver<()>) {
+async fn run_unix_socket(
+    sock_path: String,
+    mut shutdown_rx: broadcast::Receiver<()>,
+    access: Arc<crate::kernel::access::AccessControl>,
+) {
     use tokio::net::UnixListener;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     let p = std::path::Path::new(&sock_path);
     safe_remove_socket_file(p);
@@ -4408,6 +5845,12 @@ async fn run_unix_socket(sock_path: String, mut shutdown_rx: broadcast::Receiver
         Ok(l) => l,
         Err(_) => return,
     };
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600)).is_err() {
+            return;
+        }
+    }
 
     loop {
         tokio::select! {
@@ -4417,36 +5860,7 @@ async fn run_unix_socket(sock_path: String, mut shutdown_rx: broadcast::Receiver
             conn = listener.accept() => {
                 match conn {
                     Ok((stream, _)) => {
-                        let mut client_shutdown = shutdown_rx.resubscribe();
-                        tokio::spawn(async move {
-                            let (reader, mut writer) = tokio::io::split(stream);
-                            let mut lines = BufReader::new(reader).lines();
-                            loop {
-                                tokio::select! {
-                                    _ = client_shutdown.recv() => break,
-                                    line = lines.next_line() => {
-                                        match line {
-                                            Ok(Some(l)) => {
-                                                let trimmed = l.trim();
-                                                if trimmed.is_empty() {
-                                                    continue;
-                                                }
-                                                if let Ok(envelope) = serde_json::from_str::<RpcEnvelope>(trimmed) {
-                                                    let resp = dispatch_envelope(envelope).await;
-                                                    if let Ok(mut json) = serde_json::to_string(&resp) {
-                                                        json.push('\n');
-                                                        if writer.write_all(json.as_bytes()).await.is_err() {
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            _ => break,
-                                        }
-                                    }
-                                }
-                            }
-                        });
+                        tokio::spawn(serve_ipc(stream, shutdown_rx.resubscribe(), access.clone()));
                     }
                     Err(_) => break,
                 }
@@ -4552,7 +5966,7 @@ pub(crate) fn get_provider_snapshot_metadata_entries() -> Vec<serde_json::Value>
                 { "id": "allow-all", "label": "Allow All", "description": "Approve all Copilot tool requests", "colorTier": "dangerous" }
             ],
             "models": []
-        })
+        }),
     ]
 }
 
@@ -4564,7 +5978,15 @@ pub(crate) async fn get_provider_snapshot_entries(cwd: &str) -> Vec<serde_json::
         }
     }
 
-    let (codex_models, claude_models, opencode_models, ollama_models, pi_models, omp_models, copilot_available) = tokio::join!(
+    let (
+        codex_models,
+        claude_models,
+        opencode_models,
+        ollama_models,
+        pi_models,
+        omp_models,
+        copilot_available,
+    ) = tokio::join!(
         discover_codex_models(cwd),
         discover_claude_configured_model(),
         discover_opencode_models(cwd),
@@ -4584,7 +6006,10 @@ pub(crate) async fn get_provider_snapshot_entries(cwd: &str) -> Vec<serde_json::
     let mut entries = get_provider_snapshot_metadata_entries();
 
     for entry in &mut entries {
-        let provider = entry.get("provider").and_then(serde_json::Value::as_str).unwrap_or("");
+        let provider = entry
+            .get("provider")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
         // ACP-binary providers (copilot) get availability from binary check, not model count.
         // Their model list is populated dynamically at session time via ACP session/new.
         if provider == "copilot" {
@@ -4611,12 +6036,26 @@ pub(crate) async fn discover_pi_models(cwd: &str) -> Vec<serde_json::Value> {
     let binary = std::env::var("PI_COMMAND")
         .or_else(|_| std::env::var("PI_ACP_PI_COMMAND"))
         .unwrap_or_else(|_| "pi".to_owned());
-    discover_jsonl_cli_models(&binary, &["--mode", "rpc"], cwd, false, pi_models_from_response).await
+    discover_jsonl_cli_models(
+        &binary,
+        &["--mode", "rpc"],
+        cwd,
+        false,
+        pi_models_from_response,
+    )
+    .await
 }
 
 async fn discover_omp_models(cwd: &str) -> Vec<serde_json::Value> {
     let binary = std::env::var("OMP_COMMAND").unwrap_or_else(|_| "omp".to_owned());
-    discover_jsonl_cli_models(&binary, &["--mode", "rpc-ui"], cwd, true, omp_models_from_response).await
+    discover_jsonl_cli_models(
+        &binary,
+        &["--mode", "rpc-ui"],
+        cwd,
+        true,
+        omp_models_from_response,
+    )
+    .await
 }
 
 /// Returns `true` when the Copilot binary is available.
@@ -4714,7 +6153,8 @@ async fn discover_jsonl_cli_models(
                             }
                         }
                     }
-                }).await;
+                })
+                .await;
             }
         }
 
@@ -4722,7 +6162,11 @@ async fn discover_jsonl_cli_models(
             "id": "kronos-model-catalog",
             "type": "get_available_models"
         });
-        if stdin.write_all(format!("{request}\n").as_bytes()).await.is_err() {
+        if stdin
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .is_err()
+        {
             let _ = child.kill().await;
             return None;
         }
@@ -4740,22 +6184,32 @@ async fn discover_jsonl_cli_models(
                         chunks.push(value);
                         if let Some(target) = expected_count {
                             if chunks.len() >= target {
-                                chunks.sort_by_key(|c| c.get("index").and_then(|v| v.as_u64()).unwrap_or(0));
+                                chunks.sort_by_key(|c| {
+                                    c.get("index").and_then(|v| v.as_u64()).unwrap_or(0)
+                                });
                                 use base64::Engine;
                                 let mut full_bytes = Vec::new();
                                 for chunk in &chunks {
-                                    if let Some(data_str) = chunk.get("data").and_then(|v| v.as_str()) {
-                                        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(data_str) {
+                                    if let Some(data_str) =
+                                        chunk.get("data").and_then(|v| v.as_str())
+                                    {
+                                        if let Ok(decoded) =
+                                            base64::engine::general_purpose::STANDARD
+                                                .decode(data_str)
+                                        {
                                             full_bytes.extend_from_slice(&decoded);
                                         }
                                     }
                                 }
-                                if let Ok(reassembled) = serde_json::from_slice::<serde_json::Value>(&full_bytes) {
+                                if let Ok(reassembled) =
+                                    serde_json::from_slice::<serde_json::Value>(&full_bytes)
+                                {
                                     return Some(reassembled);
                                 }
                             }
                         }
-                    } else if value.get("type").and_then(serde_json::Value::as_str) == Some("response")
+                    } else if value.get("type").and_then(serde_json::Value::as_str)
+                        == Some("response")
                         && value.get("id").and_then(serde_json::Value::as_str)
                             == Some("kronos-model-catalog")
                     {
@@ -4769,10 +6223,14 @@ async fn discover_jsonl_cli_models(
         .ok()
         .flatten();
         let _ = child.kill().await;
-        Some(response
-            .filter(|value| value.get("success").and_then(serde_json::Value::as_bool) == Some(true))
-            .map(|value| parse(&value["data"]))
-            .unwrap_or_default())
+        Some(
+            response
+                .filter(|value| {
+                    value.get("success").and_then(serde_json::Value::as_bool) == Some(true)
+                })
+                .map(|value| parse(&value["data"]))
+                .unwrap_or_default(),
+        )
     };
 
     tokio::time::timeout(Duration::from_secs(10), discovery)
@@ -4788,6 +6246,20 @@ pub(crate) fn pi_models_from_response(data: &serde_json::Value) -> Vec<serde_jso
 
 pub(crate) fn omp_models_from_response(data: &serde_json::Value) -> Vec<serde_json::Value> {
     runtime_cli_models(data, "omp")
+}
+
+fn extract_context_window(value: &serde_json::Value) -> Option<u64> {
+    value
+        .get("contextWindow")
+        .or_else(|| value.get("context_window"))
+        .or_else(|| value.get("contextWindowMaxTokens"))
+        .or_else(|| value.get("modelContextWindow"))
+        .or_else(|| value.get("model_context_window"))
+        .or_else(|| value.pointer("/limit/context"))
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
+        })
 }
 
 fn runtime_cli_models(data: &serde_json::Value, provider_name: &str) -> Vec<serde_json::Value> {
@@ -4812,7 +6284,7 @@ fn runtime_cli_models(data: &serde_json::Value, provider_name: &str) -> Vec<serd
                 model.get("name").and_then(serde_json::Value::as_str),
                 None,
                 false,
-                model.get("contextWindow").and_then(serde_json::Value::as_u64),
+                extract_context_window(model),
             );
             apply_runtime_thinking_options(&mut definition, model, provider_name);
             Some(definition)
@@ -4831,35 +6303,55 @@ fn apply_runtime_thinking_options(
     if provider == "pi" {
         // Mirrors Pi's getSupportedThinkingLevels and upward-first clampThinkingLevel.
         let levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-        let mapping = model.get("thinkingLevelMap").and_then(serde_json::Value::as_object);
-        let supported: Vec<&str> = levels.iter().copied().filter(|level| {
-            let mapped = mapping.and_then(|mapping| mapping.get(*level));
-            !mapped.is_some_and(serde_json::Value::is_null)
-                && (!matches!(*level, "xhigh" | "max") || mapped.is_some())
-        }).collect();
-        let default = levels[3..].iter().copied().find(|level| supported.contains(level))
+        let mapping = model
+            .get("thinkingLevelMap")
+            .and_then(serde_json::Value::as_object);
+        let supported: Vec<&str> = levels
+            .iter()
+            .copied()
+            .filter(|level| {
+                let mapped = mapping.and_then(|mapping| mapping.get(*level));
+                !mapped.is_some_and(serde_json::Value::is_null)
+                    && (!matches!(*level, "xhigh" | "max") || mapped.is_some())
+            })
+            .collect();
+        let default = levels[3..]
+            .iter()
+            .copied()
+            .find(|level| supported.contains(level))
             .or_else(|| supported.last().copied());
-        let options = supported.iter().map(|level| thinking_option(level, None)).collect();
+        let options = supported
+            .iter()
+            .map(|level| thinking_option(level, None))
+            .collect();
         set_model_thinking_options(definition, options, default);
     } else if provider == "omp" {
         // Current OMP getSupportedEfforts treats a missing ladder as uncontrollable.
         let mut seen = std::collections::HashSet::new();
-        let efforts: Vec<&str> = model.pointer("/thinking/efforts")
-            .and_then(serde_json::Value::as_array).into_iter().flatten()
+        let efforts: Vec<&str> = model
+            .pointer("/thinking/efforts")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
             .filter_map(serde_json::Value::as_str)
             .filter(|effort| !effort.trim().is_empty() && seen.insert(*effort))
             .collect();
         if efforts.is_empty() {
             return;
         }
-        let default = model.pointer("/thinking/defaultLevel")
+        let default = model
+            .pointer("/thinking/defaultLevel")
             .and_then(serde_json::Value::as_str)
             .filter(|level| efforts.contains(level))
             .or_else(|| efforts.first().copied());
         // Off and Auto are OMP session selectors, not entries in the model effort ladder.
         let mut options = vec![thinking_option("off", None), thinking_option("auto", None)];
-        options.extend(efforts.iter().filter(|level| !matches!(**level, "off" | "auto"))
-            .map(|level| thinking_option(level, None)));
+        options.extend(
+            efforts
+                .iter()
+                .filter(|level| !matches!(**level, "off" | "auto"))
+                .map(|level| thinking_option(level, None)),
+        );
         set_model_thinking_options(definition, options, default);
     }
 }
@@ -4880,7 +6372,11 @@ fn set_model_thinking_options(
     if options.is_empty() {
         return;
     }
-    let default = default.filter(|id| options.iter().any(|option| option["id"].as_str() == Some(*id)));
+    let default = default.filter(|id| {
+        options
+            .iter()
+            .any(|option| option["id"].as_str() == Some(*id))
+    });
     for option in &mut options {
         option["isDefault"] = serde_json::json!(option["id"].as_str() == default);
     }
@@ -4934,7 +6430,11 @@ pub(crate) async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
                 }
             }
         });
-        if stdin.write_all(format!("{initialize}\n").as_bytes()).await.is_err() {
+        if stdin
+            .write_all(format!("{initialize}\n").as_bytes())
+            .await
+            .is_err()
+        {
             let _ = child.kill().await;
             return None;
         }
@@ -4971,7 +6471,11 @@ pub(crate) async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
             "method": "model/list",
             "params": {}
         });
-        if stdin.write_all(format!("{notification}\n{request}\n").as_bytes()).await.is_err() {
+        if stdin
+            .write_all(format!("{notification}\n{request}\n").as_bytes())
+            .await
+            .is_err()
+        {
             let _ = child.kill().await;
             return None;
         }
@@ -4991,7 +6495,11 @@ pub(crate) async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
         .ok()
         .flatten();
         let _ = child.kill().await;
-        Some(response.map(|value| codex_models_from_response(&value)).unwrap_or_default())
+        Some(
+            response
+                .map(|value| codex_models_from_response(&value))
+                .unwrap_or_default(),
+        )
     };
 
     tokio::time::timeout(Duration::from_secs(10), discovery)
@@ -5018,21 +6526,36 @@ pub(crate) fn codex_models_from_response(response: &serde_json::Value) -> Vec<se
                 id,
                 model.get("displayName").and_then(serde_json::Value::as_str),
                 model.get("description").and_then(serde_json::Value::as_str),
-                model.get("isDefault").and_then(serde_json::Value::as_bool).unwrap_or(false),
-                model.get("contextWindow").and_then(serde_json::Value::as_u64),
+                model
+                    .get("isDefault")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                extract_context_window(model),
             );
             let mut effort_ids = std::collections::HashSet::new();
-            let mut options: Vec<serde_json::Value> = model.get("supportedReasoningEfforts")
-                .and_then(serde_json::Value::as_array).into_iter().flatten()
+            let mut options: Vec<serde_json::Value> = model
+                .get("supportedReasoningEfforts")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
                 .filter_map(|effort| {
                     let id = effort.get("reasoningEffort")?.as_str()?.trim();
                     if id.is_empty() || !effort_ids.insert(id) {
                         return None;
                     }
-                    Some(thinking_option(id, effort.get("description").and_then(serde_json::Value::as_str)))
-                }).collect();
-            let default = model.get("defaultReasoningEffort").and_then(serde_json::Value::as_str)
-                .map(str::trim).filter(|id| !id.is_empty());
+                    Some(thinking_option(
+                        id,
+                        effort
+                            .get("description")
+                            .and_then(serde_json::Value::as_str),
+                    ))
+                })
+                .collect();
+            let default = model
+                .get("defaultReasoningEffort")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty());
             if let Some(default) = default {
                 if effort_ids.insert(default) {
                     options.push(thinking_option(default, None));
@@ -5069,7 +6592,7 @@ async fn discover_claude_configured_model() -> Vec<serde_json::Value> {
             Some(model_id),
             Some("Configured Claude model"),
             true,
-            Some(200_000),
+            None,
         )];
     }
 
@@ -5080,8 +6603,14 @@ pub(crate) async fn read_claude_settings_model(config_dir: &std::path::Path) -> 
     let settings_path = config_dir.join("settings.json");
     let raw = tokio::fs::read_to_string(settings_path).await.ok()?;
     let settings: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let model = settings.get("model").and_then(serde_json::Value::as_str)
-        .or_else(|| settings.pointer("/env/ANTHROPIC_MODEL").and_then(serde_json::Value::as_str))?;
+    let model = settings
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            settings
+                .pointer("/env/ANTHROPIC_MODEL")
+                .and_then(serde_json::Value::as_str)
+        })?;
     let model = model.trim();
     (!model.is_empty()).then(|| model.to_owned())
 }
@@ -5117,10 +6646,12 @@ async fn discover_opencode_models(cwd: &str) -> Vec<serde_json::Value> {
 
     // 2. Fall back to OpenCode HTTP server if running
     let base_url = normalize_http_endpoint(
-        std::env::var("OPENCODE_SERVER_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:4096".to_owned()),
+        std::env::var("OPENCODE_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:4096".to_owned()),
     );
-    let client = match reqwest::Client::builder().timeout(Duration::from_secs(2)).build() {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    {
         Ok(client) => client,
         Err(_) => return Vec::new(),
     };
@@ -5154,17 +6685,27 @@ pub(crate) fn opencode_models_from_response(value: &serde_json::Value) -> Vec<se
         .into_iter()
         .flatten()
         .filter(|provider| {
-            let id = provider.get("id").and_then(serde_json::Value::as_str).unwrap_or("");
+            let id = provider
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
             connected_ids.contains(id)
                 || provider.get("source").and_then(serde_json::Value::as_str) == Some("api")
         })
         .flat_map(|provider| {
-            let provider_id = provider.get("id").and_then(serde_json::Value::as_str).unwrap_or("");
-            provider.get("models").and_then(serde_json::Value::as_object)
+            let provider_id = provider
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            provider
+                .get("models")
+                .and_then(serde_json::Value::as_object)
                 .into_iter()
-                .flat_map(move |models| models.iter().filter_map(move |(model_id, details)| {
-                    opencode_model_definition(provider_id, model_id, details)
-                }))
+                .flat_map(move |models| {
+                    models.iter().filter_map(move |(model_id, details)| {
+                        opencode_model_definition(provider_id, model_id, details)
+                    })
+                })
         })
         .collect()
 }
@@ -5182,7 +6723,10 @@ pub(crate) fn opencode_models_from_cli_output(text: &str) -> Vec<serde_json::Val
             break;
         };
         remaining = &remaining[start + stream.byte_offset()..];
-        let Some(provider) = details.get("providerID").and_then(serde_json::Value::as_str) else {
+        let Some(provider) = details
+            .get("providerID")
+            .and_then(serde_json::Value::as_str)
+        else {
             continue;
         };
         let Some(id) = details.get("id").and_then(serde_json::Value::as_str) else {
@@ -5209,30 +6753,47 @@ fn opencode_model_definition(
         "opencode",
         &format!("{provider}/{id}"),
         details.get("name").and_then(serde_json::Value::as_str),
-        details.get("description").and_then(serde_json::Value::as_str),
-        details.get("default").and_then(serde_json::Value::as_bool).unwrap_or(false),
-        details.pointer("/limit/context").and_then(serde_json::Value::as_u64),
+        details
+            .get("description")
+            .and_then(serde_json::Value::as_str),
+        details
+            .get("default")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        extract_context_window(details),
     );
-    if let Some(variants) = details.get("variants").and_then(serde_json::Value::as_object)
-        .filter(|variants| !variants.is_empty()
-            && details.pointer("/capabilities/reasoning")
-                .or_else(|| details.get("reasoning"))
-                .and_then(serde_json::Value::as_bool) != Some(false))
+    if let Some(variants) = details
+        .get("variants")
+        .and_then(serde_json::Value::as_object)
+        .filter(|variants| {
+            !variants.is_empty()
+                && details
+                    .pointer("/capabilities/reasoning")
+                    .or_else(|| details.get("reasoning"))
+                    .and_then(serde_json::Value::as_bool)
+                    != Some(false)
+        })
     {
         // OpenCode's Default omits the variant and lets its own runtime resolve it.
         let mut options = vec![serde_json::json!({ "id": "default", "label": "Default" })];
-        options.extend(variants.keys().filter(|id| id.as_str() != "default")
-            .map(|id| thinking_option(id, None)));
+        options.extend(
+            variants
+                .keys()
+                .filter(|id| id.as_str() != "default")
+                .map(|id| thinking_option(id, None)),
+        );
         set_model_thinking_options(&mut model, options, Some("default"));
     }
     Some(model)
 }
 async fn discover_ollama_models() -> Vec<serde_json::Value> {
     let endpoint = normalize_http_endpoint(
-        std::env::var("OLLAMA_HOST")
-            .unwrap_or_else(|_| "http://127.0.0.1:11434".to_owned()),
+        std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11434".to_owned()),
     );
-    let client = match reqwest::Client::builder().timeout(Duration::from_secs(2)).build() {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    {
         Ok(client) => client,
         Err(_) => return Vec::new(),
     };
@@ -5258,18 +6819,22 @@ pub(crate) fn ollama_models_from_response(response: &serde_json::Value) -> Vec<s
             if name.trim().is_empty() || !seen.insert(name) {
                 return None;
             }
-            let parameter_size = model.pointer("/details/parameter_size")
+            let parameter_size = model
+                .pointer("/details/parameter_size")
                 .and_then(serde_json::Value::as_str);
             let label = parameter_size
                 .map(|size| format!("{name} ({size})"))
                 .unwrap_or_else(|| name.to_owned());
-            let family = model.pointer("/details/family")
+            let family = model
+                .pointer("/details/family")
                 .and_then(serde_json::Value::as_str);
             Some(dynamic_model(
                 "ollama",
                 &format!("ollama/{name}"),
                 Some(&label),
-                family.map(|value| format!("Local Ollama model from the {value} family")).as_deref(),
+                family
+                    .map(|value| format!("Local Ollama model from the {value} family"))
+                    .as_deref(),
                 false,
                 None,
             ))

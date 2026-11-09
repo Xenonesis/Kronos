@@ -9,7 +9,8 @@ const targetDir = path.join(__dirname, "server-dist");
 console.log("Preparing lean server-dist for Tauri bundle...");
 
 const withNode =
-  process.argv.includes("--with-node") || process.env.KRONOS_WITH_NODE === "1";
+  !process.argv.includes("--without-node") &&
+  (process.argv.includes("--with-node") || process.env.KRONOS_WITH_NODE === "1");
 const withoutNode = !withNode;
 
 if (withoutNode) {
@@ -33,7 +34,7 @@ if (withoutNode) {
     JSON.stringify(
       {
         name: "@getpaseo/server-dist",
-        version: "0.15.0-beta.1",
+        version: JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8")).version,
         private: true,
       },
       null,
@@ -55,7 +56,7 @@ if (fs.existsSync(distDir)) {
 }
 fs.mkdirSync(targetDir, { recursive: true });
 // Copy server dist
-console.log("Copying server dist (1,843 files)...");
+console.log("Copying current server dist...");
 fs.cpSync(path.join(root, "packages/server/dist"), path.join(targetDir, "dist"), {
   recursive: true,
 });

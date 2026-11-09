@@ -142,7 +142,15 @@ export default {
       searchPaths: ["../../node_modules", "./node_modules"],
     },
     plugins: [
-      "expo-router",
+      [
+        "expo-router",
+        {
+          asyncRoutes: {
+            web: true,
+            default: false,
+          },
+        },
+      ],
       withPasteInput,
       withAndroidScroll,
       [withAndroidAsyncStorageSize, 64],

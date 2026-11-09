@@ -190,6 +190,119 @@ pub fn execute_search_in(
     index.search(query)
 }
 
+struct CachedSearchIndex {
+    index: std::sync::Arc<crate::kernel::search::WorkspaceSearchIndex>,
+    indexed_at: std::time::Instant,
+    file_mtimes: std::collections::HashMap<std::path::PathBuf, std::time::SystemTime>,
+}
+
+static SEARCH_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, CachedSearchIndex>>,
+> = std::sync::OnceLock::new();
+
+fn get_search_cache() -> &'static std::sync::Mutex<
+    std::collections::HashMap<std::path::PathBuf, CachedSearchIndex>,
+> {
+    SEARCH_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Executes workspace lexical search with an in-memory cached Tantivy index.
+/// Consecutive keystrokes in command-center search reuse the warm index (< 1ms).
+pub fn execute_cached_search_in(
+    query: &str,
+    root: &std::path::Path,
+) -> Result<Vec<crate::kernel::search::SearchResult>, String> {
+    let canon_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let mut cache = get_search_cache()
+        .lock()
+        .map_err(|e| format!("Search cache lock poisoned: {e}"))?;
+
+    if let Some(entry) = cache.get_mut(&canon_root) {
+        if entry.indexed_at.elapsed() < std::time::Duration::from_secs(15) {
+            return entry.index.search(query);
+        }
+
+        let mut modified = Vec::new();
+        for (path, last_mtime) in &entry.file_mtimes {
+            if let Ok(meta) = std::fs::metadata(path) {
+                if let Ok(mtime) = meta.modified() {
+                    if mtime > *last_mtime {
+                        modified.push(path.clone());
+                    }
+                }
+            }
+        }
+
+        if !modified.is_empty() {
+            for mod_path in modified {
+                if let Ok(content) = std::fs::read_to_string(&mod_path) {
+                    let path_str = mod_path.to_string_lossy().to_string();
+                    let _ = entry.index.update_document(&path_str, &content);
+                    if let Ok(meta) = std::fs::metadata(&mod_path) {
+                        if let Ok(mtime) = meta.modified() {
+                            entry.file_mtimes.insert(mod_path, mtime);
+                        }
+                    }
+                }
+            }
+        }
+
+        entry.indexed_at = std::time::Instant::now();
+        return entry.index.search(query);
+    }
+
+    let index = std::sync::Arc::new(crate::kernel::search::WorkspaceSearchIndex::new_in_memory()?);
+    let mut files = Vec::new();
+    collect_search_files(&canon_root, 0, 10, &mut files, 1000);
+
+    let mut doc_payloads: Vec<(String, String)> = Vec::new();
+    let mut file_mtimes = std::collections::HashMap::new();
+
+    for path in files {
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.len() > 1_048_576 {
+                continue;
+            }
+            if let Ok(mtime) = meta.modified() {
+                file_mtimes.insert(path.clone(), mtime);
+            }
+        }
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            let path_str = path.to_string_lossy().to_string();
+            doc_payloads.push((path_str, content));
+        }
+    }
+
+    let doc_refs: Vec<(&str, &str)> = doc_payloads
+        .iter()
+        .map(|(p, c)| (p.as_str(), c.as_str()))
+        .collect();
+
+    index.index_documents_batch(&doc_refs)?;
+    let results = index.search(query)?;
+
+    if cache.len() >= 4 {
+        if let Some(oldest_key) = cache
+            .iter()
+            .min_by_key(|(_, v)| v.indexed_at)
+            .map(|(k, _)| k.clone())
+        {
+            cache.remove(&oldest_key);
+        }
+    }
+
+    cache.insert(
+        canon_root,
+        CachedSearchIndex {
+            index,
+            indexed_at: std::time::Instant::now(),
+            file_mtimes,
+        },
+    );
+
+    Ok(results)
+}
+
 /// Single search match representing either a lexical document match or a directory suggestion fallback.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct CliSearchMatch {
@@ -758,7 +871,10 @@ pub fn dispatch(args: CliArgs) -> Option<i32> {
             println!("Version: {}", env!("CARGO_PKG_VERSION"));
             println!("OS: {} ({})", std::env::consts::OS, std::env::consts::ARCH);
             println!("Git CLI: {}", if crate::agent::registry::is_command_available("git") { "AVAILABLE" } else { "NOT FOUND" });
+            #[cfg(feature = "local-whisper")]
             println!("Whisper Voice Engine: EMBEDDED (C++/Rust whisper.cpp)");
+            #[cfg(not(feature = "local-whisper"))]
+            println!("Whisper Voice Engine: DISABLED (Cloud-only voice engine)");
             println!("IoRing Engine: AVAILABLE (Windows 11 Kernel IORING)");
             println!("Memory Telemetry: AVAILABLE (Win32 PSAPI)");
             Some(0)

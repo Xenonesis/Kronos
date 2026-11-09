@@ -31,8 +31,21 @@ export function generateMessageId(): string {
   return `msg_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
 }
 
-function createTimelineId(prefix: string, text: string, timestamp: Date): string {
-  return `${prefix}_${timestamp.getTime()}_${simpleHash(text)}`;
+function toTimestampMs(val: unknown): number {
+  if (val instanceof Date) {
+    const t = val.getTime();
+    return Number.isFinite(t) ? t : 0;
+  }
+  if (typeof val === "number" && Number.isFinite(val)) return val;
+  if (typeof val === "string") {
+    const parsed = Date.parse(val);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function createTimelineId(prefix: string, text: string, timestamp: Date | string | number): string {
+  return `${prefix}_${toTimestampMs(timestamp)}_${simpleHash(text)}`;
 }
 
 function createUniqueTimelineId(
@@ -66,7 +79,7 @@ function createAssistantItemId(
     return messageId;
   }
 
-  const segmentId = `${messageId}:segment:${timestamp.getTime().toString(36)}`;
+  const segmentId = `${messageId}:segment:${toTimestampMs(timestamp).toString(36)}`;
   if (!isOccupied(segmentId)) {
     return segmentId;
   }

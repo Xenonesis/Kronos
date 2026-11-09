@@ -379,6 +379,7 @@
         "packages/app/src/projects/icons.ts",
         "packages/app/src/provider-usage/use-provider-usage.ts",
         "packages/app/src/screens/project-settings-screen.tsx",
+        "packages/app/src/screens/settings/project/project-settings-body.tsx",
         "packages/app/src/screens/workspace/use-workspace-checkout-status.ts",
         "packages/app/src/workspace/desktop-open-targets.ts"
       ],
@@ -618,6 +619,7 @@
         "packages/app/src/review/surface.tsx",
         "packages/app/src/screens/open-project-screen.tsx",
         "packages/app/src/screens/project-settings-screen.tsx",
+        "packages/app/src/screens/settings/project/project-settings-body.tsx",
         "packages/app/src/screens/projects-screen.tsx",
         "packages/app/src/screens/settings-screen.tsx",
         "packages/app/src/screens/settings/about-section.tsx",
@@ -627,6 +629,7 @@
         "packages/app/src/screens/settings/providers-section.tsx",
         "packages/app/src/screens/settings/settings-sidebar-content.tsx",
         "packages/app/src/screens/workspace/compact-workspace-header/tab-switcher.tsx",
+        "packages/app/src/screens/workspace/desktop-tabs/tab-chip.tsx",
         "packages/app/src/screens/workspace/scripts/workspace-scripts-button.tsx",
         "packages/app/src/screens/workspace/workspace-desktop-tabs-row.tsx",
         "packages/app/src/screens/workspace/workspace-tab-presentation.tsx",

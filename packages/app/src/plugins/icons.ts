@@ -1,6 +1,6 @@
 import { createElement, type ComponentType, type ReactElement } from "react";
-import * as LucideIcons from "lucide-react-native";
 import type { LucideIcon } from "lucide-react-native";
+import { KNOWN_LUCIDE_ICON_NAMES } from "./lucide-icon-names";
 import {
   findSvgIconProblem,
   type PluginIconProps,
@@ -11,18 +11,78 @@ import type { PluginIcon } from "@getpaseo/plugin/client";
 import type { IconProps } from "@getpaseo/plugin/client/ui";
 import { SvgIcon } from "@/components/provider-icons";
 
+import Settings from "lucide-react-native/icons/settings";
+import ShieldOff from "lucide-react-native/icons/shield-off";
+import ShieldAlert from "lucide-react-native/icons/shield-alert";
+import ShieldCheck from "lucide-react-native/icons/shield-check";
+import Wrench from "lucide-react-native/icons/wrench";
+import Folder from "lucide-react-native/icons/folder";
+import File from "lucide-react-native/icons/file";
+import Terminal from "lucide-react-native/icons/terminal";
+import Code from "lucide-react-native/icons/code";
+import Plus from "lucide-react-native/icons/plus";
+import Check from "lucide-react-native/icons/check";
+import Search from "lucide-react-native/icons/search";
+import ExternalLink from "lucide-react-native/icons/external-link";
+import ChevronDown from "lucide-react-native/icons/chevron-down";
+import ChevronRight from "lucide-react-native/icons/chevron-right";
+import X from "lucide-react-native/icons/x";
+import Server from "lucide-react-native/icons/server";
+import GitBranch from "lucide-react-native/icons/git-branch";
+import Cpu from "lucide-react-native/icons/cpu";
+import Database from "lucide-react-native/icons/database";
+import Globe from "lucide-react-native/icons/globe";
+import Layers from "lucide-react-native/icons/layers";
+import Package from "lucide-react-native/icons/package";
+import Sparkles from "lucide-react-native/icons/sparkles";
+import Bot from "lucide-react-native/icons/bot";
+import Brain from "lucide-react-native/icons/brain";
+
 /** Host surfaces may thin a Lucide stroke; SVG and plugin components ignore it. */
 type HostIconProps = PluginIconProps & { strokeWidth?: number };
 /** A host-drawn icon. A plain function, so it stands in for any plugin icon component type. */
 type HostIcon = (props: HostIconProps) => ReactElement | null;
 
+const COMMON_LUCIDE_ICONS: Record<string, LucideIcon> = {
+  Settings,
+  ShieldOff,
+  ShieldAlert,
+  ShieldCheck,
+  Wrench,
+  wrench: Wrench,
+  Folder,
+  File,
+  Terminal,
+  Code,
+  Plus,
+  Check,
+  Search,
+  ExternalLink,
+  ChevronDown,
+  ChevronRight,
+  X,
+  Server,
+  GitBranch,
+  Cpu,
+  Database,
+  Globe,
+  Layers,
+  Package,
+  Sparkles,
+  Bot,
+  Brain,
+};
+
 const lucideIconComponents = new Map<string, HostIcon>();
 const svgIconComponents = new Map<string, HostIcon>();
 
+function isKnownLucideIcon(name: string): boolean {
+  return KNOWN_LUCIDE_ICON_NAMES.has(name) || name in COMMON_LUCIDE_ICONS;
+}
+
 function findLucideIcon(name: string): LucideIcon | null {
-  const candidate = Reflect.get(LucideIcons, name);
-  if (candidate === LucideIcons.Icon || candidate === LucideIcons.createLucideIcon) return null;
-  return isComponent(candidate) ? (candidate as LucideIcon) : null;
+  if (!isKnownLucideIcon(name)) return null;
+  return COMMON_LUCIDE_ICONS[name] ?? null;
 }
 
 function isComponent(value: unknown): boolean {

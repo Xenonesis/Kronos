@@ -36,13 +36,28 @@ const EMPTY_OPEN_TURN: OpenTurn = {
   previousItem: null,
 };
 
+function toTimestampMs(val: unknown): number {
+  if (val instanceof Date) {
+    const t = val.getTime();
+    return Number.isFinite(t) ? t : 0;
+  }
+  if (typeof val === "number" && Number.isFinite(val)) return val;
+  if (typeof val === "string") {
+    const parsed = Date.parse(val);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
 function closeTurn(turn: OpenTurn, into: Map<string, TurnTiming>): void {
   if (!turn.lastItemAt) {
     return;
   }
+  const lastTime = toTimestampMs(turn.lastItemAt);
+  const userTime = turn.userAt ? toTimestampMs(turn.userAt) : null;
   const timing: TurnTiming = {
-    completedAt: turn.lastItemAt,
-    durationMs: turn.userAt ? Math.max(0, turn.lastItemAt.getTime() - turn.userAt.getTime()) : null,
+    completedAt: turn.lastItemAt instanceof Date ? turn.lastItemAt : new Date(lastTime),
+    durationMs: userTime !== null ? Math.max(0, lastTime - userTime) : null,
   };
   let footerIds = turn.assistantIds;
   if (footerIds.length === 0 && turn.previousItem?.kind === "tool_call") {
@@ -86,7 +101,7 @@ function areTimingsEqual(a: Map<string, TurnTiming>, b: Map<string, TurnTiming>)
     const other = b.get(id);
     if (
       !other ||
-      other.completedAt.getTime() !== timing.completedAt.getTime() ||
+      toTimestampMs(other.completedAt) !== toTimestampMs(timing.completedAt) ||
       other.durationMs !== timing.durationMs
     ) {
       return false;

@@ -42,7 +42,10 @@ import {
   type ActiveTurnBehavior,
   type ServerInfoStatusPayload,
 } from "@getpaseo/protocol/messages";
-import { validateWSOutboundMessage } from "@getpaseo/protocol/validation/ws-outbound";
+import {
+  loadWSOutboundAotValidators,
+  validateWSOutboundMessage,
+} from "@getpaseo/protocol/validation/ws-outbound";
 import type {
   AgentStreamEventPayload,
   AgentSnapshotPayload,
@@ -1503,6 +1506,7 @@ export class DaemonClient {
   }
 
   private async attemptConnect(): Promise<void> {
+    void loadWSOutboundAotValidators();
     if (this.connectionState.status === "disposed") {
       this.rejectConnect(new Error("Daemon client is disposed"));
       return;
@@ -4010,12 +4014,13 @@ export class DaemonClient {
     return payload.notice ?? null;
   }
 
-  async setAgentModel(agentId: string, modelId: string | null): Promise<void> {
+  async setAgentModel(agentId: string, modelId: string | null, provider?: string): Promise<void> {
     const requestId = this.createRequestId();
     const message = SessionInboundMessageSchema.parse({
       type: "set_agent_model_request",
       agentId,
       modelId,
+      ...(provider ? { provider } : {}),
       requestId,
     });
     const payload = await this.sendRequest({

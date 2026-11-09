@@ -1,10 +1,10 @@
+use crate::kernel::server::{DaemonHandle, EmbeddedDaemon};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
-use crate::kernel::server::{DaemonHandle, EmbeddedDaemon};
 
 enum EmbeddedDaemonState {
     Stopped,
@@ -41,12 +41,24 @@ pub fn wait_for_daemon_health(max_attempts: usize) -> bool {
             let req =
                 b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:6767\r\nConnection: close\r\n\r\n";
             if stream.write_all(req).is_ok() {
-                let mut buf = [0u8; 64];
-                if let Ok(n) = stream.read(&mut buf) {
-                    if n > 0
-                        && (buf.starts_with(b"HTTP/1.1 200") || buf.starts_with(b"HTTP/1.0 200"))
-                    {
-                        return true;
+                let mut response = Vec::new();
+                if stream.take(64 * 1024).read_to_end(&mut response).is_ok()
+                    && (response.starts_with(b"HTTP/1.1 200")
+                        || response.starts_with(b"HTTP/1.0 200"))
+                {
+                    if let Some(body) = response.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                        if let Ok(payload) =
+                            serde_json::from_slice::<serde_json::Value>(&response[body + 4..])
+                        {
+                            let native = payload["engine"] == "kronos-rust-kernel";
+                            let node = env::var("KRONOS_DAEMON_ENGINE")
+                                .is_ok_and(|engine| engine.eq_ignore_ascii_case("node"))
+                                && payload["ready"] == true
+                                && payload["timestamp"].is_string();
+                            if payload["status"] == "ok" && (native || node) {
+                                return true;
+                            }
+                        }
                     }
                 }
             }
@@ -77,7 +89,10 @@ pub fn stop_embedded() {
     let rt = get_or_init_runtime();
     match old_state {
         EmbeddedDaemonState::Stopped => {}
-        EmbeddedDaemonState::Starting { cancel, join_handle } => {
+        EmbeddedDaemonState::Starting {
+            cancel,
+            join_handle,
+        } => {
             cancel.store(true, Ordering::SeqCst);
             let abort_handle = join_handle.abort_handle();
             let (tx, rx) = std::sync::mpsc::channel();
@@ -85,7 +100,10 @@ pub fn stop_embedded() {
                 let _ = join_handle.await;
                 let _ = tx.send(());
             });
-            if rx.recv_timeout(std::time::Duration::from_millis(2500)).is_err() {
+            if rx
+                .recv_timeout(std::time::Duration::from_millis(2500))
+                .is_err()
+            {
                 abort_handle.abort();
             }
         }
@@ -171,9 +189,7 @@ pub fn find_system_node() -> PathBuf {
             }
         }
         if let Ok(prog_files) = env::var("ProgramFiles") {
-            let prog_node = PathBuf::from(&prog_files)
-                .join("nodejs")
-                .join("node.exe");
+            let prog_node = PathBuf::from(&prog_files).join("nodejs").join("node.exe");
             if is_valid_node_executable(&prog_node) {
                 return prog_node;
             }
@@ -209,9 +225,16 @@ fn resolve_runtime() -> Option<(PathBuf, PathBuf, PathBuf)> {
                     res_dir.join("node")
                 };
                 let script_candidates = [
-                    res_dir.join("dist").join("server").join("server").join("daemon-worker.js"),
+                    res_dir
+                        .join("dist")
+                        .join("server")
+                        .join("server")
+                        .join("daemon-worker.js"),
                     res_dir.join("dist").join("server").join("daemon-worker.js"),
-                    res_dir.join("server").join("server").join("daemon-worker.js"),
+                    res_dir
+                        .join("server")
+                        .join("server")
+                        .join("daemon-worker.js"),
                 ];
                 for res_script in &script_candidates {
                     if res_script.exists() {
@@ -311,7 +334,10 @@ pub fn find_pid_listening_on_port(port: u16) -> Option<u32> {
 
 #[cfg(not(windows))]
 pub fn find_pid_listening_on_port(port: u16) -> Option<u32> {
-    if let Ok(output) = Command::new("lsof").args(["-ti", &format!(":{}", port)]).output() {
+    if let Ok(output) = Command::new("lsof")
+        .args(["-ti", &format!(":{}", port)])
+        .output()
+    {
         if let Ok(text) = String::from_utf8(output.stdout) {
             for line in text.lines() {
                 if let Ok(pid) = line.trim().parse::<u32>() {
@@ -324,48 +350,15 @@ pub fn find_pid_listening_on_port(port: u16) -> Option<u32> {
     }
     None
 }
-#[cfg(windows)]
-fn ensure_port_clean() {
-    let current_pid = std::process::id();
-    if let Ok(output) = Command::new("netstat")
-        .args(["-aon"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-    {
-        if let Ok(text) = String::from_utf8(output.stdout) {
-            for line in text.lines() {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 4
-                    && parts[1].rsplit(':').next() == Some("6767")
-                {
-                    if let Some(pid_str) = parts.last() {
-                        if let Ok(pid) = pid_str.parse::<u32>() {
-                            if pid != 0 && pid != current_pid {
-                                let _ = Command::new("taskkill")
-                                    .args(["/F", "/PID", &pid.to_string()])
-                                    .creation_flags(CREATE_NO_WINDOW)
-                                    .output();
-                            }
-                        }
-                    }
-                }
-            }
+fn ensure_port_available() -> bool {
+    match std::net::TcpListener::bind("127.0.0.1:6767") {
+        Ok(listener) => {
+            drop(listener);
+            true
         }
-    }
-}
-
-#[cfg(not(windows))]
-fn ensure_port_clean() {
-    let current_pid = std::process::id();
-    if let Ok(output) = Command::new("lsof").args(["-ti:6767"]).output() {
-        if let Ok(text) = String::from_utf8(output.stdout) {
-            for line in text.lines() {
-                if let Ok(pid) = line.trim().parse::<u32>() {
-                    if pid != 0 && pid != current_pid {
-                        let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
-                    }
-                }
-            }
+        Err(error) => {
+            eprintln!("[Daemon] Port 6767 is occupied or unavailable ({error}); refusing to terminate an unowned process.");
+            false
         }
     }
 }
@@ -383,7 +376,11 @@ fn sanitize_windows_path(extra_dirs: &[PathBuf]) -> Option<String> {
         .split(';')
         .map(|p| p.trim())
         .filter(|p| !p.is_empty())
-        .filter(|p| !p.contains("whisper-rs-sys") && !p.contains("CMakeScratch") && !p.contains("CompilerId"))
+        .filter(|p| {
+            !p.contains("whisper-rs-sys")
+                && !p.contains("CMakeScratch")
+                && !p.contains("CompilerId")
+        })
         .collect();
 
     let mut deduplicated: Vec<String> = Vec::new();
@@ -423,7 +420,9 @@ fn sanitize_windows_path(extra_dirs: &[PathBuf]) -> Option<String> {
     }
     for git_dir in git_candidates {
         if std::path::Path::new(&git_dir).exists()
-            && !deduplicated.iter().any(|d| d.eq_ignore_ascii_case(&git_dir))
+            && !deduplicated
+                .iter()
+                .any(|d| d.eq_ignore_ascii_case(&git_dir))
         {
             deduplicated.push(git_dir);
         }
@@ -438,12 +437,13 @@ fn sanitize_windows_path(extra_dirs: &[PathBuf]) -> Option<String> {
     Some(deduplicated.join(";"))
 }
 
-
 pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
     if wait_for_daemon_health(1) {
         return None;
     }
-    ensure_port_clean();
+    if !ensure_port_available() {
+        return None;
+    }
     let (work_dir, node_bin, script_path) = resolve_runtime()?;
 
     let mut cmd = Command::new(&node_bin);
@@ -521,7 +521,8 @@ pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
                 eprintln!("[Daemon] Falling back to system node {:?}", sys_node);
                 let mut fallback_cmd = Command::new(&sys_node);
                 fallback_cmd.arg("--max-old-space-size=2048");
-                fallback_cmd.arg(&script_path)
+                fallback_cmd
+                    .arg(&script_path)
                     .env("PASEO_LISTEN", "127.0.0.1:6767")
                     .env("PASEO_PROVIDER_REFRESH_TIMEOUT_MS", &refresh_timeout)
                     .env("KRONOS_PROVIDER_REFRESH_TIMEOUT_MS", &refresh_timeout);
@@ -544,7 +545,9 @@ pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
                     fallback_cmd.env("NODE_PATH", node_paths.join(":"));
                 }
                 #[cfg(windows)]
-                if let Some(clean_path) = sanitize_windows_path(&[work_dir.clone(), local_nm.join(".bin")]) {
+                if let Some(clean_path) =
+                    sanitize_windows_path(&[work_dir.clone(), local_nm.join(".bin")])
+                {
                     fallback_cmd.env("PATH", &clean_path);
                 }
                 fallback_cmd.current_dir(&work_dir).stdin(Stdio::null());
@@ -566,7 +569,10 @@ pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
                 match fallback_cmd.spawn() {
                     Ok(c) => c,
                     Err(fallback_err) => {
-                        eprintln!("[Daemon] Fallback spawn failed with {:?}: {}", sys_node, fallback_err);
+                        eprintln!(
+                            "[Daemon] Fallback spawn failed with {:?}: {}",
+                            sys_node, fallback_err
+                        );
                         return None;
                     }
                 }
@@ -598,57 +604,58 @@ pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
     }
 
     stop_embedded();
-    ensure_port_clean();
-        let rt = get_or_init_runtime();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let cancel_flag = cancel.clone();
+    if !ensure_port_available() {
+        return None;
+    }
+    let rt = get_or_init_runtime();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_flag = cancel.clone();
 
-        let mut lock = match EMBEDDED_DAEMON.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+    let mut lock = match EMBEDDED_DAEMON.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
 
-        let join_handle = rt.spawn(async move {
-            let result = EmbeddedDaemon::start().await;
-            let handle_to_stop = match result {
-                Ok(handle) => {
-                    let mut lock = match EMBEDDED_DAEMON.lock() {
-                        Ok(guard) => guard,
-                        Err(poisoned) => poisoned.into_inner(),
-                    };
-                    if cancel_flag.load(Ordering::SeqCst) {
-                        *lock = EmbeddedDaemonState::Stopped;
-                        Some(handle)
-                    } else {
-                        *lock = EmbeddedDaemonState::Running(handle);
-                        None
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[EmbeddedDaemon] Failed to start: {}", e);
-                    let mut lock = match EMBEDDED_DAEMON.lock() {
-                        Ok(guard) => guard,
-                        Err(poisoned) => poisoned.into_inner(),
-                    };
+    let join_handle = rt.spawn(async move {
+        let result = EmbeddedDaemon::start().await;
+        let handle_to_stop = match result {
+            Ok(handle) => {
+                let mut lock = match EMBEDDED_DAEMON.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                if cancel_flag.load(Ordering::SeqCst) {
                     *lock = EmbeddedDaemonState::Stopped;
+                    Some(handle)
+                } else {
+                    *lock = EmbeddedDaemonState::Running(handle);
                     None
                 }
-            };
-
-            if let Some(handle) = handle_to_stop {
-                handle.stop().await;
             }
-        });
-
-        *lock = EmbeddedDaemonState::Starting {
-            cancel,
-            join_handle,
+            Err(e) => {
+                eprintln!("[EmbeddedDaemon] Failed to start: {}", e);
+                let mut lock = match EMBEDDED_DAEMON.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                *lock = EmbeddedDaemonState::Stopped;
+                None
+            }
         };
-        drop(lock);
 
-        None
-    }
+        if let Some(handle) = handle_to_stop {
+            handle.stop().await;
+        }
+    });
 
+    *lock = EmbeddedDaemonState::Starting {
+        cancel,
+        join_handle,
+    };
+    drop(lock);
+
+    None
+}
 
 pub fn stop_daemon(state: &DaemonState) {
     if let Ok(mut lock) = state.process.lock() {
@@ -665,7 +672,6 @@ pub fn stop_daemon(state: &DaemonState) {
         }
     }
     stop_embedded();
-    ensure_port_clean();
 }
 
 pub fn restart_daemon(state: &DaemonState) -> bool {
@@ -726,7 +732,10 @@ mod tests {
             process: Mutex::new(None),
         };
         let child = start_daemon(None);
-        assert!(child.is_none(), "Rust engine boots embedded daemon without external Child process");
+        assert!(
+            child.is_none(),
+            "Rust engine boots embedded daemon without external Child process"
+        );
         stop_daemon(&state);
         std::env::remove_var("KRONOS_DAEMON_ENGINE");
     }
@@ -741,13 +750,11 @@ mod tests {
         let _ = start_daemon(None);
         stop_daemon(&state);
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(!is_embedded_running(), "Daemon must not remain running after immediate stop");
+        assert!(
+            !is_embedded_running(),
+            "Daemon must not remain running after immediate stop"
+        );
         std::env::remove_var("KRONOS_DAEMON_ENGINE");
-    }
-    #[test]
-    fn test_ensure_port_clean_does_not_kill_self() {
-        ensure_port_clean();
-        assert_eq!(std::process::id(), std::process::id());
     }
 
     #[test]

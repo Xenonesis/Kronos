@@ -2,8 +2,8 @@
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 #[cfg(windows)]
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
-    JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 
@@ -61,6 +61,44 @@ impl JobSupervisor {
         self.assign_process_raw(process_handle)
     }
 
+    #[cfg(windows)]
+    pub fn terminate(&self) -> Result<(), String> {
+        unsafe {
+            if windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job_handle, 1) == 0 {
+                return Err(format!(
+                    "Failed to terminate provider Job Object: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    pub fn active_processes(&self) -> Result<u32, String> {
+        use windows_sys::Win32::System::JobObjects::{
+            JobObjectBasicAccountingInformation, QueryInformationJobObject,
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+        };
+        unsafe {
+            let mut info = std::mem::zeroed::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>();
+            if QueryInformationJobObject(
+                self.job_handle,
+                JobObjectBasicAccountingInformation,
+                &mut info as *mut _ as *mut _,
+                std::mem::size_of_val(&info) as u32,
+                std::ptr::null_mut(),
+            ) == 0
+            {
+                return Err(format!(
+                    "Failed to inspect provider Job Object: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            Ok(info.ActiveProcesses)
+        }
+    }
+
     #[cfg(not(windows))]
     pub fn assign_process_raw(&self, _process_handle: *mut std::ffi::c_void) -> Result<(), String> {
         Ok(())
@@ -90,7 +128,10 @@ mod tests {
     #[test]
     fn test_job_supervisor_creation() {
         let supervisor = JobSupervisor::new();
-        assert!(supervisor.is_ok(), "JobSupervisor should initialize successfully on Windows");
+        assert!(
+            supervisor.is_ok(),
+            "JobSupervisor should initialize successfully on Windows"
+        );
     }
 
     #[test]

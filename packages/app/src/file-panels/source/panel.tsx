@@ -1,4 +1,6 @@
 import {
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useMemo,
@@ -24,10 +26,23 @@ import type { Theme } from "@/styles/theme";
 import { FilePanelLoading } from "../loading";
 import type { FileConflictAlertState } from "./conflict-alert";
 import { FileEditorModel, getFileConflictCallout } from "./editor/model";
-import { FileEditorView } from "./editor/view";
+import type { FileEditorView as FileEditorViewType } from "./editor/view";
 import { selectSourcePresentation } from "./readonly/presentation";
-import { FileSourceView } from "./readonly/view";
+import type { FileSourceView as FileSourceViewType } from "./readonly/view";
 import { TextFileToolbar, type TextFileView } from "./toolbar";
+import { useAstSymbols } from "./ast/use-ast-symbols";
+import { SymbolPaletteModal } from "./ast/symbol-palette-modal";
+import type { AstSymbol } from "./ast/types";
+
+const LazyFileEditorView = lazy<typeof FileEditorViewType>(async () => {
+  const m = await import("./editor/view");
+  return { default: m.FileEditorView };
+});
+
+const LazyFileSourceView = lazy<typeof FileSourceViewType>(async () => {
+  const m = await import("./readonly/view");
+  return { default: m.FileSourceView };
+});
 
 // CodeMirror and native source rendering consume appearance as props. Subscribe at the
 // rendering leaf so theme updates reconfigure it without replacing the editor/model.
@@ -45,8 +60,8 @@ const sourceAppearance = (theme: Theme) => ({
     syntax: theme.colors.syntax,
   },
 });
-const ThemedFileEditorView = withUnistyles(FileEditorView, sourceAppearance);
-const ThemedFileSourceView = withUnistyles(FileSourceView, sourceAppearance);
+const ThemedFileEditorView = withUnistyles(LazyFileEditorView, sourceAppearance);
+const ThemedFileSourceView = withUnistyles(LazyFileSourceView, sourceAppearance);
 
 /** The daemon refuses to write larger files. */
 const MAX_EDITABLE_BYTES = 1024 * 1024;
@@ -118,10 +133,40 @@ function ReadonlyTextFile({
   const text = useFileText(file);
   const { t } = useTranslation();
   const [view, setView] = useTextFileView(params, revision);
+  const [targetLine, setTargetLine] = useState<number | null>(null);
+  const [targetRev, setTargetRev] = useState(revision);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  const activeLine = targetLine ?? params.lineStart;
   const sourceLocation = useMemo(
-    () => ({ path: params.path, lineStart: params.lineStart, lineEnd: params.lineEnd }),
-    [params.lineEnd, params.lineStart, params.path],
+    () => ({ path: params.path, lineStart: activeLine, lineEnd: activeLine }),
+    [activeLine, params.path],
   );
+
+  const { flattenedSymbols, activeSymbol } = useAstSymbols(
+    text.status === "ready" ? text.text : "",
+    params.path,
+    activeLine,
+  );
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "O" || e.key === "o")) {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("keydown", handleKeyDown);
+      return () => window.removeEventListener("keydown", handleKeyDown);
+    }
+  }, []);
+
+  const handleSelectSymbol = useCallback((sym: AstSymbol) => {
+    setTargetLine(sym.range.start_line);
+    setTargetRev((r) => r + 1);
+  }, []);
+
   if (text.status === "loading") return <FilePanelLoading />;
   if (text.status === "error") {
     return (
@@ -138,18 +183,29 @@ function ReadonlyTextFile({
         lineCount={text.text.split("\n").length}
         view={Preview ? view : undefined}
         onViewChange={Preview ? setView : undefined}
+        activeSymbol={activeSymbol}
+        hasSymbols={flattenedSymbols.length > 0}
+        onOpenSymbolPalette={() => setPaletteOpen(true)}
       />
       {showPreview ? (
         <Preview text={text.text} params={params} workspaceId={workspaceId} host={host} />
       ) : (
-        <ThemedFileSourceView
-          content={text.text}
-          filename={params.path}
-          location={sourceLocation}
-          navigationRevision={revision}
-          presentation={presentation}
-        />
+        <Suspense fallback={<FilePanelLoading />}>
+          <ThemedFileSourceView
+            content={text.text}
+            filename={params.path}
+            location={sourceLocation}
+            navigationRevision={targetRev}
+            presentation={presentation}
+          />
+        </Suspense>
       )}
+      <SymbolPaletteModal
+        visible={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        symbols={flattenedSymbols}
+        onSelectSymbol={handleSelectSymbol}
+      />
     </View>
   );
 }
@@ -169,7 +225,40 @@ function EditableTextFile({
   const [view, setView] = useTextFileView(params, revision);
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
   const [vimMode, setVimMode] = useState<string | null>(settings.vimKeybindings ? "NORMAL" : null);
+  const [targetLine, setTargetLine] = useState<number | null>(null);
+  const [targetRev, setTargetRev] = useState(revision);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const snapshot = useSyncExternalStore(model.subscribe, model.getSnapshot, model.getSnapshot);
+
+  const activeLine = targetLine ?? params.lineStart;
+  const editorLocation = useMemo(
+    () => ({ path: params.path, lineStart: activeLine, lineEnd: activeLine }),
+    [activeLine, params.path],
+  );
+
+  const { flattenedSymbols, activeSymbol } = useAstSymbols(
+    snapshot.status !== "loading" && snapshot.status !== "failed" ? snapshot.content : "",
+    params.path,
+    cursor.line,
+  );
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "O" || e.key === "o")) {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("keydown", handleKeyDown);
+      return () => window.removeEventListener("keydown", handleKeyDown);
+    }
+  }, []);
+
+  const handleSelectSymbol = useCallback((sym: AstSymbol) => {
+    setTargetLine(sym.range.start_line);
+    setTargetRev((r) => r + 1);
+  }, []);
 
   useEffect(() => {
     model.open();
@@ -196,10 +285,6 @@ function EditableTextFile({
   }, [model, snapshot.modified, t]);
   const handleOverwrite = useCallback(() => void model.overwrite(), [model]);
   const handleRetry = useCallback(() => void model.reload(), [model]);
-  const editorLocation = useMemo(
-    () => ({ path: params.path, lineStart: params.lineStart, lineEnd: params.lineEnd }),
-    [params.lineEnd, params.lineStart, params.path],
-  );
 
   if (snapshot.status === "loading") return <FilePanelLoading />;
   if (snapshot.status === "failed") {
@@ -236,6 +321,9 @@ function EditableTextFile({
         cursor={showPreview ? undefined : cursor}
         vimMode={showPreview ? null : vimMode}
         conflict={conflict}
+        activeSymbol={activeSymbol}
+        hasSymbols={flattenedSymbols.length > 0}
+        onOpenSymbolPalette={() => setPaletteOpen(true)}
       />
       {showPreview ? (
         <Preview text={snapshot.content} params={params} workspaceId={workspaceId} host={host} />
@@ -244,12 +332,18 @@ function EditableTextFile({
           model={model}
           filename={params.path}
           location={editorLocation}
-          navigationRevision={revision}
+          navigationRevision={targetRev}
           vimEnabled={settings.vimKeybindings}
           onCursorChange={setCursor}
           onVimModeChange={setVimMode}
         />
       )}
+      <SymbolPaletteModal
+        visible={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        symbols={flattenedSymbols}
+        onSelectSymbol={handleSelectSymbol}
+      />
     </View>
   );
 }
@@ -260,7 +354,9 @@ function SourceEditor(props: Omit<ComponentProps<typeof ThemedFileEditorView>, "
   const handleReady = useCallback(() => setReady(true), []);
   return (
     <View style={styles.editor}>
-      <ThemedFileEditorView {...props} onReady={handleReady} />
+      <Suspense fallback={<FilePanelLoading />}>
+        <ThemedFileEditorView {...props} onReady={handleReady} />
+      </Suspense>
       {ready ? null : <FilePanelLoading />}
     </View>
   );

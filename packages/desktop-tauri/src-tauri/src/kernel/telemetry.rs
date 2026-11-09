@@ -8,6 +8,37 @@ use std::sync::LazyLock;
 use std::time::Instant;
 
 static START_TIME: LazyLock<Instant> = LazyLock::new(Instant::now);
+static TRACING_GUARD: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
+    std::sync::OnceLock::new();
+
+pub fn init_tracing(startup_trace: bool) {
+    let log_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("Kronos")
+        .join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "kronos.log");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    let _ = TRACING_GUARD.set(guard);
+
+    let default_filter = if startup_trace {
+        "info,kronos=debug,startup=debug"
+    } else {
+        "info"
+    };
+
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter));
+
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .finish();
+
+    let _ = tracing::subscriber::set_global_default(subscriber);
+}
 
 pub fn get_process_uptime_secs() -> u64 {
     START_TIME.elapsed().as_secs()

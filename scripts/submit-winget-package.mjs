@@ -27,7 +27,8 @@ function parseArguments(args) {
   const version = options.get("--version");
   const manifestsDir = options.get("--manifests-dir");
   const dryRun = options.get("--dry-run") === "true";
-  const token = options.get("--token") || process.env.WINGET_GITHUB_TOKEN || process.env.GITHUB_TOKEN;
+  const token =
+    options.get("--token") || process.env.WINGET_GITHUB_TOKEN || process.env.GITHUB_TOKEN;
   const targetRepo = options.get("--repo") || DEFAULT_TARGET_REPO;
 
   if (!version || !manifestsDir) {
@@ -104,7 +105,9 @@ export async function submitWingetPackage({
   }
 
   // Support manifests directory pointing directly to winget folder or parent
-  const resolvedDir = (await access(path.join(manifestsDir, `${PACKAGE_IDENTIFIER}.yaml`)).then(() => true).catch(() => false))
+  const resolvedDir = (await access(path.join(manifestsDir, `${PACKAGE_IDENTIFIER}.yaml`))
+    .then(() => true)
+    .catch(() => false))
     ? manifestsDir
     : path.join(manifestsDir, "winget");
 
@@ -156,7 +159,9 @@ export async function submitWingetPackage({
   }
 
   // 3. Get base repo default branch SHA
-  const repoRes = await fetchImpl(`https://api.github.com/repos/${targetRepo}`, { headers: authHeaders });
+  const repoRes = await fetchImpl(`https://api.github.com/repos/${targetRepo}`, {
+    headers: authHeaders,
+  });
   if (!repoRes.ok) {
     throw new Error(`Failed to get target repo info: ${repoRes.status} ${repoRes.statusText}`);
   }
@@ -175,14 +180,17 @@ export async function submitWingetPackage({
 
   // 4. Create branch in fork
   const branchName = `kronos-${version}`;
-  const createBranchRes = await fetchImpl(`https://api.github.com/repos/${forkOwner}/${targetRepoName}/git/refs`, {
-    method: "POST",
-    headers: { ...authHeaders, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      ref: `refs/heads/${branchName}`,
-      sha: baseSha,
-    }),
-  });
+  const createBranchRes = await fetchImpl(
+    `https://api.github.com/repos/${forkOwner}/${targetRepoName}/git/refs`,
+    {
+      method: "POST",
+      headers: { ...authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ref: `refs/heads/${branchName}`,
+        sha: baseSha,
+      }),
+    },
+  );
   // If branch already exists (422), continue updating files on that branch
 
   // 5. Commit/upload each manifest file
@@ -235,7 +243,9 @@ export async function submitWingetPackage({
 
   if (!prRes.ok) {
     const errorBody = await prRes.text();
-    throw new Error(`Failed to create pull request on ${targetRepo}: ${prRes.status} - ${errorBody}`);
+    throw new Error(
+      `Failed to create pull request on ${targetRepo}: ${prRes.status} - ${errorBody}`,
+    );
   }
 
   const prData = await prRes.json();

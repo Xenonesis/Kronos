@@ -17,6 +17,30 @@ metadata is still loading; loaded untitled agents use their provider label. Nati
 persist a provisional title from the first non-empty prompt line and include it in the
 creation snapshot. Later prompts must not replace an existing title.
 
+### Native desktop turn ownership
+
+The Rust host admits one foreground turn per agent before recording its prompt or
+acknowledging the request. Keep the returned reservation until its runner finishes;
+dropping an unstarted reservation releases it. Initial prompts from agent creation
+and combined workspace creation use the same admission path. A rejected overlap
+does not add a user-message row, and another agent can run independently.
+
+Stop acknowledges a cancellation request, not process exit. The agent remains
+reserved while its provider tree exits, its pipes drain and partial output commits.
+The final canceled event carries the admitted turn's identity. Model, provider and
+thinking changes must wait for this cleanup; deletion cancels and waits before
+removing the record. Cleanup failure retains the reservation rather than allowing
+two provider processes to own the conversation.
+
+Each native turn owns its own Windows Job Object, assigned while the provider is
+suspended so immediate descendants cannot escape admission. Unix providers use an
+owned process group. Cancellation, timeout, read failure and normal provider exit
+all clean up that ownership. Never use a process-name sweep or the shared terminal
+job to stop an agent.
+
+Provider continuity is a separate durable contract; see
+[native provider sessions](providers.md#native-desktop-provider-sessions).
+
 ## Daemon restart recovery
 
 Hosts resume interrupted agents by default after graceful shutdown or a crash. The daemon

@@ -20,6 +20,7 @@ import {
   type PluginThemeOption,
 } from "@/plugins/themes";
 import { PLUGIN_THEME_NAMES, PLUGIN_THEME_PREFERENCE, THEME_TO_UNISTYLES } from "@/styles/theme";
+import { getIsElectron } from "@/constants/platform";
 import { applyAppearance } from "./apply";
 import { AppearanceSystemBars } from "./system-bars";
 
@@ -48,6 +49,14 @@ function applyTheme({ preference, contributedTheme }: ApplyThemeInput): void {
   const builtInPreference =
     preference === PLUGIN_THEME_PREFERENCE ? DEFAULT_THEME_PREFERENCE : preference;
   if (builtInPreference === "auto") {
+    const isDesktop =
+      getIsElectron() ||
+      (typeof window !== "undefined" && ("__TAURI__" in window || "__TAURI_INTERNALS__" in window));
+    if (isDesktop) {
+      UnistylesRuntime.setAdaptiveThemes(false);
+      UnistylesRuntime.setTheme("dark");
+      return;
+    }
     UnistylesRuntime.setAdaptiveThemes(true);
     return;
   }

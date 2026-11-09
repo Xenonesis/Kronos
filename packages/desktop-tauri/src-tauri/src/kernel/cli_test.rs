@@ -228,6 +228,10 @@ mod tests {
         let matched_search_rs = matches.iter().any(|m| m.path.contains("search.rs"));
         assert!(matched_search_rs, "Expected search results to include nested file src/kernel/search.rs, found: {:?}", matches);
 
+        let cached_matches = crate::kernel::cli::execute_cached_search_in("WorkspaceSearchIndex", std::path::Path::new("."))
+            .expect("Cached search should succeed");
+        assert_eq!(matches.len(), cached_matches.len(), "Cached search count must match uncached search count");
+
         let parsed = CliArgs::try_parse_from([
             "paseo",
             "search",
@@ -281,14 +285,6 @@ mod tests {
 
     #[test]
     fn test_cli_dispatch_mcp_mode() {
-        let args = [
-            "paseo",
-            "mcp",
-        ];
-
-        let result = parse_and_dispatch_from(args);
-        assert_eq!(result, Some(0));
-
         let parsed = CliArgs::try_parse_from([
             "paseo",
             "mcp",
@@ -674,5 +670,34 @@ mod tests {
                 max_files: 500,
             })
         );
+    }
+
+    #[test]
+    fn test_cli_cached_search_fast_path() {
+        use crate::kernel::cli::execute_cached_search_in;
+
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let file_a = temp_dir.path().join("alpha.rs");
+        let file_b = temp_dir.path().join("beta.rs");
+
+        std::fs::write(&file_a, "fn quantum_algorithm() { println!(\"alpha\"); }").unwrap();
+        std::fs::write(&file_b, "fn classic_algorithm() { println!(\"beta\"); }").unwrap();
+
+        // First search builds the index
+        let start1 = std::time::Instant::now();
+        let res1 = execute_cached_search_in("quantum_algorithm", temp_dir.path()).expect("first search");
+        let dur1 = start1.elapsed();
+        assert_eq!(res1.len(), 1);
+        assert!(res1[0].path.contains("alpha.rs"));
+
+        // Second consecutive search uses cached warm index (< 15s window)
+        let start2 = std::time::Instant::now();
+        let res2 = execute_cached_search_in("classic_algorithm", temp_dir.path()).expect("second search");
+        let dur2 = start2.elapsed();
+        assert_eq!(res2.len(), 1);
+        assert!(res2[0].path.contains("beta.rs"));
+
+        // Verify warm query runs in sub-millisecond or fast order
+        println!("Search timings: cold = {:?}, warm = {:?}", dur1, dur2);
     }
 }

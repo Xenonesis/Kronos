@@ -32,6 +32,35 @@ silently differ from the control's displayed default. Reasoning text is limited 
 provider exposes; never substitute an answer or a synthetic success message for missing reasoning.
 See [native desktop live prefixes](timeline-sync.md#native-desktop-live-prefixes) for its delivery contract.
 
+### Native desktop provider sessions
+
+The Rust runner resumes an explicit provider conversation, never a user's global
+last session. It commits observed identity to the agent's `runtimeInfo` before turn
+completion. An imported `config.providerHandleId` supplies the initial identity.
+Changing provider clears both handles; changing only the model preserves the
+conversation and clears incompatible thinking settings.
+
+| Provider | Observed identity                                     | Next invocation             |
+| -------- | ----------------------------------------------------- | --------------------------- |
+| Claude   | Root `system/init` or `result` event's `session_id`   | `--resume <id>`             |
+| Codex    | `thread.started.thread_id`                            | `exec resume <id>`          |
+| OpenCode | Root CLI event's `sessionID`                          | `run --session <id>`        |
+| OMP      | Session header in the agent's private JSONL directory | `--resume <absolute-file>`  |
+| Pi       | Session header in the agent's private JSONL directory | `--session <absolute-file>` |
+
+OMP and Pi start with `--session-dir` under the daemon home, isolated by agent,
+provider and first-turn identity. The runner records the actual root JSONL file;
+it does not invent a session filename or select the newest global file. Imported
+OMP/Pi handles must name an existing session file. Nested task transcripts do not
+replace the root conversation.
+
+If a started provider exposes no durable identity, the turn reports an error and
+later prompts cannot silently start a fresh conversation. Existing native transcripts
+without a saved provider handle are also blocked rather than treated as new sessions.
+Import the explicit provider session or create a new agent. Missing session files
+and unsupported native resume adapters fail with actionable errors. These print-mode adapters
+do not claim the resident runtime capabilities of the Node provider adapters below.
+
 ## Plugin providers
 
 Keep a bundled provider in `plugins/<id>/` and register it through

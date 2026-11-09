@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { DiagramColorScheme, MermaidRenderRequest } from "./render-model";
-import { mermaidRuntimeHtml } from "./runtime/html.gen";
 import { parseMermaidRuntimeMessage, type MermaidRuntimeRenderMessage } from "./runtime/messages";
 import { MermaidRuntimeRequestDriver } from "./runtime/request-driver";
 
@@ -13,6 +12,7 @@ export interface MermaidRenderedMessage {
 }
 
 interface MermaidIframeRuntimeProps {
+  html: string | undefined;
   request: MermaidRenderRequest | null;
   onRendered: (message: MermaidRenderedMessage) => void;
   onRenderFailed: (revision: number) => void;
@@ -20,6 +20,7 @@ interface MermaidIframeRuntimeProps {
 
 /** Sandboxed Mermaid renderer. Sizing and gestures belong to the surrounding viewport. */
 export function MermaidIframeRuntime({
+  html,
   request,
   onRendered,
   onRenderFailed,
@@ -65,6 +66,7 @@ export function MermaidIframeRuntime({
     window.addEventListener("message", receiveMessage);
     return () => window.removeEventListener("message", receiveMessage);
   }, [onRenderFailed, onRendered, sendRequest]);
+  if (html === undefined) return null;
 
   // `inert` (not just tabIndex) because the Modal focus trap focuses descendants
   // programmatically; a focused iframe swallows every keystroke, including Escape.
@@ -75,7 +77,7 @@ export function MermaidIframeRuntime({
       aria-hidden
       inert
       sandbox="allow-scripts"
-      srcDoc={mermaidRuntimeHtml}
+      srcDoc={html}
       tabIndex={-1}
       style={iframeStyle}
     />

@@ -11,6 +11,7 @@ import { MermaidFullscreenViewer } from "./fullscreen-viewer.web";
 import { MermaidIframeRuntime, type MermaidRenderedMessage } from "./iframe-runtime.web";
 import { useMermaidRenderModel } from "./use-render-model";
 import { getDiagramBoxStyle } from "./presentation";
+import { MermaidRuntimeStatus, useMermaidRuntimeHtml } from "./runtime-loader.web";
 
 interface MermaidFenceHostImplProps extends MarkdownFenceRendererProps {
   colorScheme?: "light" | "dark";
@@ -24,6 +25,7 @@ function MermaidFenceHostImpl({
   colorScheme = "dark",
 }: MermaidFenceHostImplProps) {
   const { t } = useTranslation();
+  const runtime = useMermaidRuntimeHtml();
   const { state, request, rendered, renderFailed } = useMermaidRenderModel({
     source: code,
     phase,
@@ -111,6 +113,7 @@ function MermaidFenceHostImpl({
           ) : null}
         </View>
       ) : null}
+      <MermaidRuntimeStatus runtime={runtime} />
       <ZoomableViewport
         accessibilityLabel={t("message.diagram.diagram")}
         actions={actions}
@@ -120,6 +123,7 @@ function MermaidFenceHostImpl({
         wheelActivation="modifier"
       >
         <MermaidIframeRuntime
+          html={runtime.data}
           request={request}
           onRendered={handleRendered}
           onRenderFailed={renderFailed}

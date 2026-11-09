@@ -6,10 +6,7 @@ import test from "node:test";
 const repoRoot = join(import.meta.dirname, "..");
 
 test("server.rs contains handlers for all core subscriptions and directory sync requests", async () => {
-  const serverRsPath = join(
-    repoRoot,
-    "packages/desktop-tauri/src-tauri/src/kernel/server.rs",
-  );
+  const serverRsPath = join(repoRoot, "packages/desktop-tauri/src-tauri/src/kernel/server.rs");
   const content = await readFile(serverRsPath, "utf8");
 
   const requiredHandlers = [
@@ -33,10 +30,7 @@ test("server.rs contains handlers for all core subscriptions and directory sync 
     '"provider_diagnostic_request"',
   ];
   for (const handler of requiredHandlers) {
-    assert.ok(
-      content.includes(handler),
-      `server.rs must contain handler for ${handler}`,
-    );
+    assert.ok(content.includes(handler), `server.rs must contain handler for ${handler}`);
   }
 
   // Ensure fetch_workspaces_response includes entries, emptyProjects, and pageInfo
@@ -48,19 +42,13 @@ test("server.rs contains handlers for all core subscriptions and directory sync 
     content.includes('"emptyProjects"'),
     "fetch_workspaces_response must contain emptyProjects",
   );
-  assert.ok(
-    content.includes('"pageInfo"'),
-    "fetch_workspaces_response must contain pageInfo",
-  );
+  assert.ok(content.includes('"pageInfo"'), "fetch_workspaces_response must contain pageInfo");
   assert.ok(
     !content.includes('"projectIconRevision": 1,'),
     "projectIconRevision must never be a numeric literal (schema requires string)",
   );
 
-  const protocolRsPath = join(
-    repoRoot,
-    "packages/desktop-tauri/src-tauri/src/kernel/protocol.rs",
-  );
+  const protocolRsPath = join(repoRoot, "packages/desktop-tauri/src-tauri/src/kernel/protocol.rs");
   const protocolContent = await readFile(protocolRsPath, "utf8");
   assert.ok(
     protocolContent.includes('"providersSnapshot": true'),

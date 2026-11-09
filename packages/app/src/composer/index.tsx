@@ -54,6 +54,8 @@ import {
   type DraftAgentControlsProps,
 } from "@/composer/agent-controls";
 import { ContextWindowMeter } from "@/components/context-window-meter";
+import { resolveModelContextWindow } from "@/components/context-window-meter.utils";
+import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
 import { TelemetryHud, calculateTps } from "@/components/telemetry-hud";
 import { useImageAttachmentPicker } from "@/hooks/use-image-attachment-picker";
 import {
@@ -123,6 +125,7 @@ import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
 import type { KeyboardActionDefinition } from "@/keyboard/keyboard-action-dispatcher";
 import type { MessageInputKeyboardActionKind } from "@/keyboard/actions";
 import { submitAgentInput } from "@/composer/submit";
+import { playAudioCue } from "@/utils/audio-cues";
 import { ComposerRecall } from "@/composer/recall";
 import { createMessageSubmissionWriter } from "@/composer/submission/writer";
 import { ComposerKeyboardScopeProvider, useComposerKeyboardScope } from "@/composer/keyboard-scope";
@@ -282,13 +285,37 @@ function buildAgentStateSelector(serverId: string, agentId: string) {
     const agent = state.sessions[serverId]?.agents?.get(agentId) ?? null;
     return {
       status: agent?.status ?? null,
+      provider: agent?.provider ?? null,
       contextWindowMaxTokens: agent?.lastUsage?.contextWindowMaxTokens ?? null,
       contextWindowUsedTokens: agent?.lastUsage?.contextWindowUsedTokens ?? null,
       totalCostUsd: agent?.lastUsage?.totalCostUsd ?? null,
       outputTokens: agent?.lastUsage?.outputTokens ?? null,
       model: agent?.model ?? null,
+      runtimeModelId: agent?.runtimeInfo?.model ?? null,
     };
   };
+}
+
+function parseTurnStartedAtMs(turnStartedAt: unknown): number | null {
+  if (!turnStartedAt) return null;
+  if (turnStartedAt instanceof Date) return turnStartedAt.getTime();
+  if (typeof turnStartedAt === "number") return turnStartedAt;
+  if (typeof turnStartedAt === "string") return Date.parse(turnStartedAt) || null;
+  return null;
+}
+
+function resolveOutputTokens(
+  agentStateOutputTokens: number | null,
+  liveEstimatedTokens: number,
+  lastOutputTokens: number,
+): number {
+  if (agentStateOutputTokens && agentStateOutputTokens > 0) {
+    return agentStateOutputTokens;
+  }
+  if (liveEstimatedTokens > 0) {
+    return liveEstimatedTokens;
+  }
+  return lastOutputTokens;
 }
 
 interface RenderLeftContentArgs {
@@ -754,7 +781,9 @@ function ImageAttachmentPill({
 interface GithubAttachmentPillProps {
   attachment: Extract<
     ComposerAttachment,
-    { kind: "forge_change_request" | "forge_issue" | "github_pr" | "github_issue" }
+    {
+      kind: "forge_change_request" | "forge_issue" | "github_pr" | "github_issue";
+    }
   >;
   index: number;
   disabled: boolean;
@@ -1524,7 +1553,11 @@ function ComposerContentImpl({
       if (!workspaceId) {
         return;
       }
-      const attachment = resolveWorkspaceFileDrop({ payload, serverId, workspaceId });
+      const attachment = resolveWorkspaceFileDrop({
+        payload,
+        serverId,
+        workspaceId,
+      });
       if (!attachment) {
         return;
       }
@@ -1538,11 +1571,41 @@ function ComposerContentImpl({
     onFocusInput?.(focusInput);
   }, [focusInput, onFocusInput]);
 
+  useEffect(() => {
+    if (!isWeb || typeof window === "undefined") return;
+    const handleComposerReply = (event: Event) => {
+      const customEvent = event as CustomEvent<{
+        serverId?: string;
+        agentId?: string;
+        quote: string;
+      }>;
+      if (
+        customEvent.detail &&
+        (!customEvent.detail.serverId || customEvent.detail.serverId === serverId) &&
+        (!customEvent.detail.agentId || customEvent.detail.agentId === agentId)
+      ) {
+        const current = textSource.getSnapshot();
+        const quote = customEvent.detail.quote;
+        const next = current.trim() ? `${current.trim()}\n\n${quote}` : quote;
+        replaceUserInput(next);
+        focusInput();
+      }
+    };
+    window.addEventListener("paseo:composer-reply", handleComposerReply);
+    return () => {
+      window.removeEventListener("paseo:composer-reply", handleComposerReply);
+    };
+  }, [agentId, focusInput, replaceUserInput, serverId, textSource]);
+
   const submitMessage = useCallback(
     async (text: string, submitAttachments: ComposerAttachment[]) => {
       onMessageSent?.();
       if (onSubmitMessageRef.current) {
-        await onSubmitMessageRef.current({ text, attachments: submitAttachments, cwd });
+        await onSubmitMessageRef.current({
+          text,
+          attachments: submitAttachments,
+          cwd,
+        });
         return;
       }
       if (!sendAgentMessageRef.current) {
@@ -1808,7 +1871,10 @@ function ComposerContentImpl({
         return;
       }
 
-      const placeholders = files.map((file) => ({ id: nextPendingFileId.current++, file }));
+      const placeholders = files.map((file) => ({
+        id: nextPendingFileId.current++,
+        file,
+      }));
       setPendingFiles((pending) => [...pending, ...placeholders]);
       try {
         const uploaded = await uploadFileAttachments({ client, files });
@@ -1873,7 +1939,11 @@ function ComposerContentImpl({
         return;
       }
       setSelectedAttachments((prev) =>
-        removeComposerAttachmentAtIndex({ attachments: prev, index, deleteAttachments }),
+        removeComposerAttachmentAtIndex({
+          attachments: prev,
+          index,
+          deleteAttachments,
+        }),
       );
     },
     [removeAttachment, selectedAttachments, setSelectedAttachments],
@@ -2086,7 +2156,7 @@ function ComposerContentImpl({
   const turnStartedAt = useSessionStore(
     (state) => selectAgentTurnPresentation(state.sessions[serverId], agentId).startedAt,
   );
-  const turnStartedAtMs = turnStartedAt ? turnStartedAt.getTime() : null;
+  const turnStartedAtMs = parseTurnStartedAtMs(turnStartedAt);
   const streamHead = useSessionStore((state) =>
     state.sessions[serverId]?.agentStreamHead?.get(agentId),
   );
@@ -2095,10 +2165,12 @@ function ComposerContentImpl({
     turnStartedAtMs: number | null;
     firstTokenAt: Date | null;
     ttftMs: number | null;
+    lastOutputTokens: number;
   }>({
     turnStartedAtMs: null,
     firstTokenAt: null,
     ttftMs: null,
+    lastOutputTokens: 0,
   });
 
   if (turnTelemetryRef.current.turnStartedAtMs !== turnStartedAtMs) {
@@ -2106,6 +2178,7 @@ function ComposerContentImpl({
       turnStartedAtMs,
       firstTokenAt: null,
       ttftMs: null,
+      lastOutputTokens: 0,
     };
   }
 
@@ -2113,17 +2186,23 @@ function ComposerContentImpl({
     if (!streamHead || streamHead.length === 0) return 0;
     let total = 0;
     for (const item of streamHead) {
-      if (item.kind === "assistant_message") {
+      if (item.kind === "assistant_message" || item.kind === "thought") {
         total += item.text.length;
       }
     }
     return total;
   }, [streamHead]);
 
-  const outputTokens =
-    agentState.outputTokens && agentState.outputTokens > 0
-      ? agentState.outputTokens
-      : Math.round(streamTextLength / 4);
+  const liveEstimatedTokens = Math.round(streamTextLength / 4);
+  if (liveEstimatedTokens > 0) {
+    turnTelemetryRef.current.lastOutputTokens = liveEstimatedTokens;
+  }
+
+  const outputTokens = resolveOutputTokens(
+    agentState.outputTokens,
+    liveEstimatedTokens,
+    turnTelemetryRef.current.lastOutputTokens,
+  );
 
   if (isAgentRunning && outputTokens > 0 && !turnTelemetryRef.current.firstTokenAt) {
     turnTelemetryRef.current.firstTokenAt = new Date();
@@ -2142,9 +2221,51 @@ function ComposerContentImpl({
     elapsedMs = Math.max(1, Date.now() - turnStartedAtMs);
   }
 
+  const prevRunningRef = useRef(false);
+  useEffect(() => {
+    if (!prevRunningRef.current && isAgentRunning) {
+      playAudioCue("agent_start");
+    } else if (prevRunningRef.current && !isAgentRunning) {
+      playAudioCue("agent_complete");
+    }
+    prevRunningRef.current = isAgentRunning;
+  }, [isAgentRunning]);
+
   const telemetryTps =
     isAgentRunning && outputTokens > 0 && elapsedMs > 0 ? calculateTps(outputTokens, elapsedMs) : 0;
-  const telemetryTtftMs = isAgentRunning ? turnTelemetryRef.current.ttftMs : null;
+  const telemetryTtftMs = turnTelemetryRef.current.ttftMs;
+
+  const { entries: snapshotEntries } = useProvidersSnapshot(serverId, { cwd });
+  const providerModels = useMemo(
+    () => snapshotEntries?.find((e) => e.provider === agentState.provider)?.models ?? null,
+    [snapshotEntries, agentState.provider],
+  );
+
+  const effectiveModelId = agentState.runtimeModelId || agentState.model;
+  const resolvedMaxTokens = useMemo(() => {
+    if (agentState.contextWindowMaxTokens && agentState.contextWindowMaxTokens > 0) {
+      return agentState.contextWindowMaxTokens;
+    }
+    return resolveModelContextWindow(effectiveModelId, agentState.provider, providerModels);
+  }, [agentState.contextWindowMaxTokens, effectiveModelId, agentState.provider, providerModels]);
+
+  const resolvedUsedTokens = useMemo(() => {
+    if (
+      agentState.contextWindowUsedTokens !== null &&
+      agentState.contextWindowUsedTokens !== undefined
+    ) {
+      return agentState.contextWindowUsedTokens;
+    }
+    return null;
+  }, [agentState.contextWindowUsedTokens]);
+
+  const contextModelLabel = useMemo(() => {
+    if (!effectiveModelId) return null;
+    const found = providerModels?.find(
+      (m) => m.id === effectiveModelId || m.aliases?.includes(effectiveModelId),
+    );
+    return found?.label || effectiveModelId;
+  }, [effectiveModelId, providerModels]);
 
   const contextWindowMeterGlyphSize = isCompactLayout ? ICON_SIZE.md : buttonIconSize;
   const beforeVoiceContent = useMemo(
@@ -2152,6 +2273,8 @@ function ComposerContentImpl({
       hasAgent ? (
         <View style={styles.telemetryAndMeterRow}>
           <TelemetryHud
+            tokens={outputTokens}
+            contextTokens={resolvedUsedTokens}
             isStreaming={isAgentRunning}
             tps={telemetryTps}
             ttftMs={telemetryTtftMs}
@@ -2161,25 +2284,28 @@ function ComposerContentImpl({
             <ContextWindowMeter
               serverId={serverId}
               agentId={agentId}
-              maxTokens={agentState.contextWindowMaxTokens}
-              usedTokens={agentState.contextWindowUsedTokens}
+              maxTokens={resolvedMaxTokens}
+              usedTokens={resolvedUsedTokens}
               totalCostUsd={agentState.totalCostUsd}
               glyphSize={contextWindowMeterGlyphSize}
+              modelLabel={contextModelLabel}
             />
           </View>
         </View>
       ) : null,
     [
       hasAgent,
+      outputTokens,
+      resolvedUsedTokens,
       isAgentRunning,
       telemetryTps,
       telemetryTtftMs,
       agentState.totalCostUsd,
       serverId,
       agentId,
-      agentState.contextWindowMaxTokens,
-      agentState.contextWindowUsedTokens,
+      resolvedMaxTokens,
       contextWindowMeterGlyphSize,
+      contextModelLabel,
     ],
   );
 
@@ -2412,7 +2538,10 @@ function ComposerContentImpl({
           openGithub: (kind: string, numberLabel: string) =>
             t("composer.attachments.openGithub", { kind, number: numberLabel }),
           removeGithub: (kind: string, numberLabel: string) =>
-            t("composer.attachments.removeGithub", { kind, number: numberLabel }),
+            t("composer.attachments.removeGithub", {
+              kind,
+              number: numberLabel,
+            }),
         },
       }),
     [
@@ -2786,9 +2915,15 @@ const ThemedPaperclip = withUnistyles(Paperclip);
 const ThemedImageIcon = withUnistyles(ImageIcon);
 const ThemedClipboardPaste = withUnistyles(ClipboardPaste);
 const ThemedFileText = withUnistyles(FileText);
-const iconForegroundMapping = (theme: Theme) => ({ color: theme.colors.foreground });
-const iconForegroundMutedMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
-const iconAccentForegroundMapping = (theme: Theme) => ({ color: theme.colors.accentForeground });
+const iconForegroundMapping = (theme: Theme) => ({
+  color: theme.colors.foreground,
+});
+const iconForegroundMutedMapping = (theme: Theme) => ({
+  color: theme.colors.foregroundMuted,
+});
+const iconAccentForegroundMapping = (theme: Theme) => ({
+  color: theme.colors.accentForeground,
+});
 
 function renderForgeAttachmentIcon(icon: string): ReactElement {
   return (

@@ -1,14 +1,15 @@
 import Svg, { Polygon, G } from "react-native-svg";
-import { useUnistyles } from "react-native-unistyles";
+import { withUnistyles } from "react-native-unistyles";
+import type { Theme } from "@/styles/theme";
 
-interface PaseoLogoProps {
+export interface PaseoLogoProps {
   size?: number;
   color?: string;
+  themeColor?: string;
 }
 
-export function PaseoLogo({ size = 64, color }: PaseoLogoProps) {
-  const { theme } = useUnistyles();
-  const fill = color ?? theme.colors.foreground;
+function BasePaseoLogo({ size = 64, color, themeColor }: PaseoLogoProps) {
+  const fill = color ?? themeColor ?? "#f4f4f5";
 
   return (
     <Svg width={size} height={size} viewBox="0 0 512 512" fill="none">
@@ -35,3 +36,7 @@ export function PaseoLogo({ size = 64, color }: PaseoLogoProps) {
     </Svg>
   );
 }
+
+export const PaseoLogo = withUnistyles(BasePaseoLogo, (theme: Theme) => ({
+  themeColor: theme.colors.foreground,
+}));

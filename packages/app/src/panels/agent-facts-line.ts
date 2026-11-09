@@ -1,7 +1,10 @@
 import type { AgentMode, AgentModelDefinition } from "@getpaseo/protocol/agent-types";
 import { useShallow } from "zustand/shallow";
 import { formatAgentModeLabel } from "@/agent-controls/labels";
-import { formatTokenCount } from "@/components/context-window-meter.utils";
+import {
+  formatTokenCount,
+  resolveModelContextWindow,
+} from "@/components/context-window-meter.utils";
 import { resolveAgentModelSelection } from "@/composer/agent-controls/utils";
 import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
 import { useSessionStore } from "@/stores/session-store";
@@ -59,7 +62,21 @@ export function useAgentFactsLine(serverId: string, agentId: string): string | n
   );
   const { entries } = useProvidersSnapshot(serverId, { cwd: agent?.cwd });
   const models = entries?.find((entry) => entry.provider === agent?.provider)?.models ?? null;
-  return agent ? buildAgentFactsLine({ ...agent, models }) : null;
+  if (!agent) return null;
+  const effectiveMaxTokens =
+    agent.contextWindowMaxTokens ??
+    resolveModelContextWindow(
+      agent.runtimeModelId || agent.configuredModelId,
+      agent.provider,
+      models,
+    );
+  const effectiveUsedTokens = agent.contextWindowUsedTokens ?? 0;
+  return buildAgentFactsLine({
+    ...agent,
+    contextWindowMaxTokens: effectiveMaxTokens,
+    contextWindowUsedTokens: effectiveUsedTokens,
+    models,
+  });
 }
 
 /** The mode control shows the current mode, or the provider's first one until the agent reports. */

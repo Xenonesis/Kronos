@@ -192,6 +192,19 @@ interface TimelinePathResult {
   acknowledgedClientMessageIds: string[];
 }
 
+function toTimestampMs(val: unknown): number {
+  if (val instanceof Date) {
+    const t = val.getTime();
+    return Number.isFinite(t) ? t : 0;
+  }
+  if (typeof val === "number" && Number.isFinite(val)) return val;
+  if (typeof val === "string") {
+    const parsed = Date.parse(val);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
 function matchesProjectedRow(existing: StreamItem, incoming: StreamItem): boolean {
   const incomingIdentity = streamTimelineItemIdentity(incoming);
   if (incomingIdentity !== null) {
@@ -201,14 +214,14 @@ function matchesProjectedRow(existing: StreamItem, incoming: StreamItem): boolea
     return (
       existing.messageId === incoming.messageId &&
       existing.text === incoming.text &&
-      existing.timestamp.getTime() === incoming.timestamp.getTime()
+      toTimestampMs(existing.timestamp) === toTimestampMs(incoming.timestamp)
     );
   }
   return (
     existing.kind === "thought" &&
     incoming.kind === "thought" &&
     existing.text === incoming.text &&
-    existing.timestamp.getTime() === incoming.timestamp.getTime()
+    toTimestampMs(existing.timestamp) === toTimestampMs(incoming.timestamp)
   );
 }
 
@@ -1813,7 +1826,10 @@ export function deriveAgentStreamTurnLiveness(
     if (event.type === "turn_started") {
       transitions.push({
         type: "stream_open",
-        turn: { turnId: event.turnId ?? null, startedAt: timestamp },
+        turn: {
+          turnId: event.turnId ?? null,
+          startedAt: timestamp instanceof Date ? timestamp : new Date(timestamp),
+        },
       });
     } else if (
       event.type === "turn_completed" ||

@@ -21,9 +21,9 @@ import "@xterm/xterm/css/xterm.css";
 import type { ITheme } from "@xterm/xterm";
 import type { TerminalInputModeState } from "@getpaseo/protocol/terminal-input-mode";
 import type { PendingTerminalModifiers } from "../utils/terminal-keys";
-import {
+import type {
   TerminalEmulatorRuntime,
-  type TerminalOutputData,
+  TerminalOutputData,
 } from "../terminal/runtime/terminal-emulator-runtime";
 import { encodeTerminalPaste } from "../terminal/runtime/terminal-paste";
 import type { TerminalFile } from "../terminal/file-paste";
@@ -479,51 +479,64 @@ export default function TerminalEmulator({
       return () => {};
     }
 
-    const nativeConfig = nativeConfigRef.current;
-    const resolvedSessionId =
-      nativeConfig.sessionId ??
-      (streamKey.includes(":") ? streamKey.split(":").pop() : streamKey) ??
-      streamKey;
-    const runtime = new TerminalEmulatorRuntime({
-      isMac: isMacUserAgent(),
-      sessionId: resolvedSessionId,
-      isLocal: nativeConfig.isLocal,
-      cwd: nativeConfig.cwd,
-      command: nativeConfig.command,
-      args: nativeConfig.args,
-      nativeTerminal: nativeConfig.nativeTerminal,
-    });
-    runtimeRef.current = runtime;
-    runtime.setCallbacks({
-      callbacks: {
-        ...mountCallbacksRef.current,
-        onOpenExternalUrl: openExternalUrl,
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+
+    void import("../terminal/runtime/terminal-emulator-runtime").then(
+      ({ TerminalEmulatorRuntime }) => {
+        if (disposed) return;
+        const nativeConfig = nativeConfigRef.current;
+        const resolvedSessionId =
+          nativeConfig.sessionId ??
+          (streamKey.includes(":") ? streamKey.split(":").pop() : streamKey) ??
+          streamKey;
+        const runtime = new TerminalEmulatorRuntime({
+          isMac: isMacUserAgent(),
+          sessionId: resolvedSessionId,
+          isLocal: nativeConfig.isLocal,
+          cwd: nativeConfig.cwd,
+          command: nativeConfig.command,
+          args: nativeConfig.args,
+          nativeTerminal: nativeConfig.nativeTerminal,
+        });
+        runtimeRef.current = runtime;
+        runtime.setCallbacks({
+          callbacks: {
+            ...mountCallbacksRef.current,
+            onOpenExternalUrl: openExternalUrl,
+          },
+        });
+        runtime.setPendingModifiers({ pendingModifiers: pendingModifiersRef.current });
+        runtime.setCharacterWidths({ widths: characterWidthsRef.current });
+        runtime.mount({
+          root,
+          host,
+          scrollback: scrollbackLinesRef.current,
+          theme: mountedThemeRef.current,
+          fontFamily: fontFamilyRef.current,
+          fontSize: fontSizeRef.current,
+          sessionId: resolvedSessionId,
+          isLocal: nativeConfig.isLocal,
+          cwd: nativeConfig.cwd,
+          command: nativeConfig.command,
+          args: nativeConfig.args,
+          nativeTerminal: nativeConfig.nativeTerminal,
+        });
+        onRendererReadyChangeRef.current?.({ streamKey, isReady: true });
+
+        cleanup = () => {
+          runtime.unmount();
+          onRendererReadyChangeRef.current?.({ streamKey, isReady: false });
+          if (runtimeRef.current === runtime) {
+            runtimeRef.current = null;
+          }
+        };
       },
-    });
-    runtime.setPendingModifiers({ pendingModifiers: pendingModifiersRef.current });
-    runtime.setCharacterWidths({ widths: characterWidthsRef.current });
-    runtime.mount({
-      root,
-      host,
-      scrollback: scrollbackLinesRef.current,
-      theme: mountedThemeRef.current,
-      fontFamily: fontFamilyRef.current,
-      fontSize: fontSizeRef.current,
-      sessionId: resolvedSessionId,
-      isLocal: nativeConfig.isLocal,
-      cwd: nativeConfig.cwd,
-      command: nativeConfig.command,
-      args: nativeConfig.args,
-      nativeTerminal: nativeConfig.nativeTerminal,
-    });
-    onRendererReadyChangeRef.current?.({ streamKey, isReady: true });
+    );
 
     return () => {
-      runtime.unmount();
-      onRendererReadyChangeRef.current?.({ streamKey, isReady: false });
-      if (runtimeRef.current === runtime) {
-        runtimeRef.current = null;
-      }
+      disposed = true;
+      cleanup?.();
     };
   }, [streamKey]);
 

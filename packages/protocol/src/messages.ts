@@ -2013,6 +2013,7 @@ export const SetAgentModelRequestMessageSchema = z.object({
   type: z.literal("set_agent_model_request"),
   agentId: z.string(),
   modelId: z.string().nullable(),
+  provider: z.string().optional(),
   requestId: z.string(),
 });
 

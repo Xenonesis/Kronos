@@ -183,6 +183,8 @@ function renderStreamItemWithTurnFooter(input: {
   strategy: TurnContentStrategy;
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
+  serverId?: string;
+  agentId?: string;
 }): ReactNode {
   if (!input.content) {
     return null;
@@ -197,6 +199,8 @@ function renderStreamItemWithTurnFooter(input: {
       startIndex={footerHost.startIndex}
       supportsTimelineCursor={input.supportsTimelineCursor}
       onForkAssistantTurn={input.onForkAssistantTurn}
+      serverId={input.serverId}
+      agentId={input.agentId}
     />
   ) : null;
   const content = (
@@ -787,6 +791,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
                 <AssistantMessage
                   renderFullContent={renderFullContent}
                   occurrenceKey={createAssistantImageOccurrenceKey({ agentId, itemId: item.id })}
+                  messageId={item.messageId ?? item.id}
+                  agentId={agentId}
                   message={item.text}
                   timestamp={safeTimestampMs(item.timestamp)}
                   workspaceRoot={workspaceRoot}
@@ -1017,13 +1023,17 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           strategy: streamRenderStrategy,
           supportsTimelineCursor: supportsAgentForkContextCursor,
           onForkAssistantTurn: readOnly ? undefined : handleForkAssistantTurn,
+          serverId: resolvedServerId,
+          agentId,
         });
       },
       [
+        agentId,
         getTurnIndent,
         handleForkAssistantTurn,
         readOnly,
         renderStreamItemContent,
+        resolvedServerId,
         streamRenderStrategy,
         supportsAgentForkContextCursor,
       ],
@@ -1053,12 +1063,16 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             supportsTimelineCursor={supportsAgentForkContextCursor}
             onForkAssistantTurn={readOnly ? undefined : handleForkAssistantTurn}
             onForkInFlightTurn={readOnly ? undefined : handleForkInFlightTurn}
+            serverId={resolvedServerId}
+            agentId={agentId}
           />
         ) : null,
       [
+        agentId,
         handleForkAssistantTurn,
         handleForkInFlightTurn,
         readOnly,
+        resolvedServerId,
         isTurnActive,
         baseRenderModel.turnTiming.runningStartedAt,
         bottomTurnFooterHost,

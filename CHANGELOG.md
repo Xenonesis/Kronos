@@ -4,6 +4,8 @@
 
 - Populate native-daemon model snapshots from live Codex, Pi, OMP, OpenCode, and Ollama catalogs plus the configured Claude model instead of shipping a stale built-in model list.
 - Replace the old Paseo butterfly on the web and desktop startup splash with the Kronos emblem while preserving the loading shimmer.
+- Make desktop NSIS and signed-updater builds reproducible from fresh frontend exports, validating signed artifacts before staging.
+- Defer the optional Mermaid runtime to reduce the desktop web entry bundle and preserve single-use browser-proxy navigation responses.
 
 ## 0.15.0-beta.1 - 2026-11-01
 

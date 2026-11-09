@@ -4,9 +4,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 import type { z } from "zod";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { WSOutboundMessageSchema } from "../../src/messages.js";
-import { validateWSOutboundMessage } from "../../src/validation/ws-outbound.js";
+import {
+  loadWSOutboundAotValidators,
+  validateWSOutboundMessage,
+} from "../../src/validation/ws-outbound.js";
 
 interface GeneratedSchema {
   safeParse(input: unknown): { success: boolean; data?: unknown };
@@ -64,6 +67,9 @@ async function compileInlineSchema(sourceSchema: string): Promise<GeneratedSchem
 }
 
 describe("WS outbound zod-aot validation", () => {
+  beforeAll(async () => {
+    await loadWSOutboundAotValidators();
+  });
   it("applies defaults inside discriminated-union branches", async () => {
     const schema = await compileInlineSchema(`
 const SourceSchema = z.discriminatedUnion("type", [

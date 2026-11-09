@@ -31,10 +31,44 @@ function toSnakeCase(str) {
 }
 
 const RUST_KEYWORDS = new Set([
-  "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false",
-  "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut",
-  "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait",
-  "true", "type", "unsafe", "use", "where", "while", "async", "await", "dyn"
+  "as",
+  "break",
+  "const",
+  "continue",
+  "crate",
+  "else",
+  "enum",
+  "extern",
+  "false",
+  "fn",
+  "for",
+  "if",
+  "impl",
+  "in",
+  "let",
+  "loop",
+  "match",
+  "mod",
+  "move",
+  "mut",
+  "pub",
+  "ref",
+  "return",
+  "self",
+  "Self",
+  "static",
+  "struct",
+  "super",
+  "trait",
+  "true",
+  "type",
+  "unsafe",
+  "use",
+  "where",
+  "while",
+  "async",
+  "await",
+  "dyn",
 ]);
 
 function rustFieldName(name) {
@@ -78,14 +112,16 @@ function generateVariant(typeTag, schemaFile, isOutbound = false) {
     if (isReq) {
       fields.push(`${renameAttr}    ${fieldName}: ${rustType},`);
     } else {
-      fields.push(`${renameAttr}    #[serde(default, skip_serializing_if = "Option::is_none")]\n    ${fieldName}: Option<${rustType}>,`);
+      fields.push(
+        `${renameAttr}    #[serde(default, skip_serializing_if = "Option::is_none")]\n    ${fieldName}: Option<${rustType}>,`,
+      );
     }
   }
 
   return {
     variantName,
     typeTag,
-    code: `  #[serde(rename = "${typeTag}")]\n  ${variantName} {\n${fields.join("\n")}\n  },`
+    code: `  #[serde(rename = "${typeTag}")]\n  ${variantName} {\n${fields.join("\n")}\n  },`,
   };
 }
 
@@ -111,7 +147,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum SessionInboundMessage {
-${inboundVariants.map(v => v.code).join("\n\n")}
+${inboundVariants.map((v) => v.code).join("\n\n")}
   #[serde(other)]
   Unknown,
 }
@@ -119,7 +155,7 @@ ${inboundVariants.map(v => v.code).join("\n\n")}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum SessionOutboundMessage {
-${outboundVariants.map(v => v.code).join("\n\n")}
+${outboundVariants.map((v) => v.code).join("\n\n")}
   #[serde(other)]
   Unknown,
 }
@@ -132,4 +168,6 @@ pub struct HandshakePayload {
 `;
 
 fs.writeFileSync(targetFile, rustCode, "utf8");
-console.log(`[generate-rust-protocol] Generated ${inboundVariants.length} inbound and ${outboundVariants.length} outbound strongly-typed variants in: ${targetFile}`);
+console.log(
+  `[generate-rust-protocol] Generated ${inboundVariants.length} inbound and ${outboundVariants.length} outbound strongly-typed variants in: ${targetFile}`,
+);

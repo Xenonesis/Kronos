@@ -21,7 +21,10 @@ mod tests {
         let non_existent = Path::new("non_existent_whisper_model.bin");
         let err = SpeechEngine::new(Some(non_existent));
         assert!(err.is_err());
+        #[cfg(feature = "local-whisper")]
         assert!(err.unwrap_err().contains("does not exist"));
+        #[cfg(not(feature = "local-whisper"))]
+        assert!(err.unwrap_err().contains("not included"));
     }
 
     #[test]

@@ -77,6 +77,12 @@ function resolveWithCustomWebOverlay(context, moduleName, platform) {
 }
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (moduleName === "lucide-react-native") {
+    return {
+      filePath: path.join(appNodeModulesRoot, "lucide-react-native", "dist", "cjs", "context.js"),
+      type: "sourceFile",
+    };
+  }
   if (
     isWatchdogBuild &&
     platform === "android" &&

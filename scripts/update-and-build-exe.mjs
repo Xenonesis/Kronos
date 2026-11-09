@@ -1,432 +1,135 @@
-import { execSync } from "node:child_process";
-import {
-  statSync,
-  existsSync,
-  readdirSync,
-  copyFileSync,
-  readFileSync,
-  writeFileSync,
-  mkdirSync,
-} from "node:fs";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import os from "node:os";
+import { buildDesktop } from "../packages/desktop-tauri/build.mjs";
+import { stageRelease, mergeReleases, fetchPreviousRelease } from "./tauri-release.mjs";
+import { isMainModule } from "./is-main-module.mjs";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const rootDir = path.resolve(__dirname, "..");
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-function run(command, cwd = rootDir) {
-  console.log(
-    `\n\x1b[36m▶ Running:\x1b[0m ${command} \x1b[90m(in ${path.relative(rootDir, cwd) || "."})\x1b[0m`,
-  );
-  execSync(command, { cwd, stdio: "inherit", shell: true });
+export function copyInstallerArtifact(source, destination) {
+  fs.rmSync(destination, { force: true });
+  fs.copyFileSync(source, destination);
 }
 
-function getLatestExe(nsisDir) {
-  if (!existsSync(nsisDir)) return "";
-  const files = readdirSync(nsisDir).filter((f) => f.endsWith("-setup.exe"));
-  if (files.length === 0) return "";
-  files.sort(
-    (a, b) => statSync(path.join(nsisDir, b)).mtimeMs - statSync(path.join(nsisDir, a)).mtimeMs,
-  );
-  return path.join(nsisDir, files[0]);
-}
-function getAppVersion() {
-  try {
-    const tauriConfPath = path.join(
-      rootDir,
-      "packages",
-      "desktop-tauri",
-      "src-tauri",
-      "tauri.conf.json",
+export function buildInstaller(argv = process.argv.slice(2)) {
+  if (process.platform !== "win32")
+    throw new Error(
+      "This entrypoint builds the Windows NSIS installer; use the desktop workspace build on other platforms",
     );
-    if (existsSync(tauriConfPath)) {
-      const conf = JSON.parse(readFileSync(tauriConfPath, "utf8"));
-      if (conf.version) return conf.version;
+  const publish = argv.includes("--publish");
+  const buildArgs = argv.filter((arg) => arg !== "--publish");
+  if (publish && !buildArgs.includes("--signed")) buildArgs.push("--signed");
+  const result = buildDesktop(buildArgs);
+  const installerName = `Kronos_${result.version}_x64-setup.exe`;
+  const installer = path.join(result.bundleDir, "nsis", installerName);
+  const stat = fs.lstatSync(installer);
+  if (!stat.isFile() || !stat.size) throw new Error("A nonempty NSIS installer was not produced");
+  const distDir = path.join(rootDir, "dist");
+  fs.mkdirSync(distDir, { recursive: true });
+  // Never leave old updater metadata next to a newly built unsigned installer.
+  for (const file of fs.readdirSync(distDir)) {
+    if (/^latest.*\.json$/.test(file) || file.endsWith(".sig") || file === "kronos-portable.exe") {
+      fs.rmSync(path.join(distDir, file), { force: true });
     }
-  } catch {}
-  try {
-    const pkgPath = path.join(rootDir, "package.json");
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-    return pkg.version || "0.13.0";
-  } catch {
-    return "0.13.0";
   }
-}
-
-function getChangedFiles(oldHead, newHead) {
-  if (!oldHead || !newHead || oldHead === newHead) return [];
-  try {
-    const files = execSync(`git diff --name-only ${oldHead} ${newHead}`, { cwd: rootDir })
-      .toString()
-      .trim()
-      .split(/\r?\n/)
-      .filter(Boolean);
-    console.log(`\x1b[36mℹ ${files.length} file(s) changed in this update.\x1b[0m`);
-    return files;
-  } catch {
-    return [];
-  }
-}
-
-const SERVER_SOURCE_PREFIXES = [
-  "packages/protocol/",
-  "packages/client/",
-  "packages/relay/",
-  "packages/highlight/",
-  "packages/plugin/",
-  "packages/server/",
-];
-
-const SHARED_BUILD_FILES = new Set(["package.json", "package-lock.json"]);
-
-function touchesSources(changedFiles, prefixes) {
-  return changedFiles.some(
-    (file) => prefixes.some((prefix) => file.startsWith(prefix)) || SHARED_BUILD_FILES.has(file),
-  );
-}
-
-function needsServerBuild({ force, serverDistExists, changedFiles }) {
-  if (!serverDistExists) return true;
-  if (force) return true;
-  return touchesSources(changedFiles, SERVER_SOURCE_PREFIXES);
-}
-
-function isAppDistValid(distDir) {
-  const indexPath = path.join(distDir, "index.html");
-  const expoDir = path.join(distDir, "_expo");
-  if (!existsSync(indexPath) || !existsSync(expoDir)) return false;
-  try {
-    const html = readFileSync(indexPath, "utf8");
-    return html.includes("<script");
-  } catch {
-    return false;
-  }
-}
-
-function needsAppBuild({ force, appDistExists, changedFiles }) {
-  if (!appDistExists) return true;
-  if (force) return true;
-  return touchesSources(changedFiles, ["packages/app/"]);
-}
-function checkAndPullRepo() {
-  console.log("\n\x1b[33m[1/5] Checking git repository status & pulling updates...\x1b[0m");
-  let oldHead = "";
-  try {
-    oldHead = execSync("git rev-parse HEAD", { cwd: rootDir }).toString().trim();
-  } catch {}
-
-  try {
-    const pullOutput = execSync("git pull origin main", { cwd: rootDir }).toString();
-    console.log(pullOutput.trim());
-  } catch {
-    console.warn(
-      "\x1b[33m⚠️ Git pull encountered an issue, proceeding with local changes...\x1b[0m",
-    );
-  }
-
-  let newHead = "";
-  try {
-    newHead = execSync("git rev-parse HEAD", { cwd: rootDir }).toString().trim();
-  } catch {}
-
-  const changedFiles = getChangedFiles(oldHead, newHead);
-  const isUpToDate = Boolean(oldHead && newHead && oldHead === newHead);
-  return { changedFiles, isUpToDate };
-}
-
-function deployDistArtifacts({ exePath, appVersion, nsisDir, publish }) {
-  const stats = statSync(exePath);
-  const sizeMb = (stats.size / (1024 * 1024)).toFixed(2);
-  console.log("\n\x1b[1m\x1b[32m✔ SUCCESS! Updated installer created:\x1b[0m");
-  console.log(`  \x1b[37mPath:\x1b[0m ${exePath}`);
-  console.log(`  \x1b[37mSize:\x1b[0m ${sizeMb} MB (${stats.size.toLocaleString()} bytes)`);
-  console.log(`  \x1b[37mLast Modified:\x1b[0m ${stats.mtime.toLocaleString()}`);
-
-  const persistentPath = path.join(nsisDir, "Kronos_x64-setup.exe");
-  if (exePath !== persistentPath) {
-    copyFileSync(exePath, persistentPath);
-    console.log(`  \x1b[37mPersistent Latest Asset:\x1b[0m ${persistentPath}`);
-  }
-
-  const releaseTag = `v${appVersion}`;
-  const distRootDir = path.join(rootDir, "dist");
-  mkdirSync(distRootDir, { recursive: true });
-  const distInstallerPath = path.join(distRootDir, `Kronos_${appVersion}_x64-setup.exe`);
-  copyFileSync(exePath, distInstallerPath);
-  copyFileSync(exePath, path.join(distRootDir, "Kronos_x64-setup.exe"));
-  console.log(`  \x1b[32m✔ Dist Installer Deployed:\x1b[0m ${distInstallerPath}`);
-
-  const releaseBinary = path.join(
-    rootDir,
-    "packages",
-    "desktop-tauri",
-    "src-tauri",
-    "target",
-    "release",
-    "paseo-desktop.exe",
-  );
-  const tempReleaseBinary = path.join(os.tmpdir(), "kronos_target", "release", "paseo-desktop.exe");
-  let sourcePortableExe = null;
-  if (existsSync(releaseBinary)) {
-    sourcePortableExe = releaseBinary;
-  } else if (existsSync(tempReleaseBinary)) {
-    sourcePortableExe = tempReleaseBinary;
-  }
-
-  if (sourcePortableExe) {
-    const distPortablePath = path.join(distRootDir, "kronos-portable.exe");
-    copyFileSync(sourcePortableExe, distPortablePath);
-    const portableStats = statSync(distPortablePath);
-    console.log(
-      `  \x1b[32m✔ Portable Executable Deployed:\x1b[0m ${distPortablePath} (${(portableStats.size / (1024 * 1024)).toFixed(2)} MB)`,
-    );
-  } else {
-    console.warn("  \x1b[33m⚠️ Release binary not found for portable copy\x1b[0m");
-  }
-
-  const latestJsonPath = path.join(distRootDir, "latest.json");
-  generateUpdateManifest(appVersion, latestJsonPath);
-
-  if (publish) {
-    publishToGitHub(exePath, persistentPath, latestJsonPath, releaseTag);
-  } else {
-    console.log(
-      "\n\x1b[36mℹ Note: Built locally. To auto-upload to GitHub Releases and update the live website, run with --publish:\x1b[0m",
-    );
-    console.log("  \x1b[37mnode scripts/update-and-build-exe.mjs --publish\x1b[0m");
-  }
-}
-function buildInternalPackages(serverNeedsBuild) {
-  console.log("\n\x1b[33m[2/5] Core packages & server build...\x1b[0m");
-  if (serverNeedsBuild) {
-    run("npm run build --workspace=@getpaseo/protocol");
-    run("npm run build --workspace=@getpaseo/client");
-    run("npm run build --workspace=@getpaseo/relay");
-    run("npm run build --workspace=@getpaseo/highlight");
-    run("npm run build --workspace=@getpaseo/plugin");
-    run("npm run build --workspace=@getpaseo/server");
-  } else {
-    console.log("\x1b[32m⏩ [SKIP] Core packages & server unchanged. Reusing cached build.\x1b[0m");
-  }
-}
-
-function exportWebBundle(appNeedsBuild, force) {
-  console.log("\n\x1b[33m[3/5] Frontend web bundle export...\x1b[0m");
-  if (appNeedsBuild) {
-    const clearArg = force ? " --clear" : "";
-    run(
-      `npx cross-env NODE_ENV=production PASEO_WEB_PLATFORM=electron npx expo export --platform web${clearArg}`,
-      path.join(rootDir, "packages", "app"),
-    );
-  } else {
-    console.log("\x1b[32m⏩ [SKIP] Frontend files unchanged. Reusing cached web export.\x1b[0m");
-  }
-}
-
-function parseCliArgs() {
-  const args = new Set(process.argv.slice(2));
-  const withoutNode = args.has("--without-node") || process.env.KRONOS_WITHOUT_NODE === "1";
-  const isRelease = args.has("--release");
-  const force = args.has("--force") || isRelease;
-  const quick = (args.has("--quick") || args.has("--portable")) && !isRelease;
-  const publish = args.has("--publish");
-  return { withoutNode, isRelease, force, quick, publish };
-}
-
-async function main() {
-  console.log("\x1b[1m\x1b[32m=== Kronos Desktop Auto-Pull & .EXE Builder ===\x1b[0m");
-
-  const { withoutNode, isRelease, force, quick, publish } = parseCliArgs();
-  const nsisDir = path.join(
-    rootDir,
-    "packages",
-    "desktop-tauri",
-    "src-tauri",
-    "target",
-    "release",
-    "bundle",
-    "nsis",
-  );
-  const appVersion = getAppVersion();
-  const currentVersionExe = path.join(nsisDir, `Kronos_${appVersion}_x64-setup.exe`);
-  const hasCurrentVersionExe = existsSync(currentVersionExe);
-
-  const { changedFiles, isUpToDate } = checkAndPullRepo();
-  const serverDistExists = existsSync(
-    path.join(rootDir, "packages/desktop-tauri/server-dist/dist"),
-  );
-  const appDistExists = isAppDistValid(path.join(rootDir, "packages/app/dist"));
-  const distInstallerPath = path.join(rootDir, "dist", `Kronos_${appVersion}_x64-setup.exe`);
-  const hasDistInstaller = existsSync(distInstallerPath);
-
-  if (
-    isUpToDate &&
-    !force &&
-    !withoutNode &&
-    !publish &&
-    hasCurrentVersionExe &&
-    hasDistInstaller
-  ) {
-    console.log("\n\x1b[32m✔ Repository already up to date! Existing installer found:\x1b[0m");
-    console.log(`  \x1b[37mPath:\x1b[0m ${currentVersionExe}`);
-    console.log(
-      "\x1b[90m(Run with '--force' to rebuild anyway: update-desktop-exe.bat --force)\x1b[0m",
-    );
-    return;
-  }
-
-  const serverNeedsBuild =
-    !withoutNode && needsServerBuild({ force, serverDistExists, changedFiles });
-  const appNeedsBuild = needsAppBuild({ force, appDistExists, changedFiles });
-
-  buildInternalPackages(serverNeedsBuild);
-  exportWebBundle(appNeedsBuild, force);
-
-  // Step 4: Prepare Server Distribution Assets
-  console.log(
-    `\n\x1b[33m[4/5] Preparing ${withoutNode ? "standalone native" : "lean"} server-dist assets...\x1b[0m`,
-  );
-  const prepCmd = withoutNode ? "node prepare-dist.mjs --without-node" : "node prepare-dist.mjs";
-  run(prepCmd, path.join(rootDir, "packages", "desktop-tauri"));
-  // Step 5: Compile Tauri Executable / Installer
-  let builtQuick = false;
-  if (force || withoutNode || !hasCurrentVersionExe) {
-    builtQuick = compileTauriBundle(quick, nsisDir);
-    if (builtQuick && !isRelease) return;
-  } else {
-    console.log(
-      `\x1b[32m⏩ [SKIP] Installer for v${appVersion} already exists. Reusing binary.\x1b[0m`,
-    );
-  }
-  // Verification & Packaging
-  const exePath = hasCurrentVersionExe ? currentVersionExe : getLatestExe(nsisDir);
-  if (exePath && existsSync(exePath)) {
-    deployDistArtifacts({ exePath, appVersion, nsisDir, publish });
-  } else {
-    console.error("\n\x1b[31m✖ Error: Installer .exe was not found at expected path.\x1b[0m");
-    process.exit(1);
-  }
-}
-
-function generateUpdateManifest(appVersion, targetPath) {
-  const tag = `v${appVersion}`;
-  const manifest = {
-    version: tag,
-    notes: `Kronos ${tag} Release: Instant boot, Windows 11 Mica backdrop, native Myers diff, and dual global hotkeys.`,
-    pub_date: new Date().toISOString(),
-    platforms: {
-      "windows-x86_64": {
-        signature: "",
-        url: `https://github.com/Xenonesis/Kronos/releases/download/${tag}/Kronos_${appVersion}_x64-setup.exe`,
-      },
-    },
-  };
-  writeFileSync(targetPath, JSON.stringify(manifest, null, 2), "utf8");
-  console.log(`  \x1b[32m✔ Tauri Updater Manifest Generated:\x1b[0m ${targetPath}`);
-}
-
-function publishToGitHub(exePath, persistentPath, latestJsonPath, releaseTag) {
-  console.log(
-    `\n\x1b[33m[*] Uploading latest .exe and manifest to GitHub Releases (${releaseTag})...\x1b[0m`,
-  );
-  try {
-    try {
-      execSync(`gh release view ${releaseTag} --repo Xenonesis/Kronos`, { stdio: "ignore" });
-    } catch {
-      console.log(`\x1b[36mℹ Release ${releaseTag} does not exist yet. Creating release...\x1b[0m`);
-      execSync(
-        `gh release create ${releaseTag} --title "Kronos ${releaseTag}" --notes "Automated build of Kronos ${releaseTag}" --repo Xenonesis/Kronos`,
-        { stdio: "inherit" },
-      );
-    }
-    const uploadFiles = [exePath, persistentPath];
-    const portablePath = path.join(rootDir, "dist", "kronos-portable.exe");
-    if (existsSync(portablePath)) {
-      uploadFiles.push(portablePath);
-    }
-    if (latestJsonPath && existsSync(latestJsonPath)) {
-      uploadFiles.push(latestJsonPath);
-    }
-    const uploadArgs = uploadFiles.map((f) => `"${f}"`).join(" ");
-    execSync(`gh release upload ${releaseTag} ${uploadArgs} --clobber --repo Xenonesis/Kronos`, {
-      stdio: "inherit",
+  if (result.signed) {
+    const staging = path.join(rootDir, "packages/desktop-tauri/src-tauri/target/signed-release");
+    stageRelease({
+      bundleDir: result.bundleDir,
+      outputDir: staging,
+      version: result.version,
+      platform: "windows",
+      arch: "x86_64",
+      publicKey: process.env.TAURI_SIGNING_PUBLIC_KEY,
     });
-    console.log(
-      `\x1b[32m✔ Uploaded latest installer and updater manifest to GitHub Releases (${releaseTag})!\x1b[0m`,
-    );
-
-    console.log("\x1b[33m[*] Triggering GitHub Pages website deployment...\x1b[0m");
-    try {
-      execSync(`gh workflow run "Deploy to GitHub Pages" --repo Xenonesis/Kronos`, {
-        stdio: "inherit",
-      });
-      console.log("\x1b[32m✔ GitHub Pages website deployment triggered!\x1b[0m");
-    } catch (wfErr) {
-      console.warn(
-        "\x1b[33m⚠ Note: Could not trigger GitHub Pages workflow automatically:\x1b[0m",
-        wfErr.message,
-      );
-    }
-  } catch (e) {
-    console.warn(
-      "\x1b[33m⚠ Warning: Could not upload to GitHub Releases automatically.\x1b[0m",
-      e.message,
-    );
-  }
-}
-function compileTauriBundle(quick, nsisDir) {
-  if (quick) {
-    console.log(
-      "\n\x1b[33m[5/5] Compiling Fast Release Binary (skipping NSIS compression)...\x1b[0m",
-    );
-    run(
-      "cargo build --release --manifest-path src-tauri/Cargo.toml",
-      path.join(rootDir, "packages", "desktop-tauri"),
-    );
-    const releaseExe = path.join(
+    const signedOutput = path.join(
       rootDir,
-      "packages",
-      "desktop-tauri",
-      "src-tauri",
-      "target",
+      "packages/desktop-tauri/src-tauri/target/validated-release",
+    );
+    const previousDir = path.join(
+      rootDir,
+      "packages/desktop-tauri/src-tauri/target/previous-release",
+    );
+    const requiredPath = path.join(
+      rootDir,
+      "packages/desktop-tauri/src-tauri/target/required-platforms.json",
+    );
+    if (publish)
+      fetchPreviousRelease({
+        version: result.version,
+        outputDir: previousDir,
+        requiredPath,
+        publicKey: process.env.TAURI_SIGNING_PUBLIC_KEY,
+      });
+    mergeReleases({
+      inputDir: staging,
+      outputDir: signedOutput,
+      version: result.version,
+      publicKey: process.env.TAURI_SIGNING_PUBLIC_KEY,
+      previousDir: publish ? previousDir : undefined,
+      requiredPlatforms: publish ? JSON.parse(fs.readFileSync(requiredPath, "utf8")) : [],
+    });
+    for (const file of fs.readdirSync(signedOutput))
+      copyInstallerArtifact(path.join(signedOutput, file), path.join(distDir, file));
+  } else {
+    copyInstallerArtifact(installer, path.join(distDir, installerName));
+    copyInstallerArtifact(installer, path.join(distDir, "Kronos_x64-setup.exe"));
+    console.log("Unsigned local installer: no signed updater metadata was generated.");
+  }
+  copyInstallerArtifact(installer, path.join(distDir, "latest.exe"));
+  const alias = path.join(result.bundleDir, "nsis", "Kronos_x64-setup.exe");
+  copyInstallerArtifact(installer, alias);
+  if (result.signed) copyInstallerArtifact(`${installer}.sig`, `${alias}.sig`);
+  console.log(`NSIS installer: ${installer} (${stat.size} bytes)`);
+  console.log(`Identical local installer copy: ${path.join(distDir, "Kronos_x64-setup.exe")}`);
+  if (publish) {
+    const tag = `v${result.version}`;
+    const gh = (args, stdio = "inherit") => execFileSync("gh", args, { cwd: rootDir, stdio });
+    try {
+      gh(["release", "view", tag, "--repo", "Xenonesis/Kronos"], "ignore");
+    } catch {
+      gh([
+        "release",
+        "create",
+        tag,
+        "--draft",
+        "--title",
+        `Kronos ${tag}`,
+        "--notes",
+        "",
+        "--repo",
+        "Xenonesis/Kronos",
+      ]);
+    }
+    const assets = [
+      installerName,
+      `${installerName}.sig`,
+      "Kronos_x64-setup.exe",
+      "Kronos_x64-setup.exe.sig",
+      "latest.json",
+    ];
+    gh([
       "release",
-      "paseo-desktop.exe",
-    );
-    if (existsSync(releaseExe)) {
-      const stats = statSync(releaseExe);
-      console.log("\n\x1b[1m\x1b[32m✔ SUCCESS! Fast release executable created:\x1b[0m");
-      console.log(`  \x1b[37mPath:\x1b[0m ${releaseExe}`);
-      console.log(`  \x1b[37mSize:\x1b[0m ${(stats.size / (1024 * 1024)).toFixed(2)} MB`);
-      return true;
-    }
-  }
-
-  console.log("\n\x1b[33m[5/5] Compiling Tauri NSIS installer .exe...\x1b[0m");
-  const tempTargetDir = path.join(os.tmpdir(), "kronos_target");
-  try {
-    run("npx tauri build --bundles nsis", path.join(rootDir, "packages", "desktop-tauri"));
-  } catch {
+      "upload",
+      tag,
+      ...assets.map((file) => path.join(distDir, file)),
+      "--clobber",
+      "--repo",
+      "Xenonesis/Kronos",
+    ]);
     console.log(
-      "\x1b[33mTarget directory locked by running process; compiling with CARGO_TARGET_DIR fallback...\x1b[0m",
+      `Validated signed assets uploaded to ${tag}; publication remains an explicit release decision.`,
     );
-    run(
-      `npx cross-env CARGO_TARGET_DIR="${tempTargetDir}" npx tauri build --bundles nsis`,
-      path.join(rootDir, "packages", "desktop-tauri"),
-    );
-    const appVersion = getAppVersion();
-    const versionedName = `Kronos_${appVersion}_x64-setup.exe`;
-    const tempBundle = path.join(tempTargetDir, "release", "bundle", "nsis", versionedName);
-    if (existsSync(tempBundle)) {
-      copyFileSync(tempBundle, path.join(nsisDir, versionedName));
-      copyFileSync(tempBundle, path.join(nsisDir, "Kronos_x64-setup.exe"));
-    }
   }
-  return false;
 }
 
-main().catch((err) => {
-  console.error("\n\x1b[31m✖ Build failed:\x1b[0m", err);
-  process.exit(1);
-});
+if (isMainModule(import.meta.url)) {
+  try {
+    buildInstaller();
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
+  }
+}

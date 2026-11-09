@@ -17,10 +17,7 @@ test("computeWingetManifestPath computes standard Winget path layout", () => {
     "0.15.0-beta.1",
     "Xenonesis.Kronos.yaml",
   );
-  assert.equal(
-    relPath,
-    "manifests/x/Xenonesis/Kronos/0.15.0-beta.1/Xenonesis.Kronos.yaml",
-  );
+  assert.equal(relPath, "manifests/x/Xenonesis/Kronos/0.15.0-beta.1/Xenonesis.Kronos.yaml");
 });
 
 test("validateWingetManifests validates required files and schema values", async () => {
@@ -54,10 +51,7 @@ test("validateWingetManifests validates required files and schema values", async
 
     const loaded = await validateWingetManifests(dir, "1.0.0");
     assert.equal(loaded.length, 3);
-    assert.equal(
-      loaded[0].targetPath,
-      "manifests/x/Xenonesis/Kronos/1.0.0/Xenonesis.Kronos.yaml",
-    );
+    assert.equal(loaded[0].targetPath, "manifests/x/Xenonesis/Kronos/1.0.0/Xenonesis.Kronos.yaml");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -180,10 +174,7 @@ test("submitWingetPackage executes full PR workflow with mock fetchImpl", async 
 
     assert.equal(result.success, true);
     assert.equal(result.dryRun, false);
-    assert.equal(
-      result.pullRequestUrl,
-      "https://github.com/microsoft/winget-pkgs/pull/99999",
-    );
+    assert.equal(result.pullRequestUrl, "https://github.com/microsoft/winget-pkgs/pull/99999");
     assert.equal(result.pullRequestNumber, 99999);
     assert.ok(calls.some((c) => c.url.includes("/pulls") && c.method === "POST"));
   } finally {

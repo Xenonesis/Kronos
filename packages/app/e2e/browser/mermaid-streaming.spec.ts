@@ -1,3 +1,4 @@
+import { expect } from "@playwright/test";
 import { test } from "../support/fixtures";
 import {
   expectCompletedDiagram,
@@ -67,6 +68,76 @@ test("keeps a Mermaid diagram rendered while its message streams, completes, and
       await expectCompletedDiagram(page, ["Start", "Done", "Release"]);
     });
   } finally {
+    await agent.cleanup();
+  }
+});
+
+test("loads Mermaid only when needed and recovers from a failed runtime chunk", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  let runtimeRequests = 0;
+  const { promise: firstRequestReleased, resolve: releaseFirstRequest } =
+    Promise.withResolvers<void>();
+  await page.route(/html\.gen.*\.(?:js|bundle)(?:\?|$)/, async (route) => {
+    runtimeRequests += 1;
+    if (runtimeRequests === 1) {
+      await firstRequestReleased;
+      await route.abort("failed");
+    } else await route.continue();
+  });
+  const agent = await seedMockAgentWorkspace({
+    repoPrefix: "mermaid-deferred-",
+    title: "Deferred Mermaid",
+    featureValues: {
+      mockStreamingAssistantResponse: "```mermaid\nflowchart LR\n Start --> Done\n```",
+      mockStreamingAssistantIntervalMs: 10,
+    },
+  });
+  try {
+    await openAgentRoute(page, agent);
+    expect(runtimeRequests).toBe(0);
+    await requestDiagram(agent);
+    await waitForDiagramTurnToComplete(agent);
+    await expect(page.getByTestId("mermaid-runtime-loading")).toBeVisible();
+    releaseFirstRequest();
+    await expect(page.getByTestId("mermaid-runtime-error")).toBeVisible();
+    await page.getByTestId("mermaid-runtime-retry").click();
+    await expectDiagramWithLabels(page, ["Start", "Done"]);
+    await expect(page.getByTestId("mermaid-runtime-error")).toHaveCount(0);
+    expect(runtimeRequests).toBe(2);
+
+    const iframe = await page.getByTestId("mermaid-viewport").locator("iframe").elementHandle();
+    let probeRequests = 0;
+    await page.route("https://example.invalid/mermaid-network-probe", async (route) => {
+      probeRequests += 1;
+      await route.fulfill({
+        status: 200,
+        headers: { "access-control-allow-origin": "*" },
+        body: "network must remain blocked",
+      });
+    });
+    const frame = await iframe?.contentFrame();
+    if (!frame) throw new Error("Rendered diagram frame is unavailable");
+    const isolation = await frame.evaluate(async () => {
+      let parentBlocked = false;
+      try {
+        void window.parent.document.body;
+      } catch {
+        parentBlocked = true;
+      }
+      let networkBlocked = false;
+      try {
+        await fetch("https://example.invalid/mermaid-network-probe");
+      } catch {
+        networkBlocked = true;
+      }
+      return { parentBlocked, networkBlocked };
+    });
+    expect(isolation).toEqual({ parentBlocked: true, networkBlocked: true });
+    expect(probeRequests).toBe(0);
+  } finally {
+    releaseFirstRequest();
     await agent.cleanup();
   }
 });

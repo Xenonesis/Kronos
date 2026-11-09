@@ -2,6 +2,9 @@ import { MessagePreview, MessageSender } from "@/components/user-message";
 import { useStableEvent } from "@/hooks/use-stable-event";
 import { getAgentAttachmentPillContent } from "@/attachments/attachment-pill-content";
 import { AssistantForkMenu, type AssistantForkTarget } from "@/components/assistant-fork-menu";
+import { AssistantMessageActionsMenu } from "@/components/assistant-message-actions-menu";
+import { useAssistantMessageViewStore } from "@/stores/assistant-message-view-store";
+import { usePinnedMessagesStore } from "@/stores/pinned-messages-store";
 import { AttachmentLightbox, type ImageLightboxSource } from "@/components/attachment-lightbox";
 import {
   AttachmentFrame,
@@ -43,6 +46,7 @@ import {
   FileSymlink,
   Info,
   MicVocal,
+  Pin,
   Plus,
   Scissors,
   TriangleAlertIcon,
@@ -137,6 +141,7 @@ const ThemedChevronRightIcon = withUnistyles(ChevronRight);
 const ThemedNotificationInfo = withUnistyles(Info);
 const ThemedNotificationWarning = withUnistyles(TriangleAlertIcon);
 const ThemedNotificationError = withUnistyles(XCircle);
+const ThemedPin = withUnistyles(Pin);
 
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const foregroundMutedColorMapping = (theme: Theme) => ({
@@ -544,11 +549,15 @@ export const UserMessage = memo(function UserMessage({
   );
 });
 
-interface AssistantTurnFooterProps {
+export interface AssistantTurnFooterProps {
   getContent?: () => string;
   completedAt?: Date;
   durationMs?: number | null;
   onFork?: (target: AssistantForkTarget) => Promise<void> | void;
+  messageId?: string;
+  occurrenceKey?: string;
+  serverId?: string;
+  agentId?: string;
 }
 
 const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
@@ -593,6 +602,10 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
   completedAt,
   durationMs,
   onFork,
+  messageId,
+  occurrenceKey,
+  serverId,
+  agentId,
 }: AssistantTurnFooterProps) {
   const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
@@ -652,6 +665,15 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
         />
       ) : null}
       {canFork ? <AssistantForkMenu onFork={handleFork} /> : null}
+      {getContent && (messageId || occurrenceKey) ? (
+        <AssistantMessageActionsMenu
+          messageId={messageId ?? occurrenceKey ?? ""}
+          occurrenceKey={occurrenceKey}
+          getContent={getContent}
+          serverId={serverId}
+          agentId={agentId}
+        />
+      ) : null}
       {primaryLabel ? (
         <Pressable
           onPress={handlePress}
@@ -693,7 +715,14 @@ export const LiveElapsed = memo(function LiveElapsed({
   style,
   testID,
 }: LiveElapsedProps) {
-  const startedAtMs = startedAt.getTime();
+  const startedAtMs =
+    startedAt instanceof Date
+      ? startedAt.getTime()
+      : typeof startedAt === "number"
+        ? startedAt
+        : typeof startedAt === "string"
+          ? Date.parse(startedAt) || Date.now()
+          : Date.now();
   const [elapsedMs, setElapsedMs] = useState(() => Math.max(0, Date.now() - startedAtMs));
   const visibleElapsedMs = active ? Math.max(0, Date.now() - startedAtMs) : elapsedMs;
 
@@ -718,6 +747,8 @@ export const LiveElapsed = memo(function LiveElapsed({
 interface AssistantMessageProps {
   renderFullContent?: boolean;
   occurrenceKey: string;
+  messageId?: string;
+  agentId?: string;
   message: string;
   timestamp: number;
   workspaceRoot?: string;
@@ -737,6 +768,37 @@ export const assistantMessageStylesheet = StyleSheet.create((theme) => ({
   },
   containerCompactBottom: {
     paddingBottom: 0,
+  },
+  pinnedBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1],
+    marginBottom: theme.spacing[2],
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 2,
+    alignSelf: "flex-start",
+    borderRadius: theme.borderRadius.sm,
+    backgroundColor: theme.colors.surface2,
+  },
+  pinnedBadgeText: {
+    fontFamily: theme.fontFamily.ui,
+    fontSize: 11,
+    color: theme.colors.foregroundMuted,
+    fontWeight: "500",
+  },
+  rawMarkdownContainer: {
+    padding: theme.spacing[3],
+    backgroundColor: theme.colors.surface1,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  rawMarkdownText: {
+    fontFamily: theme.fontFamily.mono,
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foreground,
+    lineHeight: 20,
+    ...(isWeb ? { whiteSpace: "pre-wrap" as const, wordBreak: "break-word" as const } : {}),
   },
   cappedNotice: {
     marginTop: theme.spacing[3],
@@ -1141,6 +1203,8 @@ function NativeShimmerPeakSvg({ gradientId }: { gradientId: string }) {
 export const AssistantMessage = memo(function AssistantMessage({
   renderFullContent = false,
   occurrenceKey,
+  messageId,
+  agentId,
   message,
   timestamp: _timestamp,
   workspaceRoot,
@@ -1150,6 +1214,15 @@ export const AssistantMessage = memo(function AssistantMessage({
   phase,
 }: AssistantMessageProps) {
   const { t } = useTranslation();
+  const isRaw = useAssistantMessageViewStore(
+    (state) => state.isRaw(occurrenceKey) || (messageId ? state.isRaw(messageId) : false),
+  );
+  const pinScope = serverId && agentId ? `${serverId}:${agentId}` : "default";
+  const isPinned = usePinnedMessagesStore(
+    (state) =>
+      state.isPinned(pinScope, occurrenceKey) ||
+      (messageId ? state.isPinned(pinScope, messageId) : false),
+  );
   const renderedMessage = useMemo(
     () =>
       renderFullContent ? { text: message, capped: false } : capAssistantMessageForRender(message),
@@ -1194,14 +1267,30 @@ export const AssistantMessage = memo(function AssistantMessage({
       style={assistantContainerStyle}
       onLayout={measureMessage}
     >
-      <MarkdownRenderer
-        text={revealedMessage}
-        agentCommands
-        streaming={phase !== "complete" || revealedMessage.length < renderedMessage.text.length}
-        client={client}
-        workspaceRoot={workspaceRoot}
-        serverId={serverId}
-      />
+      {isPinned ? (
+        <View style={assistantMessageStylesheet.pinnedBadge}>
+          <ThemedPin size={12} uniProps={foregroundMutedColorMapping} />
+          <Text style={assistantMessageStylesheet.pinnedBadgeText}>
+            {t("message.actions.pinned")}
+          </Text>
+        </View>
+      ) : null}
+      {isRaw ? (
+        <View style={assistantMessageStylesheet.rawMarkdownContainer}>
+          <Text selectable style={assistantMessageStylesheet.rawMarkdownText}>
+            {revealedMessage}
+          </Text>
+        </View>
+      ) : (
+        <MarkdownRenderer
+          text={revealedMessage}
+          agentCommands
+          streaming={phase !== "complete" || revealedMessage.length < renderedMessage.text.length}
+          client={client}
+          workspaceRoot={workspaceRoot}
+          serverId={serverId}
+        />
+      )}
       {fullMessageByteLength !== null ? (
         <Text
           testID="assistant-message-capped-notice"

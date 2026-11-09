@@ -1591,6 +1591,9 @@ export const AgentControls = memo(function AgentControls({
     [agent?.provider, models],
   );
   const agentModelSelectorProviders = useMemo(() => {
+    if (snapshotEntries && snapshotEntries.length > 0) {
+      return buildSelectableProviderSelectorProviders(snapshotEntries);
+    }
     if (snapshotSelectedEntry) {
       return buildSelectableProviderSelectorProviders([snapshotSelectedEntry]);
     }
@@ -1598,7 +1601,7 @@ export const AgentControls = memo(function AgentControls({
       providerDefinitions: agentProviderDefinitions,
       modelsByProvider: agentProviderModels,
     });
-  }, [agentProviderDefinitions, agentProviderModels, snapshotSelectedEntry]);
+  }, [agentProviderDefinitions, agentProviderModels, snapshotEntries, snapshotSelectedEntry]);
 
   const modelSelection = resolveAgentModelSelection({
     models,
@@ -1628,7 +1631,7 @@ export const AgentControls = memo(function AgentControls({
         return;
       }
       try {
-        await client.setAgentModel(agentId, modelId);
+        await client.setAgentModel(agentId, modelId, agentProvider);
         await updatePreferences((current) =>
           mergeProviderPreferences({
             preferences: current,
@@ -1643,14 +1646,41 @@ export const AgentControls = memo(function AgentControls({
     },
     [agentId, agentProvider, client, toast, updatePreferences],
   );
-  const handleSelectCommandCenterModel = useCallback(
-    (_provider: AgentProvider, modelId: string) => handleSelectModel(modelId),
-    [handleSelectModel],
+
+  const handleSelectProviderAndModel = useCallback(
+    async (nextProvider: string, nextModelId: string) => {
+      if (!client) {
+        return;
+      }
+      try {
+        await client.setAgentModel(agentId, nextModelId, nextProvider);
+        await updatePreferences((current) =>
+          mergeProviderPreferences({
+            preferences: current,
+            provider: nextProvider as AgentProvider,
+            updates: { model: nextModelId },
+          }),
+        );
+      } catch (error) {
+        console.warn("[AgentControls] setAgentModel or persist preference failed", error);
+        toast.error(toErrorMessage(error));
+      }
+    },
+    [agentId, client, toast, updatePreferences],
   );
 
-  // A running agent is one provider's process, so only that provider's profiles
-  // can apply to it.
-  const profileProviders = useMemo(() => (agentProvider ? [agentProvider] : []), [agentProvider]);
+  const handleSelectCommandCenterModel = useCallback(
+    (nextProvider: AgentProvider, modelId: string) =>
+      handleSelectProviderAndModel(nextProvider, modelId),
+    [handleSelectProviderAndModel],
+  );
+
+  const profileProviders = useMemo(() => {
+    if (agentModelSelectorProviders.length > 0) {
+      return agentModelSelectorProviders.map((entry) => entry.id);
+    }
+    return agentProvider ? [agentProvider] : [];
+  }, [agentModelSelectorProviders, agentProvider]);
   const profileModeIds = useMemo(
     () => resolveSnapshotModeIds(snapshotSelectedEntry),
     [snapshotSelectedEntry],
@@ -1799,6 +1829,7 @@ export const AgentControls = memo(function AgentControls({
         modelOptions={modelOptions}
         selectedModelId={modelSelection.activeModelId ?? undefined}
         onSelectModel={handleSelectModel}
+        onSelectProviderAndModel={handleSelectProviderAndModel}
         agentProfiles={agentProfiles}
         onApplyAgentProfile={agentProfiles?.applyProfile}
         onEditAgentProfiles={handleEditAgentProfiles}

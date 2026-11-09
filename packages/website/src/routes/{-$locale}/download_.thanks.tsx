@@ -20,7 +20,8 @@ export const Route = createFileRoute("/{-$locale}/download_/thanks")({
     const locale = routeLocale(params);
     return pageMeta({
       title: "Thanks for downloading Kronos",
-      description: "Your Kronos download is starting. Follow development and report issues on GitHub.",
+      description:
+        "Your Kronos download is starting. Follow development and report issues on GitHub.",
       path: "/download/thanks",
       locale,
     });

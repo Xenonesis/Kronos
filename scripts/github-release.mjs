@@ -21,14 +21,13 @@ export function getGitHubRelease(repo, tag, execFileSync = nodeExecFileSync) {
     if (!isNotFoundError(error)) {
       throw error;
     }
-    const expectedName = `Paseo ${tag}`;
     const output = execFileSync(
       "gh",
       [
         "api",
         `repos/${repo}/releases?per_page=100`,
         "--jq",
-        `[.[] | select(.draft == true and .name == ${JSON.stringify(expectedName)})] | sort_by(.id)`,
+        `[.[] | select(.draft == true and (.name == ${JSON.stringify(`Paseo ${tag}`)} or .name == ${JSON.stringify(`Kronos ${tag}`)}))] | sort_by(.id)`,
       ],
       {
         encoding: "utf8",
@@ -81,14 +80,13 @@ if (isMainModule(import.meta.url)) {
     process.exitCode = 1;
   } else {
     if (cleanupDuplicates && release.draft === true) {
-      const expectedName = `Paseo ${tag}`;
       const duplicateIds = nodeExecFileSync(
         "gh",
         [
           "api",
           `repos/${repo}/releases?per_page=100`,
           "--jq",
-          `.[] | select(.draft == true and .name == ${JSON.stringify(expectedName)} and .id != ${release.id}) | .id`,
+          `.[] | select(.draft == true and (.name == ${JSON.stringify(`Paseo ${tag}`)} or .name == ${JSON.stringify(`Kronos ${tag}`)}) and .id != ${release.id}) | .id`,
         ],
         { encoding: "utf8" },
       )

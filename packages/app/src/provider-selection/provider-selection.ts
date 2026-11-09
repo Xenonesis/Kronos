@@ -9,6 +9,7 @@ import type { DraftCommandTarget } from "@/agent-commands";
 import { i18n } from "@/i18n/i18next";
 import { compareMatchScores, scoreTextFields } from "@getpaseo/protocol/search/text-match";
 import { filterSelectableModels } from "./model-catalog";
+import { resolveModelContextWindow } from "@/components/context-window-meter.utils";
 
 export interface ProviderSelectionModelRow {
   /**
@@ -23,6 +24,7 @@ export interface ProviderSelectionModelRow {
   modelLabel: string;
   description?: string;
   isDefault?: boolean;
+  contextWindowMaxTokens?: number;
 }
 
 function buildModelRowKey(provider: string, modelId: string): string {
@@ -67,6 +69,10 @@ function buildModelRows(
     modelLabel: model.label,
     description: model.description ?? model.id,
     isDefault: model.isDefault,
+    contextWindowMaxTokens:
+      model.contextWindowMaxTokens ??
+      resolveModelContextWindow(model.id, provider, models) ??
+      undefined,
   }));
 }
 

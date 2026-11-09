@@ -837,7 +837,9 @@ export async function createPaseoDaemon(
     createTerminalActivityRouteHandler(terminalManager),
   );
 
-  app.use("/api/browser-proxy", createBrowserProxyHandler(logger));
+  let localCredential: string | null = null;
+  const daemonAuth = { ...config.auth, localCredential: () => localCredential };
+  app.use("/api/browser-proxy", createBrowserProxyHandler(logger, daemonAuth));
   // OMP sessions explorer API
   app.use("/api/omp-sessions", createOmpSessionsRouter(logger));
   // Serve the bundled browser web UI when enabled. Mounted after service-proxy
@@ -846,8 +848,6 @@ export async function createPaseoDaemon(
   // remain protected.
   mountWebUi(app, config, logger);
 
-  let localCredential: string | null = null;
-  const daemonAuth = { ...config.auth, localCredential: () => localCredential };
   app.use(
     createRequireBearerMiddleware(daemonAuth, (context) => {
       logger.warn(context, "Rejected HTTP request with invalid daemon password");

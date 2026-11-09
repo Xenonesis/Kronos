@@ -27,7 +27,9 @@ macro_rules! eprintln {
 
 #[cfg(target_os = "windows")]
 fn sanitize_windows_stdio() {
-    use windows_sys::Win32::Foundation::{GetLastError, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Foundation::{
+        GetLastError, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
+    };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, WriteFile, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
@@ -58,7 +60,13 @@ fn sanitize_windows_stdio() {
                 }
             } else {
                 let mut written: u32 = 0;
-                let ok = WriteFile(handle, std::ptr::null(), 0, &mut written, std::ptr::null_mut());
+                let ok = WriteFile(
+                    handle,
+                    std::ptr::null(),
+                    0,
+                    &mut written,
+                    std::ptr::null_mut(),
+                );
                 if ok == 0 {
                     let err = GetLastError();
                     // 109 = ERROR_BROKEN_PIPE, 232 = ERROR_NO_DATA, 6 = ERROR_INVALID_HANDLE
@@ -79,15 +87,19 @@ fn sanitize_windows_stdio() {
 
 #[cfg(not(target_os = "windows"))]
 fn sanitize_windows_stdio() {}
+
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod daemon;
 mod editor;
 
+pub mod agent;
 pub mod kernel;
-pub mod process_job;
 pub mod native_diff;
 pub mod native_pty;
-pub mod agent;
 mod notifications;
+pub mod process_job;
 mod tray;
 
 use notifications::{notify_task_complete, setup_notification_listeners, show_notification};
@@ -199,7 +211,9 @@ pub fn toggle_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 }
 
 #[derive(Clone, Default)]
-pub struct UpdateState(pub std::sync::Arc<tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>>);
+pub struct UpdateState(
+    pub std::sync::Arc<tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>>,
+);
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[allow(non_snake_case)]
@@ -221,6 +235,16 @@ pub struct DesktopAppUpdateInstallResult {
     pub message: String,
 }
 
+fn updater_configured(app: &tauri::AppHandle) -> bool {
+    app.config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|config| config.get("pubkey"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|key| !key.trim().is_empty())
+}
+
 #[tauri::command]
 async fn check_app_update(
     app: tauri::AppHandle,
@@ -229,6 +253,15 @@ async fn check_app_update(
     intent: Option<String>,
 ) -> Result<DesktopAppUpdateCheckResult, String> {
     let _ = (release_channel, intent);
+    if !updater_configured(&app) {
+        *state.0.lock().await = None;
+        return Ok(DesktopAppUpdateCheckResult {
+            hasUpdate: false, readyToInstall: false,
+            currentVersion: Some(env!("CARGO_PKG_VERSION").to_string()),
+            latestVersion: None, body: None, date: None,
+            errorMessage: Some("Automatic updates are unavailable in this unsigned local build. Install an owner-signed release to enable them.".into()),
+        });
+    }
     let updater = match app.updater() {
         Ok(u) => u,
         Err(e) => {
@@ -313,11 +346,19 @@ async fn install_app_update(
     release_channel: Option<String>,
 ) -> Result<DesktopAppUpdateInstallResult, String> {
     let _ = release_channel;
+    if !updater_configured(&app) {
+        return Err(
+            "Automatic installation is disabled: this build has no updater verification key."
+                .into(),
+        );
+    }
     let mut lock = state.0.lock().await;
     let update = if let Some(u) = lock.take() {
         u
     } else {
-        let updater = app.updater().map_err(|e| format!("Updater not initialized: {e}"))?;
+        let updater = app
+            .updater()
+            .map_err(|e| format!("Updater not initialized: {e}"))?;
         match updater.check().await {
             Ok(Some(u)) => u,
             Ok(None) => {
@@ -334,13 +375,19 @@ async fn install_app_update(
     };
 
     let version = update.version.clone();
-    println!("[updater] Downloading and installing update v{}...", version);
+    println!(
+        "[updater] Downloading and installing update v{}...",
+        version
+    );
     let mut downloaded = 0;
     update
         .download_and_install(
             |chunk_length, content_length| {
                 downloaded += chunk_length;
-                println!("[updater] Downloaded {downloaded} bytes of {:?}", content_length);
+                println!(
+                    "[updater] Downloaded {downloaded} bytes of {:?}",
+                    content_length
+                );
             },
             || {
                 println!("[updater] Download complete, installing update...");
@@ -362,6 +409,15 @@ fn get_kernel_telemetry() -> crate::kernel::telemetry::KernelTelemetry {
 }
 
 #[tauri::command]
+async fn mark_first_paint(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn workspace_search(
     query: String,
     root: Option<String>,
@@ -369,7 +425,11 @@ async fn workspace_search(
 ) -> Result<Vec<crate::kernel::search::SearchResult>, String> {
     let target_root = root.unwrap_or_else(|| ".".to_string());
     let path = std::path::PathBuf::from(target_root);
-    let results = crate::kernel::cli::execute_search_in(&query, &path)?;
+    let results = tokio::task::spawn_blocking(move || {
+        crate::kernel::cli::execute_cached_search_in(&query, &path)
+    })
+    .await
+    .map_err(|e| format!("Search task failed: {e}"))??;
     let max_limit = limit.unwrap_or(100);
     Ok(results.into_iter().take(max_limit).collect())
 }
@@ -395,14 +455,26 @@ async fn analyze_ast(
 ) -> Result<crate::kernel::ast::AstAnalysisResult, String> {
     let (src, file_ext) = if let Some(s) = source {
         let e = ext
-            .or_else(|| path.as_ref().and_then(|p| std::path::Path::new(p).extension().and_then(|e| e.to_str()).map(String::from)))
+            .or_else(|| {
+                path.as_ref().and_then(|p| {
+                    std::path::Path::new(p)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(String::from)
+                })
+            })
             .unwrap_or_else(|| "ts".to_string());
         (s, e)
     } else if let Some(p) = path {
-        let content = std::fs::read_to_string(&p)
-            .map_err(|e| format!("Failed to read file '{p}': {e}"))?;
+        let content =
+            std::fs::read_to_string(&p).map_err(|e| format!("Failed to read file '{p}': {e}"))?;
         let e = ext
-            .or_else(|| std::path::Path::new(&p).extension().and_then(|e| e.to_str()).map(String::from))
+            .or_else(|| {
+                std::path::Path::new(&p)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(String::from)
+            })
             .unwrap_or_else(|| "ts".to_string());
         (content, e)
     } else {
@@ -440,14 +512,8 @@ async fn crdt_doc_action(
         }
         "insert" | "delete" => {
             let idx = index.unwrap_or(0);
-            let b64 = engine.apply_text_edit(
-                &room,
-                &action,
-                idx,
-                text.as_deref(),
-                length,
-                source_id,
-            )?;
+            let b64 =
+                engine.apply_text_edit(&room, &action, idx, text.as_deref(), length, source_id)?;
             let doc = engine.get_or_create_room(&room);
             Ok(serde_json::json!({
                 "room": room,
@@ -457,7 +523,8 @@ async fn crdt_doc_action(
             }))
         }
         "apply_update" => {
-            let b64 = update_base64.ok_or_else(|| "Missing 'update_base64' parameter".to_string())?;
+            let b64 =
+                update_base64.ok_or_else(|| "Missing 'update_base64' parameter".to_string())?;
             let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64)
                 .map_err(|e| format!("Invalid base64: {e}"))?;
             let broadcasted_b64 = engine.apply_update(&room, &bytes, source_id)?;
@@ -552,13 +619,19 @@ async fn push_shm_chunk(stream_id: String, payload: String) -> Result<u64, Strin
     let ring_lock = crate::kernel::server::get_shm_ring();
     let ring = ring_lock.lock().await;
     let next_seq = ring.sequence() + 1;
-    crate::kernel::rkyv_shm::write_rkyv_chunk_to_shm(&ring, next_seq, &stream_id, payload.into_bytes())
+    crate::kernel::rkyv_shm::write_rkyv_chunk_to_shm(
+        &ring,
+        next_seq,
+        &stream_id,
+        payload.into_bytes(),
+    )
 }
-
 
 fn detect_and_configure_portable_mode() -> Option<PathBuf> {
     // Check KRONOS_PORTABLE=1 env var
-    let env_portable = std::env::var("KRONOS_PORTABLE").map(|v| v == "1").unwrap_or(false);
+    let env_portable = std::env::var("KRONOS_PORTABLE")
+        .map(|v| v == "1")
+        .unwrap_or(false);
 
     // Check if adjacent .kronos-data directory exists next to current executable
     let mut adjacent_data_dir = None;
@@ -681,17 +754,68 @@ fn get_live_daemon_status() -> serde_json::Value {
 }
 
 #[tauri::command]
-fn get_live_local_credential() -> Option<String> {
-    let home = get_data_dir();
-    let credential_file = home.join("local-credential");
-    if let Ok(content) = fs::read_to_string(&credential_file) {
-        let trimmed = content.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
+fn get_live_local_credential(listen: String) -> Option<String> {
+    if !kernel::access::is_managed_target(&listen) {
+        return None;
     }
-    None
+    kernel::auth::read_local_credential(&get_data_dir())
 }
+
+static DAEMON_BROWSER_CLIENT: std::sync::LazyLock<reqwest::Client> =
+    std::sync::LazyLock::new(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("Create daemon browser client")
+    });
+
+async fn browser_daemon_request(
+    path: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let credential = kernel::auth::read_local_credential(&get_data_dir())
+        .ok_or("The listening daemon has no readable local credential")?;
+    let response = DAEMON_BROWSER_CLIENT
+        .post(format!("http://127.0.0.1:6767{path}"))
+        .bearer_auth(credential)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Browser operation rejected by the listening daemon: {}",
+            response.status()
+        ));
+    }
+    response.json().await.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn browser_proxy_url(url: String) -> Result<String, String> {
+    let response = browser_daemon_request(
+        "/api/browser-proxy/navigation",
+        serde_json::json!({"url":url}),
+    )
+    .await?;
+    let path = response["url"]
+        .as_str()
+        .filter(|path| path.starts_with("/api/browser-proxy?"))
+        .ok_or("The daemon returned an invalid browser navigation capability")?;
+    Ok(format!("http://127.0.0.1:6767{path}"))
+}
+
+#[tauri::command]
+async fn browser_proxy_cookies(host: String, cookies: String) -> Result<(), String> {
+    browser_daemon_request(
+        "/api/browser-proxy/cookies",
+        serde_json::json!({"host":host,"cookies":cookies}),
+    )
+    .await?;
+    Ok(())
+}
+
 fn read_tail_file(path: &std::path::Path, max_lines: usize) -> String {
     if !path.exists() {
         return String::new();
@@ -818,7 +942,10 @@ fn fast_validate_directory(path: String) -> DirectoryValidationResult {
 fn start_desktop_daemon(state: tauri::State<DaemonState>) -> serde_json::Value {
     let mut lock = state.process.lock().unwrap();
     let is_running = if let Some(child) = lock.as_mut() {
-        child.try_wait().map(|status| status.is_none()).unwrap_or(false)
+        child
+            .try_wait()
+            .map(|status| status.is_none())
+            .unwrap_or(false)
     } else {
         false
     };
@@ -1069,6 +1196,16 @@ fn check_and_log_crashpad_dumps() {
 }
 
 fn main() {
+    let startup_trace = std::env::var("KRONOS_STARTUP_TRACE")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false);
+    let start_instant = std::time::Instant::now();
+    crate::kernel::telemetry::init_tracing(startup_trace);
+    tracing::info!(target: "startup", "Kronos desktop process started");
+    if startup_trace {
+        println!("[trace:startup] Process started");
+    }
+
     sanitize_windows_stdio();
     detect_and_configure_portable_mode();
 
@@ -1095,10 +1232,22 @@ fn main() {
     };
     let daemon_server_id = server_id.clone();
     let _ = wait_for_daemon_health(2);
-    let status_json = get_daemon_status_json();
+    let mut public_status: serde_json::Value =
+        serde_json::from_str(&get_daemon_status_json()).unwrap_or_default();
+    if let Some(status) = public_status.as_object_mut() {
+        status.remove("localCredential");
+    }
+    let status_json = public_status.to_string();
     let bridge_script = format!(
         r#"
+(() => {{
 try {{
+  if (window.top !== window) return;
+  const location = window.location;
+  const trustedAsset = (location.protocol === 'tauri:' && location.hostname === 'localhost')
+    || ((location.protocol === 'http:' || location.protocol === 'https:')
+      && location.hostname === 'tauri.localhost' && location.port === '');
+  if (!trustedAsset) return;
   const daemonData = {status_json};
   const listenEndpoint = (daemonData.listen || '127.0.0.1:6767').replace(/^http:\/\//, '').replace(/\/.*$/, '');
   const endpoint = listenEndpoint;
@@ -1289,6 +1438,10 @@ try {{
         return null;
       }}
     }},
+    nativeBrowser: {{
+      resolveUrl: (url) => window.__TAURI_INTERNALS__.invoke('browser_proxy_url', {{ url }}),
+      importCookies: (host, cookies) => window.__TAURI_INTERNALS__.invoke('browser_proxy_cookies', {{ host, cookies }})
+    }},
     invoke: async function(command, args) {{
       if (command === 'start_desktop_daemon') {{
         try {{
@@ -1384,13 +1537,7 @@ try {{
         return await window.__TAURI_INTERNALS__.invoke('update_active_agents', args || {{}});
       }}
       if (command === 'desktop_local_credential') {{
-        try {{
-          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
-            const token = await window.__TAURI_INTERNALS__.invoke('get_live_local_credential');
-            if (token) return token;
-          }}
-        }} catch (e) {{}}
-        return daemonData.localCredential || null;
+        return await window.__TAURI_INTERNALS__.invoke('get_live_local_credential', {{ listen: args && args.listen || '' }});
       }}
       if (command === 'get_desktop_settings' || command === 'patch_desktop_settings') {{
         return {{
@@ -1454,7 +1601,7 @@ try {{
         }}
         return null;
       }}
-      if (command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast' || command === 'crdt_doc_action' || command === 'get_ioring_status' || command === 'transcribe_audio_chunk' || command === 'get_speech_engine_status' || command === 'get_shm_status' || command === 'push_shm_chunk') {{
+      if (command === 'mark_first_paint' || command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast' || command === 'crdt_doc_action' || command === 'get_ioring_status' || command === 'transcribe_audio_chunk' || command === 'get_speech_engine_status' || command === 'get_shm_status' || command === 'push_shm_chunk') {{
         try {{
           if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
             return await window.__TAURI_INTERNALS__.invoke(command, args || {{}});
@@ -1580,6 +1727,7 @@ try {{
     }});
   }} catch (e) {{}}
 }} catch (e) {{}}
+}})();
 "#
     );
 
@@ -1637,6 +1785,8 @@ try {{
             notify_task_complete,
             get_live_daemon_status,
             get_live_local_credential,
+            browser_proxy_url,
+            browser_proxy_cookies,
             get_log_contents,
             log_desktop_event,
             fast_validate_directory,
@@ -1659,6 +1809,7 @@ try {{
             check_app_update,
             install_app_update,
             get_kernel_telemetry,
+            mark_first_paint,
             workspace_search,
             watch_directory,
             unwatch_directory,
@@ -1686,26 +1837,82 @@ try {{
                     eprintln!("[deep-link] Failed to register schemes: {err}");
                 }
             }
+            let page_trace = startup_trace;
+            let page_start = start_instant;
+            let window_icon = app.default_window_icon().cloned().or_else(|| {
+                tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png")).ok()
+            });
             let win_builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
                 .title("Kronos")
+                .theme(Some(tauri::Theme::Dark))
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(800.0, 600.0)
                 .shadow(false)
-                .visible(true)
+                .visible(false)
                 .initialization_script(&bridge_script);
+
+            let win_builder = if let Some(ref icon) = window_icon {
+                match win_builder.icon(icon.clone()) {
+                    Ok(b) => b,
+                    Err(err) => {
+                        eprintln!("[window] Failed to apply icon to builder: {err}");
+                        WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+                            .title("Kronos")
+                            .theme(Some(tauri::Theme::Dark))
+                            .inner_size(1280.0, 800.0)
+                            .min_inner_size(800.0, 600.0)
+                            .shadow(false)
+                            .visible(false)
+                            .initialization_script(&bridge_script)
+                    }
+                }
+            } else {
+                win_builder
+            };
+
+            let win_builder = win_builder.on_page_load(move |_win, payload| {
+                if page_trace {
+                    if let tauri::webview::PageLoadEvent::Finished = payload.event() {
+                        println!(
+                            "[trace:startup] Webview page loaded (Finished) after {:?}",
+                            page_start.elapsed()
+                        );
+                    }
+                }
+            });
 
             let win = win_builder.build().ok();
             if let Some(main_window) = &win {
+                if let Some(ref icon) = window_icon {
+                    let _ = main_window.set_icon(icon.clone());
+                }
                 apply_mica_effect(main_window);
-                let _ = main_window.show();
-                let _ = main_window.set_focus();
             }
+
+            let fallback_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                if let Some(win) = fallback_handle.get_webview_window("main") {
+                    if !win.is_visible().unwrap_or(true) {
+                        let _ = win.show();
+                        let _ = win.set_focus();
+                    }
+                }
+            });
 
             let handle_for_daemon = app.handle().clone();
             let daemon_id = daemon_server_id.clone();
+            let daemon_trace = startup_trace;
+            let daemon_start = start_instant;
             std::thread::spawn(move || {
                 let is_healthy = wait_for_daemon_health(50);
                 if is_healthy {
+                    if daemon_trace {
+                        println!(
+                            "[trace:startup] Host daemon confirmed healthy after {:?}",
+                            daemon_start.elapsed()
+                        );
+                    }
                     println!("[daemon] Host daemon confirmed healthy on 127.0.0.1:6767");
                     if let Some(w) = handle_for_daemon.get_webview_window("main") {
                         let eval_script = format!(
@@ -1721,7 +1928,7 @@ try {{
 
             // Register global shortcuts to toggle main window visibility
             let window_clone = win.clone();
-            for shortcut in ["CommandOrControl+Shift+K", "CommandOrControl+Shift+P"] {
+            for shortcut in ["Alt+Space", "CommandOrControl+Shift+K", "CommandOrControl+Shift+P"] {
                 let window_clone = window_clone.clone();
                 if let Err(err) = app.global_shortcut().on_shortcut(shortcut, move |app, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
@@ -1859,8 +2066,10 @@ mod tests {
 
         #[cfg(target_os = "windows")]
         unsafe {
-            use windows_sys::Win32::System::Console::{GetStdHandle, SetStdHandle, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
             use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+            use windows_sys::Win32::System::Console::{
+                GetStdHandle, SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+            };
             let orig_out = GetStdHandle(STD_OUTPUT_HANDLE);
             let orig_err = GetStdHandle(STD_ERROR_HANDLE);
             // Temporarily set handles to invalid to verify no panic
@@ -1946,7 +2155,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_watch_directory_and_unwatch_commands() {
-        let temp_dir = std::env::temp_dir().join(format!("kronos_watch_cmd_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("kronos_watch_cmd_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
 
         let watch_res = watch_directory(
@@ -1954,18 +2164,32 @@ mod tests {
             Some(vec!["target/**".to_string()]),
         )
         .await;
-        assert!(watch_res.is_ok(), "watch_directory should succeed: {:?}", watch_res.err());
+        assert!(
+            watch_res.is_ok(),
+            "watch_directory should succeed: {:?}",
+            watch_res.err()
+        );
         let sub_id = watch_res.unwrap();
         assert!(!sub_id.is_empty(), "subscription id should not be empty");
 
         let unwatch_res = unwatch_directory(sub_id.clone()).await;
-        assert!(unwatch_res.is_ok(), "unwatch_directory should succeed: {:?}", unwatch_res.err());
-        assert!(unwatch_res.unwrap(), "unwatch_directory should return true for active subscription");
+        assert!(
+            unwatch_res.is_ok(),
+            "unwatch_directory should succeed: {:?}",
+            unwatch_res.err()
+        );
+        assert!(
+            unwatch_res.unwrap(),
+            "unwatch_directory should return true for active subscription"
+        );
 
         // Unwatching an already removed subscription should return Ok(false)
         let unwatch_again = unwatch_directory(sub_id).await;
         assert!(unwatch_again.is_ok());
-        assert!(!unwatch_again.unwrap(), "unwatch_directory should return false when subscription does not exist");
+        assert!(
+            !unwatch_again.unwrap(),
+            "unwatch_directory should return false when subscription does not exist"
+        );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
@@ -1977,7 +2201,10 @@ mod tests {
             .to_string_lossy()
             .to_string();
         let res = watch_directory(invalid_path, None).await;
-        assert!(res.is_err(), "watch_directory should fail on non-existent path");
+        assert!(
+            res.is_err(),
+            "watch_directory should fail on non-existent path"
+        );
     }
 
     #[tokio::test]
@@ -2057,7 +2284,11 @@ mod tests {
     #[tokio::test]
     async fn test_get_ioring_status_command() {
         let res = get_ioring_status().await;
-        assert!(res.is_ok(), "get_ioring_status should succeed: {:?}", res.err());
+        assert!(
+            res.is_ok(),
+            "get_ioring_status should succeed: {:?}",
+            res.err()
+        );
         let val = res.unwrap();
         assert!(val["is_kernel_active"].is_boolean());
         assert!(val["queue_size"].as_u64().unwrap() >= 16);
@@ -2066,12 +2297,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_transcribe_audio_chunk_command() {
-        let synthetic_samples: Vec<f32> = (0..16000)
-            .map(|i| (i as f32 * 0.05).sin() * 0.75)
-            .collect();
+        let synthetic_samples: Vec<f32> =
+            (0..16000).map(|i| (i as f32 * 0.05).sin() * 0.75).collect();
 
         let res = transcribe_audio_chunk(synthetic_samples, Some(16000), Some(1)).await;
-        assert!(res.is_ok(), "transcribe_audio_chunk should succeed: {:?}", res.err());
+        assert!(
+            res.is_ok(),
+            "transcribe_audio_chunk should succeed: {:?}",
+            res.err()
+        );
         let val = res.unwrap();
         assert!(val["transcript"].is_string());
         assert!(!val["transcript"].as_str().unwrap().is_empty());
@@ -2090,8 +2324,16 @@ mod tests {
         let sval = status.unwrap();
         assert!(sval["capacity"].as_u64().unwrap() > 0);
 
-        let push_res = push_shm_chunk("stream-unit-test".to_string(), "telemetry payload data".to_string()).await;
-        assert!(push_res.is_ok(), "push_shm_chunk should succeed: {:?}", push_res.err());
+        let push_res = push_shm_chunk(
+            "stream-unit-test".to_string(),
+            "telemetry payload data".to_string(),
+        )
+        .await;
+        assert!(
+            push_res.is_ok(),
+            "push_shm_chunk should succeed: {:?}",
+            push_res.err()
+        );
         assert!(push_res.unwrap() > 0);
     }
 }

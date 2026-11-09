@@ -11,598 +11,270 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to build (e.g. v0.1.0)"
+        description: "Existing tag to build (e.g. v0.15.0)"
         required: true
         type: string
       platform:
-        description: "Optional desktop platform to build."
+        description: "Desktop platform to build."
         required: false
-        default: "all"
+        default: all
         type: choice
-        options:
-          - all
-          - macos
-          - linux
-          - windows
+        options: [all, macos, linux, windows]
       checkout_ref:
-        description: "Optional branch/ref to checkout while using tag for release metadata."
+        description: "Optional source ref; its desktop versions must match the release tag."
         required: false
         default: ""
         type: string
       publish:
-        description: "Publish built artifacts to GitHub Releases."
+        description: "Upload validated signed assets and publish the GitHub Release."
         required: false
         default: "true"
         type: choice
-        options:
-          - "true"
-          - "false"
+        options: ["true", "false"]
 
 concurrency:
-  group: desktop-release-${{ github.ref }}
+  group: desktop-release-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 env:
   SOURCE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-  CHECKOUT_REF: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.checkout_ref || github.ref_name) || github.ref_name }}
+  CHECKOUT_REF: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.checkout_ref || github.event.inputs.tag) || github.ref_name }}
   SHOULD_PUBLISH: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.publish != 'false' }}
-  DESKTOP_PACKAGE_PATH: "packages/desktop-tauri"
   ONNXRUNTIME_NODE_INSTALL: skip
+  NODE_OPTIONS: --max-old-space-size=8192
+  # Public key is the owner's base64-encoded minisign public key file, not a placeholder.
+  TAURI_SIGNING_PUBLIC_KEY: ${{ vars.TAURI_SIGNING_PUBLIC_KEY || secrets.TAURI_SIGNING_PUBLIC_KEY }}
 
 jobs:
-  create-release:
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish != 'false') }}
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: scripts
-          ref: ${{ env.CHECKOUT_REF }}
-
-      - name: Resolve release metadata
-        shell: bash
-        run: node scripts/emit-release-env.mjs --source-tag "$SOURCE_TAG" >> "$GITHUB_ENV"
-
-      - name: Create GitHub release
-        if: env.IS_SMOKE_TAG != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if node scripts/github-release.mjs --repo "${{ github.repository }}" --tag "$RELEASE_TAG" > /dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists, skipping creation"
-          else
-            prerelease_flag=""
-            if [[ "$IS_PRERELEASE" == "true" ]]; then
-              prerelease_flag="--prerelease"
-            fi
-            gh release create "$RELEASE_TAG" \
-              --repo "${{ github.repository }}" \
-              --title "Kronos $RELEASE_TAG" \
-              --notes "" \
-              --draft \
-              $prerelease_flag || {
-                echo "Release creation raced with another workflow; continuing."
-                node scripts/github-release.mjs --repo "${{ github.repository }}" --tag "$RELEASE_TAG" > /dev/null
-              }
-          fi
-
   publish-macos:
-    needs: [create-release]
-    if: ${{ always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') && ((github.event_name == 'workflow_dispatch' && (github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos')) || (github.event_name == 'push' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'desktop-v') || startsWith(github.ref_name, 'desktop-macos-v')))) }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.platform == 'all' || inputs.platform == 'macos')) || (github.event_name == 'push' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'desktop-v') || startsWith(github.ref_name, 'desktop-macos-v'))) }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: macos-latest
-            electron_arch: arm64
-            node_heap_mb: 4096
+            arch: aarch64
           - runner: macos-26-intel
-            electron_arch: x64
-            node_heap_mb: 8192
+            arch: x86_64
     permissions:
-      contents: write
+      contents: read
       packages: read
     runs-on: ${{ matrix.runner }}
-
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           ref: ${{ env.CHECKOUT_REF }}
-
       - name: Resolve release metadata
         shell: bash
         run: node scripts/emit-release-env.mjs --source-tag "$SOURCE_TAG" >> "$GITHUB_ENV"
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Require owner signing material
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: node scripts/tauri-release.mjs check-signing
+      - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: "npm"
-          cache-dependency-path: package-lock.json
-          registry-url: "https://npm.pkg.github.com"
+          cache: npm
+          registry-url: https://npm.pkg.github.com
           scope: "@boudra"
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
+      - uses: dtolnay/rust-toolchain@stable
       - name: Install JS dependencies
         run: node scripts/npm-retry.mjs ci
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Backport electron-builder#10172 to the pinned build tool only.
-      # Remove this step when app-builder-lib is upgraded to a release containing it.
-      - name: Repair temporary keychain password in signing tool
-        shell: bash
-        run: |
-          node <<'KEYCHAIN_FIX'
-          const fs = require('node:fs');
-          const path = require('node:path');
-          const manifestPath = require.resolve('app-builder-lib/package.json');
-          if (JSON.parse(fs.readFileSync(manifestPath, 'utf8')).version !== '26.8.1') {
-            throw new Error('Reassess/remove the signing backport for the new app-builder-lib version');
-          }
-          const sourcePath = path.join(path.dirname(manifestPath), 'out/codeSign/macCodeSign.js');
-          let source = fs.readFileSync(sourcePath, 'utf8');
-          const replacements = [
-            ['importCerts(keychainFile, certPaths, cscPasswords)', 'importCerts(keychainFile, certPaths, cscPasswords, keychainPassword)'],
-            ['importCerts(keychainFile, paths, keyPasswords)', 'importCerts(keychainFile, paths, keyPasswords, keychainPassword)'],
-            ['["set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", password, keychainFile]', '["set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", keychainPassword, keychainFile]'],
-          ];
-          for (const [before, after] of replacements) {
-            if (source.split(before).length !== 2) throw new Error('Unexpected signing tool source; refusing to patch');
-            source = source.replace(before, after);
-          }
-          fs.writeFileSync(sourcePath, source);
-          KEYCHAIN_FIX
-
-      - name: Set desktop package version from tag
-        shell: bash
-        run: |
-          node <<'NODE'
-          const fs = require('node:fs');
-          const path = require('node:path');
-
-          const version = process.env.DESKTOP_VERSION;
-          if (!version) {
-            console.log('DESKTOP_VERSION not set, skipping version update');
-            process.exit(0);
-          }
-
-          const pkgPath = path.join('packages', 'desktop-tauri', 'package.json');
-          if (fs.existsSync(pkgPath)) {
-            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-            pkg.version = version;
-            fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
-            console.log(`Updated ${pkgPath} to ${version}`);
-          }
-
-          const tauriConfPath = path.join('packages', 'desktop-tauri', 'src-tauri', 'tauri.conf.json');
-          if (fs.existsSync(tauriConfPath)) {
-            const conf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
-            conf.version = version;
-            fs.writeFileSync(tauriConfPath, `${JSON.stringify(conf, null, 2)}\n`);
-            console.log(`Updated ${tauriConfPath} to ${version}`);
-          }
-          NODE
-
-      - name: Build server dependencies & prepare dist
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run build:server:clean
-          node packages/desktop-tauri/prepare-dist.mjs
-
-      - name: Build the web app
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run build:app-deps
-          cd packages/app
-          # The bundler parses a ten-megabyte generated validation module, which
-          # it holds in memory as it builds the module graph. The default heap
-          # is not enough for it on the smaller runners, and the export dies
-          # with "Jest worker ran out of memory and crashed".
-          NODE_OPTIONS=--max-old-space-size=8192 \
-            npx cross-env PASEO_WEB_PLATFORM=electron npx expo export --platform web
-
-      - name: Build Tauri app and publish to GitHub Releases
-        uses: tauri-apps/tauri-action@v0
+      - name: Build fresh native desktop and signed updater
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: node packages/desktop-tauri/build.mjs --signed
+      - name: Validate artifacts and actual signature sidecars
+        run: node scripts/tauri-release.mjs stage --bundle packages/desktop-tauri/src-tauri/target/release/bundle --output release-stage --version ${{ env.DESKTOP_VERSION }} --platform darwin --arch ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
         with:
-          projectPath: "packages/desktop-tauri"
-          tagName: ${{ env.RELEASE_TAG }}
-          releaseName: "Kronos ${{ env.RELEASE_TAG }}"
-          releaseBody: "See release notes for Kronos ${{ env.RELEASE_TAG }}."
-          releaseDraft: true
-          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
-          includeRelease: ${{ env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true' }}
-
-      - name: Upload artifacts to workflow run
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-macos
-          path: |
-            packages/desktop-tauri/src-tauri/target/release/bundle/dmg/*.dmg
-            packages/desktop-tauri/src-tauri/target/release/bundle/macos/*.app
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Ensure release artifacts uploaded
-        if: env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          shopt -s nullglob
-          files=(
-            packages/desktop-tauri/src-tauri/target/release/bundle/dmg/*.dmg
-          )
-          if (( ${#files[@]} > 0 )); then
-            echo "Uploading artifacts to release $RELEASE_TAG: ${files[*]}"
-            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "${{ github.repository }}" || true
-          fi
-
-  publish-linux:
-    needs: [create-release]
-    if: ${{ always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') && ((github.event_name == 'workflow_dispatch' && (github.event.inputs.platform == 'all' || github.event.inputs.platform == 'linux')) || (github.event_name == 'push' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'desktop-v') || startsWith(github.ref_name, 'desktop-linux-v')))) }}
-    permissions:
-      contents: write
-      packages: read
-    runs-on: ubuntu-22.04
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ env.CHECKOUT_REF }}
-
-      - name: Resolve release metadata
-        shell: bash
-        run: node scripts/emit-release-env.mjs --source-tag "$SOURCE_TAG" >> "$GITHUB_ENV"
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-          cache-dependency-path: package-lock.json
-          registry-url: "https://npm.pkg.github.com"
-          scope: "@boudra"
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libasound2-dev libssl-dev
-
-      - name: Install JS dependencies
-        run: node scripts/npm-retry.mjs ci
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set desktop package version from tag
-        shell: bash
-        run: |
-          node <<'NODE'
-          const fs = require('node:fs');
-          const path = require('node:path');
-
-          const version = process.env.DESKTOP_VERSION;
-          if (!version) {
-            console.log('DESKTOP_VERSION not set, skipping version update');
-            process.exit(0);
-          }
-
-          const pkgPath = path.join('packages', 'desktop-tauri', 'package.json');
-          if (fs.existsSync(pkgPath)) {
-            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-            pkg.version = version;
-            fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
-            console.log(`Updated ${pkgPath} to ${version}`);
-          }
-
-          const tauriConfPath = path.join('packages', 'desktop-tauri', 'src-tauri', 'tauri.conf.json');
-          if (fs.existsSync(tauriConfPath)) {
-            const conf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
-            conf.version = version;
-            fs.writeFileSync(tauriConfPath, `${JSON.stringify(conf, null, 2)}\n`);
-            console.log(`Updated ${tauriConfPath} to ${version}`);
-          }
-          NODE
-
-      - name: Build server dependencies & prepare dist
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run build:server:clean
-          node packages/desktop-tauri/prepare-dist.mjs
-
-      - name: Build the web app
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run build:app-deps
-          cd packages/app
-          # The bundler parses a ten-megabyte generated validation module, which
-          # it holds in memory as it builds the module graph. The default heap
-          # is not enough for it on the smaller runners, and the export dies
-          # with "Jest worker ran out of memory and crashed".
-          NODE_OPTIONS=--max-old-space-size=8192 \
-            npx cross-env PASEO_WEB_PLATFORM=electron npx expo export --platform web
-
-      - name: Build Tauri app and publish to GitHub Releases
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          projectPath: "packages/desktop-tauri"
-          tagName: ${{ env.RELEASE_TAG }}
-          releaseName: "Kronos ${{ env.RELEASE_TAG }}"
-          releaseBody: "See release notes for Kronos ${{ env.RELEASE_TAG }}."
-          releaseDraft: true
-          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
-          includeRelease: ${{ env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true' }}
-
-      - name: Upload artifacts to workflow run
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-linux
-          path: |
-            packages/desktop-tauri/src-tauri/target/release/bundle/deb/*.deb
-            packages/desktop-tauri/src-tauri/target/release/bundle/appimage/*.AppImage
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Ensure release artifacts uploaded
-        if: env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          shopt -s nullglob
-          files=(
-            packages/desktop-tauri/src-tauri/target/release/bundle/deb/*.deb
-            packages/desktop-tauri/src-tauri/target/release/bundle/appimage/*.AppImage
-          )
-          if (( ${#files[@]} > 0 )); then
-            echo "Uploading artifacts to release $RELEASE_TAG: ${files[*]}"
-            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "${{ github.repository }}" || true
-          fi
-
-  publish-windows:
-    needs: [create-release]
-    if: ${{ always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') && ((github.event_name == 'workflow_dispatch' && (github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows')) || (github.event_name == 'push' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'desktop-v') || startsWith(github.ref_name, 'desktop-windows-v')))) }}
-    permissions:
-      contents: write
-      packages: read
-    runs-on: windows-latest
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ env.CHECKOUT_REF }}
-
-      - name: Resolve release metadata
-        shell: bash
-        run: node scripts/emit-release-env.mjs --source-tag "$SOURCE_TAG" >> "$GITHUB_ENV"
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-          cache-dependency-path: package-lock.json
-          registry-url: "https://npm.pkg.github.com"
-          scope: "@boudra"
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install JS dependencies
-        run: node scripts/npm-retry.mjs ci
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set desktop package version from tag
-        shell: bash
-        run: |
-          node <<'NODE'
-          const fs = require('node:fs');
-          const path = require('node:path');
-
-          const version = process.env.DESKTOP_VERSION;
-          if (!version) {
-            console.log('DESKTOP_VERSION not set, skipping version update');
-            process.exit(0);
-          }
-
-          const pkgPath = path.join('packages', 'desktop-tauri', 'package.json');
-          if (fs.existsSync(pkgPath)) {
-            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-            pkg.version = version;
-            fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
-            console.log(`Updated ${pkgPath} to ${version}`);
-          }
-
-          const tauriConfPath = path.join('packages', 'desktop-tauri', 'src-tauri', 'tauri.conf.json');
-          if (fs.existsSync(tauriConfPath)) {
-            const conf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
-            conf.version = version;
-            fs.writeFileSync(tauriConfPath, `${JSON.stringify(conf, null, 2)}\n`);
-            console.log(`Updated ${tauriConfPath} to ${version}`);
-          }
-          NODE
-
-      - name: Build server dependencies & prepare dist
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run build:server:clean
-          node packages/desktop-tauri/prepare-dist.mjs
-
-      - name: Build the web app
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run build:app-deps
-          cd packages/app
-          # The bundler parses a ten-megabyte generated validation module, which
-          # it holds in memory as it builds the module graph. The default heap
-          # is not enough for it on the smaller runners, and the export dies
-          # with "Jest worker ran out of memory and crashed".
-          NODE_OPTIONS=--max-old-space-size=8192 \
-            npx cross-env PASEO_WEB_PLATFORM=electron npx expo export --platform web
-
-      - name: Build Tauri app and publish to GitHub Releases
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          projectPath: "packages/desktop-tauri"
-          tagName: ${{ env.RELEASE_TAG }}
-          releaseName: "Kronos ${{ env.RELEASE_TAG }}"
-          releaseBody: "See release notes for Kronos ${{ env.RELEASE_TAG }}."
-          releaseDraft: true
-          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
-          includeRelease: ${{ env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true' }}
-
-      - name: Generate and upload Windows package-manager manifests
-        if: env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          installer="packages/desktop-tauri/src-tauri/target/release/bundle/nsis/Kronos_${DESKTOP_VERSION}_x64-setup.exe"
-          output="$RUNNER_TEMP/kronos-package-manifests"
-          node scripts/generate-windows-package-manifests.mjs \
-            --version "$DESKTOP_VERSION" \
-            --installer "$installer" \
-            --output "$output"
-          gh release upload "$RELEASE_TAG" \
-            "$output/winget/Xenonesis.Kronos.yaml" \
-            "$output/winget/Xenonesis.Kronos.installer.yaml" \
-            "$output/winget/Xenonesis.Kronos.locale.en-US.yaml" \
-            "$output/scoop/Kronos.json" \
-            --clobber --repo "${{ github.repository }}"
-
-      - name: Submit package manifests to Windows Package Manager (Winget)
-        if: env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true'
-        shell: bash
-        env:
-          WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN || secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          node scripts/submit-winget-package.mjs \
-            --version "$DESKTOP_VERSION" \
-            --manifests-dir "$RUNNER_TEMP/kronos-package-manifests/winget"
-
-      - name: Upload package-manager manifests to workflow run
-        if: env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-package-manager-manifests
-          path: ${{ runner.temp }}/kronos-package-manifests
+          name: signed-desktop-darwin-${{ matrix.arch }}
+          path: release-stage/*
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload artifacts to workflow run
-        uses: actions/upload-artifact@v4
+  publish-linux:
+    if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.platform == 'all' || inputs.platform == 'linux')) || (github.event_name == 'push' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'desktop-v') || startsWith(github.ref_name, 'desktop-linux-v'))) }}
+    permissions:
+      contents: read
+      packages: read
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
         with:
-          name: desktop-windows
-          path: |
-            packages/desktop-tauri/src-tauri/target/release/bundle/nsis/*.exe
-            packages/desktop-tauri/src-tauri/target/release/bundle/msi/*.msi
-          if-no-files-found: ignore
+          ref: ${{ env.CHECKOUT_REF }}
+      - name: Resolve release metadata
+        shell: bash
+        run: node scripts/emit-release-env.mjs --source-tag "$SOURCE_TAG" >> "$GITHUB_ENV"
+      - name: Require owner signing material
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: node scripts/tauri-release.mjs check-signing
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          registry-url: https://npm.pkg.github.com
+          scope: "@boudra"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libasound2-dev libssl-dev libclang-dev cmake
+      - name: Install JS dependencies
+        run: node scripts/npm-retry.mjs ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build fresh native desktop and signed updater
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: node packages/desktop-tauri/build.mjs --signed
+      - name: Validate artifacts and actual signature sidecars
+        run: node scripts/tauri-release.mjs stage --bundle packages/desktop-tauri/src-tauri/target/release/bundle --output release-stage --version ${{ env.DESKTOP_VERSION }} --platform linux --arch x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-desktop-linux-x86_64
+          path: release-stage/*
+          if-no-files-found: error
           retention-days: 7
 
-      - name: Ensure release artifacts uploaded
+  publish-windows:
+    if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.platform == 'all' || inputs.platform == 'windows')) || (github.event_name == 'push' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'desktop-v') || startsWith(github.ref_name, 'desktop-windows-v'))) }}
+    permissions:
+      contents: read
+      packages: read
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+      - name: Resolve release metadata
+        shell: bash
+        run: node scripts/emit-release-env.mjs --source-tag "$SOURCE_TAG" >> "$GITHUB_ENV"
+      - name: Require owner signing material
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: node scripts/tauri-release.mjs check-signing
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          registry-url: https://npm.pkg.github.com
+          scope: "@boudra"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install JS dependencies
+        run: node scripts/npm-retry.mjs ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check installer pipeline contracts
+        run: node --test scripts/tauri-release.test.mjs scripts/update-and-build-exe.test.mjs scripts/sync-workspace-versions.test.mjs packages/desktop-tauri/build.test.mjs
+      - name: Build fresh native NSIS installer and signed updater
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: node packages/desktop-tauri/build.mjs --signed
+      - name: Check native boundary and persistence regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          for filter in kernel::access::tests agent::storage::tests agent::runner:: agent::manager::tests kernel::timeline::tests kernel::server_test::tests::test_embedded_daemon_browser_proxy; do
+            cargo test --manifest-path packages/desktop-tauri/src-tauri/Cargo.toml --bin paseo-desktop "$filter"
+          done
+      - name: Smoke the owned native executable in an isolated home and port
+        run: node scripts/smoke-native-desktop.mjs --exe packages/desktop-tauri/src-tauri/target/release/paseo-desktop.exe
+      - name: Validate artifacts and actual signature sidecars
+        run: node scripts/tauri-release.mjs stage --bundle packages/desktop-tauri/src-tauri/target/release/bundle --output release-stage --version ${{ env.DESKTOP_VERSION }} --platform windows --arch x86_64
+      - name: Generate Windows package-manager manifests from validated installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/generate-windows-package-manifests.mjs --version "$DESKTOP_VERSION" \
+            --installer "release-stage/Kronos_${DESKTOP_VERSION}_x64-setup.exe" --output package-manifests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-package-manager-manifests
+          path: package-manifests/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Submit package manifests to Windows Package Manager
         if: env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true'
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          shopt -s nullglob
-          files=(
-            packages/desktop-tauri/src-tauri/target/release/bundle/nsis/*.exe
-            packages/desktop-tauri/src-tauri/target/release/bundle/msi/*.msi
-          )
-          if (( ${#files[@]} > 0 )); then
-            echo "Uploading artifacts to release $RELEASE_TAG: ${files[*]}"
-            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "${{ github.repository }}" || true
-          fi
+          WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: node scripts/submit-winget-package.mjs --version "$DESKTOP_VERSION" --manifests-dir package-manifests/winget
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-desktop-windows-x86_64
+          path: release-stage/*
+          if-no-files-found: error
+          retention-days: 7
 
   finalize-release:
-    needs: [create-release, publish-macos, publish-linux, publish-windows]
-    if: ${{ always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.publish != 'false') && (needs.publish-macos.result == 'success' || needs.publish-macos.result == 'skipped') && (needs.publish-linux.result == 'success' || needs.publish-linux.result == 'skipped') && (needs.publish-windows.result == 'success' || needs.publish-windows.result == 'skipped') && (needs.publish-macos.result == 'success' || needs.publish-linux.result == 'success' || needs.publish-windows.result == 'success') }}
+    needs: [publish-macos, publish-linux, publish-windows]
+    if: ${{ !cancelled() && (needs.publish-macos.result == 'success' || needs.publish-macos.result == 'skipped') && (needs.publish-linux.result == 'success' || needs.publish-linux.result == 'skipped') && (needs.publish-windows.result == 'success' || needs.publish-windows.result == 'skipped') && (needs.publish-macos.result == 'success' || needs.publish-linux.result == 'success' || needs.publish-windows.result == 'success') }}
     permissions:
       contents: write
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: scripts
           ref: ${{ env.CHECKOUT_REF }}
-
       - name: Resolve release metadata
         shell: bash
         run: node scripts/emit-release-env.mjs --source-tag "$SOURCE_TAG" >> "$GITHUB_ENV"
-
-      - name: Publish GitHub Release (undraft)
-        if: env.IS_SMOKE_TAG != 'true'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: signed-desktop-*
+          path: signed-platforms
+      - name: Preserve published platforms for partial rebuilds
+        if: env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/tauri-release.mjs fetch-previous --version ${{ env.DESKTOP_VERSION }} --output previous-release --required required-platforms.json
+      - name: Revalidate artifacts and merge signed updater metadata
         shell: bash
         run: |
           set -euo pipefail
-          release_lookup="$(node scripts/github-release.mjs --repo "${{ github.repository }}" --tag "$RELEASE_TAG" || true)"
-          if [[ -z "$release_lookup" ]]; then
-            release_lookup="$RELEASE_TAG"
+          preservation=()
+          if [[ "$SHOULD_PUBLISH" == "true" && "$IS_SMOKE_TAG" != "true" ]]; then
+            preservation=(--previous previous-release --required required-platforms.json)
           fi
-          echo "Publishing release $release_lookup (tag: $RELEASE_TAG)"
-          publish_args=(release edit "$release_lookup" --tag "$RELEASE_TAG" --draft=false --repo "${{ github.repository }}")
-          if [[ "$IS_PRERELEASE" == "true" ]]; then
-            publish_args+=(--prerelease)
-          fi
-          gh "${publish_args[@]}"
-
-      - name: Publish the stable download name
-        if: env.IS_SMOKE_TAG != 'true'
+          node scripts/tauri-release.mjs merge --input signed-platforms --output release-assets \
+            --version "$DESKTOP_VERSION" "${preservation[@]}"
+      - uses: actions/download-artifact@v4
+        if: needs.publish-windows.result == 'success'
+        with:
+          name: windows-package-manager-manifests
+          path: package-manifests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validated-desktop-release
+          path: |
+            release-assets/*
+            package-manifests/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload validated assets and publish release
+        if: env.SHOULD_PUBLISH == 'true' && env.IS_SMOKE_TAG != 'true'
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
         run: |
           set -euo pipefail
-          # The website's download button points at a fixed asset name, so the
-          # current Windows installer is also published under that name. It is
-          # replaced on every release, which keeps the link working across
-          # versions.
-          setup="$(gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" \
-            --json assets --jq '.assets[] | select(.name | endswith("_x64-setup.exe")) | .name' \
-            | grep -v '^Kronos_x64-setup.exe$' | head -n 1 || true)"
-          if [[ -z "$setup" ]]; then
-            echo "No Windows installer found on release $RELEASE_TAG, skipping the stable name."
-            exit 0
+          if ! node scripts/github-release.mjs --repo "${{ github.repository }}" --tag "$RELEASE_TAG"; then
+            flags=(--draft)
+            if [[ "$IS_PRERELEASE" == "true" ]]; then flags+=(--prerelease); fi
+            gh release create "$RELEASE_TAG" --repo "${{ github.repository }}" \
+              --title "Kronos $RELEASE_TAG" --notes "" "${flags[@]}"
           fi
-          echo "Publishing $setup as Kronos_x64-setup.exe"
-          mkdir -p "$RUNNER_TEMP/kronos-setup"
-          gh release download "$RELEASE_TAG" --repo "${{ github.repository }}" \
-            --pattern "$setup" --dir "$RUNNER_TEMP/kronos-setup"
-          mv "$RUNNER_TEMP/kronos-setup/$setup" "$RUNNER_TEMP/kronos-setup/Kronos_x64-setup.exe"
-          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/kronos-setup/Kronos_x64-setup.exe" \
-            --clobber --repo "${{ github.repository }}"
+          gh release upload "$RELEASE_TAG" release-assets/* --clobber --repo "${{ github.repository }}"
+          if [[ -d package-manifests ]]; then
+            gh release upload "$RELEASE_TAG" package-manifests/winget/* package-manifests/scoop/* \
+              --clobber --repo "${{ github.repository }}"
+          fi
+          gh release edit "$RELEASE_TAG" --draft=false --repo "${{ github.repository }}"

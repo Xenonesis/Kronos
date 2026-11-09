@@ -385,7 +385,7 @@ describe("translation resources", () => {
     expect(en.settings.host.notFound).toBe("Host not found");
     expect(en.settings.host.connections.title).toBe("Connections");
     expect(en.settings.host.daemon.restart.title).toBe("Restart daemon");
-    expect(en.settings.host.orchestration.enableTools.title).toBe("Enable Paseo tools");
+    expect(en.settings.host.orchestration.enableTools.title).toBe("Enable Kronos tools");
     expect(en.settings.providers.title).toBe("Providers");
     expect(en.settings.providers.models.addModel).toBe("Add model");
     expect(en.settings.providers.diagnostic.title).toBe("Diagnostic");
@@ -465,7 +465,7 @@ describe("translation resources", () => {
   });
 
   it("includes onboarding and direct connection keys for the Batch 4E migration", () => {
-    expect(en.onboarding.title).toBe("Welcome to Paseo");
+    expect(en.onboarding.title).toBe("Welcome to Kronos");
     expect(en.onboarding.actions.settings).toBe("Settings");
     expect(en.pairing.direct.title).toBe("Direct connection");
     expect(en.pairing.direct.fields.host).toBe("Host");
@@ -516,6 +516,15 @@ describe("translation resources", () => {
     expect(en.message.actions.copyTurn).toBe("Copy turn");
     expect(en.message.actions.copyMessage).toBe("Copy message");
     expect(en.message.actions.copied).toBe("Copied");
+    expect(en.message.actions.reply).toBe("Reply");
+    expect(en.message.actions.readAloud).toBe("Read this aloud");
+    expect(en.message.actions.stopReading).toBe("Stop reading");
+    expect(en.message.actions.showRawMarkdown).toBe("Show raw markdown");
+    expect(en.message.actions.showRenderedMarkdown).toBe("Show rendered markdown");
+    expect(en.message.actions.pinMessage).toBe("Pin message");
+    expect(en.message.actions.unpinMessage).toBe("Unpin message");
+    expect(en.message.actions.copyMessageId).toBe("Copy message ID");
+    expect(en.message.actions.moreOptions).toBe("More options");
     expect(en.message.attachments.dismissImage).toBe("Dismiss image");
     expect(en.message.attachments.closeImage).toBe("Close image");
     expect(en.message.attachments.imageLoadFailed).toBe("Couldn't load image");
@@ -696,7 +705,7 @@ describe("translation resources", () => {
     expect(en.message.compaction.completed).toBe("Context compacted");
     expect(en.agentPanel.archived.callout).toBe("This agent is archived");
     expect(en.agentPanel.archived.unarchive).toBe("Unarchive");
-    expect(en.desktop.quitting.title).toBe("Quitting Paseo...");
+    expect(en.desktop.quitting.title).toBe("Quitting Kronos...");
     expect(en.desktop.quitting.detail).toBe("Stopping the local daemon.");
     expect(en.composer.attachments.dropImagesHere).toBe("Drop images here");
   });
@@ -757,7 +766,7 @@ describe("translation resources", () => {
     );
     expect(en.desktop.rosetta.title).toBe("Download the Apple Silicon build");
     expect(en.desktop.rosetta.runningIntel).toBe(
-      "You're running the Intel build of Paseo under Rosetta on Apple Silicon.",
+      "You're running the Intel build of Kronos under Rosetta on Apple Silicon.",
     );
     expect(en.desktop.rosetta.highCpu).toBe(
       "This causes high CPU usage. Download the Apple Silicon build to fix it.",
@@ -785,7 +794,7 @@ describe("translation resources", () => {
     expect(en.desktop.permissions.empty.notifications).toBe(
       "Notification status has not been checked yet.",
     );
-    expect(en.desktop.permissions.testNotification.title).toBe("Paseo notification test");
+    expect(en.desktop.permissions.testNotification.title).toBe("Kronos notification test");
     expect(en.desktop.permissions.testNotification.failed).toBe("Failed to send notification.");
   });
 
@@ -806,7 +815,7 @@ describe("translation resources", () => {
       "Failed to fetch daemon status: {{message}}",
     );
     expect(en.desktop.daemon.loadFailed).toBe("Unable to load desktop daemon status.");
-    expect(en.desktop.integrations.cli.installFailed).toBe("Unable to install the Paseo CLI.");
+    expect(en.desktop.integrations.cli.installFailed).toBe("Unable to install the Kronos CLI.");
   });
 
   it("includes remaining utility chrome keys for the Batch 4T migration", () => {
