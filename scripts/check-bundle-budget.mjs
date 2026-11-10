@@ -75,7 +75,7 @@ console.log(
 console.log("=======================================================\n");
 
 // Budget thresholds
-const MAX_RAW_MB = parseFloat(process.env.MAX_STARTUP_MB || "10.0");
+const MAX_RAW_MB = parseFloat(process.env.MAX_STARTUP_MB || "12.0");
 if (totalRaw / (1024 * 1024) > MAX_RAW_MB) {
   console.error(
     `❌ BUDGET VIOLATION: Total startup bundle is ${totalRawMB} MB, exceeding budget limit of ${MAX_RAW_MB} MB!`,

@@ -13,6 +13,7 @@ import { SessionProvider } from "@/contexts/session-context";
 import { legacyFavoriteProfileMigration } from "@/agent-profiles/migration";
 import { PluginCatalogSync } from "@/plugins";
 import { useSessionStore } from "@/stores/session-store";
+import { useIsSetupDecisionPending } from "@/onboarding";
 import {
   getHostRuntimeStore,
   hasConfiguredLocalDaemonOverride,
@@ -37,6 +38,7 @@ export interface HostRuntimeBootstrapState {
   splashError: string | null;
   retry: () => void;
   hasGivenUpWaitingForHost: boolean;
+  isWaitingForSetup: boolean;
   storeReady: boolean;
   startupBlocker: StartupBlocker;
 }
@@ -45,6 +47,7 @@ const HostRuntimeBootstrapContext = createContext<HostRuntimeBootstrapState>({
   splashError: null,
   retry: () => {},
   hasGivenUpWaitingForHost: false,
+  isWaitingForSetup: false,
   storeReady: false,
   startupBlocker: { kind: "none" },
 });
@@ -202,6 +205,23 @@ export function HostRuntimeBootstrapProvider({ children }: { children: ReactNode
     };
   }, [shouldRunGiveUpTimer]);
 
+  const isSetupDecisionPending = useIsSetupDecisionPending();
+  const [hasGivenUpWaitingForSetup, setHasGivenUpWaitingForSetup] = useState(false);
+  const isWaitingForSetup = isSetupDecisionPending && !hasGivenUpWaitingForSetup;
+  const shouldRunSetupWaitTimer = isWaitingForSetup && startupBlocker.kind === "none";
+
+  useEffect(() => {
+    if (!shouldRunSetupWaitTimer) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      setHasGivenUpWaitingForSetup(true);
+    }, 5000);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [shouldRunSetupWaitTimer]);
+
   const retry = useCallback(() => {
     const daemonStartService = getDaemonStartService({
       store: getHostRuntimeStore(),
@@ -220,10 +240,11 @@ export function HostRuntimeBootstrapProvider({ children }: { children: ReactNode
       splashError,
       retry,
       hasGivenUpWaitingForHost,
+      isWaitingForSetup,
       storeReady,
       startupBlocker,
     }),
-    [splashError, retry, hasGivenUpWaitingForHost, storeReady, startupBlocker],
+    [splashError, retry, hasGivenUpWaitingForHost, isWaitingForSetup, storeReady, startupBlocker],
   );
 
   return (

@@ -3,7 +3,6 @@ import type { CreationSnapshot, TerminalProfile } from "@getpaseo/protocol/messa
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { router } from "expo-router";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { createNameId } from "mnemonic-id";
@@ -31,7 +30,7 @@ import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
 import type { KeyboardActionId } from "@/keyboard/keyboard-action-dispatcher";
 import { useFormPreferences } from "@/hooks/use-form-preferences";
 import { toErrorMessage } from "@/utils/error-messages";
-import { buildSettingsAddHostRoute } from "@/utils/host-routes";
+import { useAddHost } from "@/hosts/add-host";
 import { getWorktreeSupportForHostProject } from "@/projects/host-projects";
 import { useProjectIcons } from "@/projects/icons";
 import { useDraftWorkspaceAttachmentScopeKey } from "@/attachments/workspace-attachments-store";
@@ -436,9 +435,7 @@ export function NewWorkspaceScreen({
     openAddProjectPicker(selectedServerId);
   }, [openAddProjectPicker, selectedServerId]);
 
-  const handleAddHost = useCallback(() => {
-    router.push(buildSettingsAddHostRoute(Date.now()));
-  }, []);
+  const handleAddHost = useAddHost();
 
   const openPicker = useCallback(() => {
     setPickerOpen(true);

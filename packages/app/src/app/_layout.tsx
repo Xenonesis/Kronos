@@ -10,6 +10,8 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { AppearanceProvider } from "@/appearance/provider";
+import { AddHostProvider } from "@/hosts/add-host";
+import { WindowLayoutProvider, WindowLayoutActionsHost } from "@/window-layout";
 import { useHostChooser } from "@/hosts/host-chooser";
 import { isNative } from "@/constants/platform";
 import { HorizontalScrollProvider } from "@/contexts/horizontal-scroll-context";
@@ -329,20 +331,31 @@ function RuntimeProviders({ children }: { children: ReactNode }) {
   );
 }
 
+function RootOverlayProviders({ children }: { children: ReactNode }) {
+  return (
+    <ToastProvider>
+      <PortalProvider>
+        <BottomSheetModalProvider>
+          {children}
+          <WindowLayoutActionsHost />
+        </BottomSheetModalProvider>
+      </PortalProvider>
+    </ToastProvider>
+  );
+}
+
 function RootProviders({ children }: { children: ReactNode }) {
   return (
     <KeyboardActionDispatcherProvider>
-      <WindowChromeProvider>
-        <KeyboardProvider>
-          <KeyboardShiftProvider>
-            <ToastProvider>
-              <PortalProvider>
-                <BottomSheetModalProvider>{children}</BottomSheetModalProvider>
-              </PortalProvider>
-            </ToastProvider>
-          </KeyboardShiftProvider>
-        </KeyboardProvider>
-      </WindowChromeProvider>
+      <WindowLayoutProvider>
+        <WindowChromeProvider>
+          <KeyboardProvider>
+            <KeyboardShiftProvider>
+              <RootOverlayProviders>{children}</RootOverlayProviders>
+            </KeyboardShiftProvider>
+          </KeyboardProvider>
+        </WindowChromeProvider>
+      </WindowLayoutProvider>
     </KeyboardActionDispatcherProvider>
   );
 }
@@ -352,11 +365,13 @@ function RootAppTree() {
     <GestureHandlerRootView style={flexStyle}>
       <View style={layoutStyles.surfaceFill}>
         <LucideProvider strokeWidth={ICON_STROKE_WIDTH}>
-          <RootProviders>
-            <RuntimeProviders>
-              <AppShell />
-            </RuntimeProviders>
-          </RootProviders>
+          <AddHostProvider>
+            <RootProviders>
+              <RuntimeProviders>
+                <AppShell />
+              </RuntimeProviders>
+            </RootProviders>
+          </AddHostProvider>
         </LucideProvider>
       </View>
     </GestureHandlerRootView>

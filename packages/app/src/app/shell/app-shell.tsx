@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useMemo } from "react";
+import { type ReactNode, useCallback, useLayoutEffect, useMemo } from "react";
 import { useWindowDimensions, View } from "react-native";
 import { GestureDetector } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -15,11 +15,13 @@ import { CommandCenterProvider } from "@/command-center/provider";
 import { CommandCenterWorkspaceActions } from "@/command-center/workspace-registration";
 import { PluginCommandCenterActions } from "@/plugins/command-center/registration";
 import { AddProjectFlowHost } from "@/components/add-project-flow-host";
+import { AddHostFlowHost } from "@/hosts/add-host";
 import { WorktreeSetupCalloutSource } from "@/components/worktree-setup-callout-source";
 import { DownloadToast } from "@/components/download-toast";
 import { QuittingOverlay } from "@/components/quitting-overlay";
 import { KeyboardShortcutsDialog } from "@/components/keyboard-shortcuts-dialog";
 import { ChangelogHost } from "@/changelog";
+import { OnboardingHost } from "@/onboarding";
 import { AppDiagnosticHost } from "@/components/app-diagnostic-host";
 import { AppearanceStyleBoundary } from "@/components/appearance-style-boundary";
 import { LeftSidebar } from "@/components/left-sidebar";
@@ -28,6 +30,7 @@ import { DesktopWindowControls } from "@/components/desktop/window-controls";
 import { SidebarModelProvider } from "@/components/sidebar/sidebar-model";
 import { WorkspacePinShortcutHandler } from "@/components/workspace-pin-shortcut-handler";
 import { WorkspaceRenameHost } from "@/components/workspace-rename-host";
+import { WorkspaceArchiveUndoShortcutHost } from "@/workspace/archive-undo";
 import { WorkspaceExplorerOpenGesture } from "@/mobile-panels/explorer-open-gesture";
 import { ProviderSettingsHost } from "@/components/provider-settings-host";
 import { WorkspaceSetupDialog } from "@/components/workspace-setup-dialog";
@@ -41,7 +44,15 @@ import {
   resolveDesktopAppChromeLayout,
   resolveDesktopAppContentMinimum,
   resolveDesktopSidebarVisibility,
+  resolveSidebarActivity,
+  resolveLeftSidebarPresentation,
 } from "@/components/desktop-sidebar-layout";
+import {
+  WindowLayoutSurface,
+  WindowLayoutDivisionGap,
+  useWindowLayout,
+  resolveDesktopDivisionLayout,
+} from "@/window-layout";
 import { isWeb } from "@/constants/platform";
 import { useDesktopNativeBridgeCoordinator } from "@/desktop/use-desktop-native-bridge-coordinator";
 import { useSettingsRouteEntry } from "@/navigation/settings-presentation";
@@ -60,7 +71,7 @@ import { useOpenAgentListGesture } from "@/mobile-panels/gestures";
 import { useIsMobilePanelActive } from "@/mobile-panels/provider";
 import { useKeyboardActionDispatcher } from "@/keyboard/keyboard-action-dispatcher-context";
 import { useHosts } from "@/runtime/host-runtime";
-import { usePanelStore } from "@/stores/panel-store";
+import { usePanelStore, type LeftSidebarPresentation } from "@/stores/panel-store";
 import { getNextThemePreference } from "@/styles/theme";
 import { WorkspaceLayoutModePublisher } from "@/workspace-tabs/layout-mode-publisher";
 import {
@@ -97,9 +108,16 @@ export function AppContainer({
   const isFocusModeEnabled = usePanelStore((state) => state.desktop.focusModeEnabled);
   const isDesktopAgentListOpen = usePanelStore((state) => state.desktop.agentListOpen);
   const sidebarWidth = usePanelStore((state) => state.sidebarWidth);
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const viewportWidth = windowWidth - insets.left - insets.right;
+  const divisionLayout = resolveDesktopDivisionLayout({
+    geometry: useWindowLayout(),
+    windowWidth,
+    windowHeight,
+    leftInset: insets.left,
+    rightInset: insets.right,
+  });
 
   const cycleTheme = useCallback(() => {
     void updateSettings({ theme: getNextThemePreference(settings.theme) });
@@ -158,12 +176,25 @@ export function AppContainer({
     isCompactLayout,
     isMounted: desktopSidebarMounted,
     isOpen: isDesktopAgentListOpen,
+    divisionLayout,
     canShare: canDesktopAppSidebarShare({
       contentMinimumWidth: appContentMinimumWidth,
       requestedSidebarWidth: sidebarWidth,
       viewportWidth,
     }),
   });
+  const sidebarPresentation = resolveLeftSidebarPresentation({
+    chromeEnabled,
+    isCompactLayout,
+    isFocusModeEnabled: isWorkspaceFocusModeEnabled,
+    desktopSidebarVisible,
+  });
+  const applyPanelLayout = usePanelStore((state) => state.applyPanelLayout);
+  // Publishes the layout to the store, which owns the panel targets each layout allows.
+  useLayoutEffect(() => {
+    applyPanelLayout({ isCompact: isCompactLayout, leftSidebar: sidebarPresentation });
+  }, [applyPanelLayout, isCompactLayout, sidebarPresentation]);
+
   const hasTopLeftWindowControls = useHasWindowChromeObstruction("top-left");
   const appChromeLayout = resolveDesktopAppChromeLayout({
     desktopSidebarRendered: desktopSidebarVisible,
@@ -173,7 +204,7 @@ export function AppContainer({
   const sidebarChrome = (
     <SidebarChrome
       mounted={isCompactLayout ? chromeEnabled : desktopSidebarMounted}
-      visible={isCompactLayout ? chromeEnabled : desktopSidebarVisible}
+      presentation={sidebarPresentation}
       keyboardShortcutsEnabled={keyboardShortcutsEnabled}
     />
   );
@@ -181,24 +212,19 @@ export function AppContainer({
   if (isWeb) {
     themedSidebarChrome = <AppearanceStyleBoundary>{sidebarChrome}</AppearanceStyleBoundary>;
   }
-  const workspaceChromeStyle = useMemo(
-    () => [
-      rowStyle,
-      !isCompactLayout && {
-        paddingLeft: insets.left,
-        paddingRight: insets.right,
-      },
-    ],
-    [insets.left, insets.right, isCompactLayout],
-  );
   const workspaceChrome = (
-    <View style={workspaceChromeStyle}>
+    <WindowLayoutSurface compact={isCompactLayout} style={rowStyle}>
       <WorkspaceLayoutModePublisher />
       {!isCompactLayout ? (
         <WindowChromeRegion corners={appChromeLayout.sidebarCorners}>
           {themedSidebarChrome}
         </WindowChromeRegion>
       ) : null}
+      <WindowLayoutDivisionGap
+        layout={divisionLayout}
+        sidebarVisible={desktopSidebarVisible}
+        compact={isCompactLayout}
+      />
       <WorkspaceExplorerOpenGesture enabled={chromeEnabled && isCompactLayout}>
         <WindowChromeRegion
           corners={isCompactLayout && chromeEnabled ? "both" : appChromeLayout.contentCorners}
@@ -206,12 +232,13 @@ export function AppContainer({
           <View style={flexStyle}>{children}</View>
         </WindowChromeRegion>
       </WorkspaceExplorerOpenGesture>
-    </View>
+    </WindowLayoutSurface>
   );
 
   const surface = (
     <View style={layoutStyles.surfaceFill}>
       {workspaceChrome}
+      <AddHostFlowHost />
       <AppearanceStyleBoundary>
         {!isCompactLayout && appChromeLayout.sidebarToggleOwner === "window" ? (
           <WindowChromeRegion corners="top-left">
@@ -240,6 +267,7 @@ export function AppContainer({
         <PluginCommandCenterActions />
         <WorkspacePinShortcutHandler />
         <WorkspaceRenameHost />
+        <WorkspaceArchiveUndoShortcutHost />
         <CommandCenter />
         <GlobalCommandPaletteHost />
         <AddProjectFlowHost />
@@ -252,11 +280,14 @@ export function AppContainer({
         <ChangelogHost />
         <QuittingOverlay />
       </AppearanceStyleBoundary>
+      <OnboardingHost />
     </View>
   );
 
   return (
-    <AppContainerLifetime compactGesturesEnabled={chromeEnabled && isCompactLayout}>
+    <AppContainerLifetime
+      sidebarGesturesEnabled={chromeEnabled && sidebarPresentation === "overlay"}
+    >
       <SheetHostScope enabled={isCompactLayout}>{surface}</SheetHostScope>
     </AppContainerLifetime>
   );
@@ -264,15 +295,15 @@ export function AppContainer({
 
 function AppContainerLifetime({
   children,
-  compactGesturesEnabled,
+  sidebarGesturesEnabled,
 }: {
   children: ReactNode;
-  compactGesturesEnabled: boolean;
+  sidebarGesturesEnabled: boolean;
 }) {
   return (
     <ComposerEditingSessionsProvider>
       <CommandCenterProvider>
-        <MobileGestureWrapper chromeEnabled={compactGesturesEnabled}>
+        <MobileGestureWrapper chromeEnabled={sidebarGesturesEnabled}>
           {children}
         </MobileGestureWrapper>
       </CommandCenterProvider>
@@ -282,24 +313,26 @@ function AppContainerLifetime({
 
 export function SidebarChrome({
   mounted,
-  visible,
+  presentation,
   keyboardShortcutsEnabled,
 }: {
   mounted: boolean;
-  visible: boolean;
+  presentation: LeftSidebarPresentation;
   keyboardShortcutsEnabled: boolean;
 }) {
   const isCompactLayout = useIsCompactFormFactor();
   const isMobileActive = useIsMobilePanelActive("agent-list");
-  const isDesktopOpen = usePanelStore((state) => state.desktop.agentListOpen);
-  const active = visible && (isCompactLayout ? isMobileActive : isDesktopOpen);
+  const overlay = presentation === "overlay";
+  const active = resolveSidebarActivity(presentation !== "hidden", overlay, isMobileActive);
   const hardwareKeyboardPresent = useHardwareKeyboardPresent();
   return (
     <SidebarModelProvider
       active={active}
       keyboardNavigationActive={keyboardShortcutsEnabled && hardwareKeyboardPresent}
     >
-      {mounted ? <LeftSidebar active={active} /> : null}
+      {mounted ? (
+        <LeftSidebar active={active} desktopOverlay={overlay && !isCompactLayout} />
+      ) : null}
       <WorkspaceShortcutTargetsSubscriber enabled={keyboardShortcutsEnabled} />
     </SidebarModelProvider>
   );
