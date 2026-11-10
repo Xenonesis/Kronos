@@ -85,6 +85,11 @@ function findLucideIcon(name: string): LucideIcon | null {
   return COMMON_LUCIDE_ICONS[name] ?? null;
 }
 
+/** Whether `name` is a Lucide icon, so a caller can fall back before drawing nothing. */
+export function isLucideIconName(name: string): boolean {
+  return findLucideIcon(name) !== null;
+}
+
 function isComponent(value: unknown): boolean {
   return (
     typeof value === "function" ||

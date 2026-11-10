@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 import type { z } from "zod";
 import { beforeAll, describe, expect, it } from "vitest";
-import { WSOutboundMessageSchema } from "../../src/messages.js";
+import { PluginRpcInvokeResponseSchema, WSOutboundMessageSchema } from "../../src/messages.js";
 import {
   loadWSOutboundAotValidators,
   validateWSOutboundMessage,
@@ -69,7 +69,7 @@ async function compileInlineSchema(sourceSchema: string): Promise<GeneratedSchem
 describe("WS outbound zod-aot validation", () => {
   beforeAll(async () => {
     await loadWSOutboundAotValidators();
-  });
+  }, 60_000);
   it("applies defaults inside discriminated-union branches", async () => {
     const schema = await compileInlineSchema(`
 const SourceSchema = z.discriminatedUnion("type", [
@@ -406,4 +406,9 @@ const SourceSchema = z.object({
       message: { payload: { agent: { capabilities: { supportsRewindConversation: false } } } },
     });
   });
+});
+
+it("accepts omitted RPC output so the receiving client can apply schema defaults", () => {
+  const message = { type: "plugin.rpc.invoke.response", payload: { requestId: "default-output" } };
+  expect(PluginRpcInvokeResponseSchema.safeParse(message).success).toBe(true);
 });

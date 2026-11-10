@@ -1,4 +1,4 @@
-import { expect, test } from "playwright/test";
+import { expect, test } from "./fixtures";
 
 // The homepage is the Kronos landing page, which has no sponsors section. The
 // sponsors band lives in the site footer, which every other page renders.

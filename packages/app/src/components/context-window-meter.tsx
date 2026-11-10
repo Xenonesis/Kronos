@@ -1,5 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
-import { Pressable, Text, View, useWindowDimensions } from "react-native";
+import {
+  Pressable,
+  type PressableStateCallbackType,
+  Text,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import Svg, { Circle } from "react-native-svg";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
@@ -9,6 +15,7 @@ import { useIsCompactFormFactor } from "@/constants/layout";
 import { isNative } from "@/constants/platform";
 import { useHostReportsUsage } from "@/usage";
 import type { Theme } from "@/styles/theme";
+import { TOOLBAR_DISC_SIZE, type ToolbarRing } from "@/components/ui/control-geometry";
 import { ContextWindowDetails } from "./context-window-details";
 import { ContextWindowSheet } from "./context-window-sheet";
 import { formatContextPercentage, shouldShowCompactWarning } from "./context-window-meter.utils";
@@ -23,6 +30,8 @@ interface ContextWindowMeterProps {
   /** Optional glyph envelope for icon-toolbar alignment. */
   glyphSize?: number;
   modelLabel?: string | null;
+  /** The ring's box and stroke when it sits in an icon toolbar. */
+  toolbarRing?: ToolbarRing;
 }
 
 const SVG_SIZE = 14;
@@ -71,7 +80,7 @@ function getProgressColor(percentage: number, theme: Theme): string {
   return theme.colors.foregroundMuted;
 }
 
-function getMeterGeometry(showPercentage: boolean, glyphSize?: number) {
+function getMeterGeometry(showPercentage: boolean, ring?: ToolbarRing | number) {
   if (showPercentage) {
     return {
       svgSize: COMPACT_SVG_SIZE,
@@ -80,8 +89,8 @@ function getMeterGeometry(showPercentage: boolean, glyphSize?: number) {
       containerStyle: styles.containerWithLabel,
     };
   }
-  const resolvedSize = glyphSize ?? SVG_SIZE;
-  const resolvedStrokeWidth = glyphSize ? 2 : STROKE_WIDTH;
+  const resolvedSize = typeof ring === "number" ? ring : (ring?.size ?? SVG_SIZE);
+  const resolvedStrokeWidth = typeof ring === "object" && ring ? ring.strokeWidth : STROKE_WIDTH;
   return {
     svgSize: resolvedSize,
     radius: (resolvedSize - resolvedStrokeWidth) / 2,
@@ -153,6 +162,7 @@ export function ContextWindowMeter({
   showPercentage = false,
   glyphSize,
   modelLabel,
+  toolbarRing,
 }: ContextWindowMeterProps) {
   const { t, i18n } = useTranslation();
   const { width } = useWindowDimensions();
@@ -172,7 +182,7 @@ export function ContextWindowMeter({
     maxTokens !== null && isValidMaxTokens(maxTokens)
       ? getUsagePercentage(maxTokens, effectiveUsedTokens)
       : null;
-  const geometry = getMeterGeometry(showPercentage, glyphSize);
+  const geometry = getMeterGeometry(showPercentage, toolbarRing ?? glyphSize);
 
   const context = useMemo(
     () =>
@@ -191,6 +201,10 @@ export function ContextWindowMeter({
   const formattedSessionCost =
     typeof totalCostUsd === "number" ? formatSessionCost(totalCostUsd) : null;
   const containerStyle = geometry.containerStyle;
+  const pressableStyle = useCallback(
+    ({ pressed }: PressableStateCallbackType) => [containerStyle, pressed && styles.pressed],
+    [containerStyle],
+  );
   const ring = (
     <ContextWindowRing
       size={geometry.svgSize}
@@ -267,7 +281,7 @@ export function ContextWindowMeter({
       <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile>
         <TooltipTrigger asChild triggerRefProp="ref">
           <Pressable
-            style={containerStyle}
+            style={pressableStyle}
             testID="context-window-meter"
             accessibilityRole="image"
             accessibilityLabel={accessibilityLabel}
@@ -378,19 +392,22 @@ const styles = StyleSheet.create((theme) => ({
     fontWeight: "700",
   },
   container: {
-    width: 28,
-    height: 28,
+    width: TOOLBAR_DISC_SIZE,
+    height: TOOLBAR_DISC_SIZE,
     borderRadius: theme.borderRadius.full,
     alignItems: "center",
     justifyContent: "center",
   },
   containerWithLabel: {
-    height: 28,
+    height: TOOLBAR_DISC_SIZE,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: theme.spacing[1],
     borderRadius: theme.borderRadius.full,
+  },
+  pressed: {
+    backgroundColor: theme.colors.surface2,
   },
   percentageLabel: {
     color: theme.colors.foregroundMuted,

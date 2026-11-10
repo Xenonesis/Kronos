@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "playwright/test";
+import { expect, test, type Page } from "./fixtures";
 
 const APPLE_SILICON_DMG =
   /\/Xenonesis\/Kronos\/releases\/download\/v[^/]+\/Kronos-[^/]+-arm64\.dmg$/;

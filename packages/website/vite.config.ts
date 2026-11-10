@@ -146,7 +146,12 @@ export default defineConfig(({ mode }): UserConfig => {
       },
     },
     plugins: [
-      cloudflare({ viteEnvironment: { name: "ssr" } }),
+      cloudflare({
+        viteEnvironment: { name: "ssr" },
+        ...(process.env.WEBSITE_E2E_PERSIST_PATH
+          ? { persistState: { path: process.env.WEBSITE_E2E_PERSIST_PATH } }
+          : {}),
+      }),
       tsConfigPaths({ projects: [path.join(__dirname, "tsconfig.json")] }),
       tanstackStart({
         router: {
