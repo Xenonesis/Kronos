@@ -52,7 +52,8 @@ import { GlobalCommandPaletteHost } from "@/desktop/command-palette/command-pale
 import { useActiveWorktreeNewAction } from "@/hooks/use-active-worktree-new-action";
 import { useGlobalNewWorkspaceAction } from "@/hooks/use-global-new-workspace-action";
 import { useLatchedBoolean } from "@/hooks/use-latched-boolean";
-import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
+import { useKeyboardShortcuts } from "@/keyboard/use-shortcuts";
+import { useHardwareKeyboardPresent } from "@/keyboard";
 import { useCompactWebViewportZoomLock } from "@/hooks/use-compact-web-viewport-zoom-lock";
 import { useAppSettings } from "@/hooks/use-settings";
 import { useOpenAgentListGesture } from "@/mobile-panels/gestures";
@@ -292,8 +293,12 @@ export function SidebarChrome({
   const isMobileActive = useIsMobilePanelActive("agent-list");
   const isDesktopOpen = usePanelStore((state) => state.desktop.agentListOpen);
   const active = visible && (isCompactLayout ? isMobileActive : isDesktopOpen);
+  const hardwareKeyboardPresent = useHardwareKeyboardPresent();
   return (
-    <SidebarModelProvider active={active}>
+    <SidebarModelProvider
+      active={active}
+      keyboardNavigationActive={keyboardShortcutsEnabled && hardwareKeyboardPresent}
+    >
       {mounted ? <LeftSidebar active={active} /> : null}
       <WorkspaceShortcutTargetsSubscriber enabled={keyboardShortcutsEnabled} />
     </SidebarModelProvider>

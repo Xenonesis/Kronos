@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { useRouter } from "expo-router";
@@ -44,25 +44,19 @@ import {
   useSortedHosts,
 } from "@/screens/settings/settings-sidebar";
 import { renderHostSettingsContent } from "@/screens/settings/host-settings-dispatcher";
-import { SettingsAddHostModals } from "@/screens/settings/add-host-modals";
+import { useAddHost } from "@/hosts/add-host";
 
 export interface SettingsScreenProps {
   view: SettingsView;
-  openAddHostIntent?: string | null;
 }
 
-export default function SettingsScreen({ view, openAddHostIntent = null }: SettingsScreenProps) {
+export default function SettingsScreen({ view }: SettingsScreenProps) {
   const router = useRouter();
   const { t } = useTranslation();
   const voiceAudioEngine = useVoiceAudioEngineOptional();
   const { settings, isLoading: settingsLoading, updateSettings } = useAppSettings();
-  const [isAddHostMethodVisible, setIsAddHostMethodVisible] = useState(false);
-  const [isDirectHostVisible, setIsDirectHostVisible] = useState(false);
-  const [isRemoteSshVisible, setIsRemoteSshVisible] = useState(false);
-  const [isPasteLinkVisible, setIsPasteLinkVisible] = useState(false);
   const [isPlaybackTestRunning, setIsPlaybackTestRunning] = useState(false);
   const [playbackTestResult, setPlaybackTestResult] = useState<string | null>(null);
-  const lastOpenedAddHostIntentRef = useRef<string | null>(null);
   const isDesktopApp = isElectronRuntime();
   const appVersion = resolveAppVersion();
   const appVersionText = formatVersionWithPrefix(appVersion);
@@ -123,50 +117,10 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     }
   }, [isPlaybackTestRunning, t, voiceAudioEngine]);
 
-  const closeAddConnectionFlow = useCallback(() => {
-    setIsAddHostMethodVisible(false);
-    setIsDirectHostVisible(false);
-    setIsRemoteSshVisible(false);
-    setIsPasteLinkVisible(false);
-  }, []);
-
-  const goBackToAddConnectionMethods = useCallback(() => {
-    setIsDirectHostVisible(false);
-    setIsRemoteSshVisible(false);
-    setIsPasteLinkVisible(false);
-    setIsAddHostMethodVisible(true);
-  }, []);
-
-  const handleAddHost = useCallback(() => {
-    setIsAddHostMethodVisible(true);
-  }, []);
-
-  useEffect(() => {
-    if (!openAddHostIntent || lastOpenedAddHostIntentRef.current === openAddHostIntent) {
-      return;
-    }
-    lastOpenedAddHostIntentRef.current = openAddHostIntent;
-    handleAddHost();
-  }, [handleAddHost, openAddHostIntent]);
-
-  const handleSelectDirectConnection = useCallback(() => {
-    setIsAddHostMethodVisible(false);
-    setIsDirectHostVisible(true);
-  }, []);
-
-  const handleSelectRemoteSsh = useCallback(() => {
-    setIsAddHostMethodVisible(false);
-    setIsRemoteSshVisible(true);
-  }, []);
-
-  const handleSelectPasteLink = useCallback(() => {
-    setIsAddHostMethodVisible(false);
-    setIsPasteLinkVisible(true);
-  }, []);
-
   const handleHostAdded = useCallback(
-    ({ serverId }: { serverId: string }) => {
-      const target = buildSettingsHostSectionRoute(serverId, "connections");
+    (serverId: string) => {
+      selectSettingsHost(serverId);
+      const target = buildSettingsHostSectionRoute(serverId, "host");
       if (isCompactLayout) {
         router.push(target);
       } else {
@@ -175,6 +129,8 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     },
     [isCompactLayout, router],
   );
+
+  const handleAddHost = useAddHost({ onAdded: handleHostAdded });
 
   const handleSelectSection = useCallback(
     (section: SettingsSectionSlug) => {
@@ -231,13 +187,6 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     [activeHostServerId, handleAddHost, isCompactLayout, router],
   );
 
-  const handleScanQr = useCallback(() => {
-    closeAddConnectionFlow();
-    router.push({
-      pathname: "/pair-scan",
-      params: { source: "settings" },
-    });
-  }, [closeAddConnectionFlow, router]);
 
   const handleHostRemoved = useCallback(() => {
     const fallback = buildSettingsSectionRoute("general");
@@ -350,22 +299,6 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     );
   }
 
-  const addHostModals = (
-    <SettingsAddHostModals
-      isAddHostMethodVisible={isAddHostMethodVisible}
-      isDirectHostVisible={isDirectHostVisible}
-      isRemoteSshVisible={isRemoteSshVisible}
-      isPasteLinkVisible={isPasteLinkVisible}
-      onClose={closeAddConnectionFlow}
-      onCancel={goBackToAddConnectionMethods}
-      onDirectConnection={handleSelectDirectConnection}
-      onRemoteSsh={handleSelectRemoteSsh}
-      onPasteLink={handleSelectPasteLink}
-      onScanQr={handleScanQr}
-      onHostAdded={handleHostAdded}
-    />
-  );
-
   // Mobile root: full-screen sidebar-as-list.
   if (isCompactLayout && view.kind === "root") {
     return (
@@ -383,7 +316,6 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
             layout="mobile"
           />
         </ScrollView>
-        {addHostModals}
       </View>
     );
   }
@@ -394,7 +326,6 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         <PageLayout title={detailTitle} onBack={handleBackFromDetail}>
           {content}
         </PageLayout>
-        {addHostModals}
       </View>
     );
   }
@@ -429,7 +360,6 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
           </View>
         </WindowChromeRegion>
       </View>
-      {addHostModals}
     </View>
   );
 }
