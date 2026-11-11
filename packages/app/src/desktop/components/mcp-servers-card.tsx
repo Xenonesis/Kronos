@@ -5,6 +5,7 @@ import { Server, Plus, Trash2, CheckCircle2 } from "lucide-react-native";
 import { Button } from "@/components/ui/button";
 import { EditingTextInput } from "@/components/ui/text-input";
 import { PressHighlight } from "@/components/ui/press-highlight";
+import { McpRegistryCatalog } from "./mcp-registry-catalog";
 
 export interface McpServerConfig {
   id: string;
@@ -95,6 +96,7 @@ const McpServerRow = memo(function McpServerRow({ server, onToggle, onDelete }: 
 export const McpServersCard = memo(function McpServersCard() {
   const [servers, setServers] = useState<McpServerConfig[]>(DEFAULT_MCP_SERVERS);
   const [isAdding, setIsAdding] = useState(false);
+  const [isCatalogOpen, setIsCatalogOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newCommand, setNewCommand] = useState("");
   const [newArgs, setNewArgs] = useState("");
@@ -158,10 +160,25 @@ export const McpServersCard = memo(function McpServersCard() {
             </Text>
           </View>
         </View>
-        <Button variant="outline" size="sm" leftIcon={addIcon} onPress={toggleIsAdding}>
-          {isAdding ? "Cancel" : "Add Server"}
-        </Button>
+        <View style={styles.headerActions}>
+          <Button variant="outline" size="sm" onPress={() => setIsCatalogOpen(true)}>
+            Browse Registry
+          </Button>
+          <Button variant="outline" size="sm" leftIcon={addIcon} onPress={toggleIsAdding}>
+            {isAdding ? "Cancel" : "Add Server"}
+          </Button>
+        </View>
       </View>
+
+      <McpRegistryCatalog
+        visible={isCatalogOpen}
+        onClose={() => setIsCatalogOpen(false)}
+        installedServerIds={servers.map((s) => s.id)}
+        onInstall={(newServer) => {
+          setServers((prev) => [...prev, newServer]);
+          setIsCatalogOpen(false);
+        }}
+      />
 
       {isAdding ? (
         <View style={styles.addForm}>
@@ -222,6 +239,11 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+  },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
   },
   titleRow: {
     flexDirection: "row",

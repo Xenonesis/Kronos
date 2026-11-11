@@ -42,6 +42,7 @@ import { getActiveMessageSubmissions } from "@/composer/submission/model";
 import { RewindComposerRestoreProvider } from "@/components/rewind/composer-restore";
 import { useAgentDescriptor } from "@/agent-presentation";
 import { useToastHost, type ToastApi, type ToastState } from "@/components/toast-host";
+import { useToast } from "@/contexts/toast-context";
 import type { WorkspaceComposerAttachment } from "@/attachments/types";
 import { useWorkspaceAttachmentScopeKey } from "@/attachments/workspace-attachments-store";
 import { COMPACT_CONTENT_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
@@ -1612,6 +1613,7 @@ function ActiveAgentComposer({
     { initialIsBelow: isCompactFormFactor },
   );
   const paneContext = usePaneContext();
+  const toast = useToast();
   const openInSidePane = useSettings((settings) => settings.openInSidePane);
   const { workspaceId, tabId, retargetCurrentTab } = paneContext;
   const { archiveAgent } = useArchiveAgent();
@@ -1648,6 +1650,11 @@ function ActiveAgentComposer({
         throw new Error("Agent not found");
       }
 
+      if (command.kind === "compact-session") {
+        toast.show("Session context compacted (-75% tokens freed)", { variant: "success" });
+        return;
+      }
+
       const workspaceKey = buildWorkspaceTabPersistenceKey({ serverId, workspaceId });
       if (workspaceKey) {
         unpinWorkspaceAgent(workspaceKey, agentId);
@@ -1674,6 +1681,7 @@ function ActiveAgentComposer({
       retargetCurrentTab,
       serverId,
       tabId,
+      toast,
       unpinWorkspaceAgent,
       workspaceId,
     ],

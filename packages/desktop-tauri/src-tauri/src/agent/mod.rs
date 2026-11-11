@@ -9,4 +9,7 @@ pub mod rules;
 pub mod guardrails;
 pub mod self_healing;
 pub mod personas;
+pub mod memories;
+pub mod browser_tool;
+pub mod architect;
 

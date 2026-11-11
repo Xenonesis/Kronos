@@ -1,7 +1,10 @@
 import type { Agent } from "@/stores/session-store";
 import type { WorkspaceDraftTabSetup } from "@/workspace-tabs/model";
 
-export type ClientSlashCommandKind = "archive-agent" | "replace-agent-with-draft";
+export type ClientSlashCommandKind =
+  | "archive-agent"
+  | "replace-agent-with-draft"
+  | "compact-session";
 export type ClientSlashCommandExecution = "immediate" | "insert";
 
 export interface ClientSlashCommand {
@@ -31,6 +34,16 @@ export const CLIENT_SLASH_COMMANDS: readonly ClientSlashCommand[] = [
     descriptionKey: "composer.clientCommands.freshDraft",
     argumentHint: "",
     kind: "replace-agent-with-draft",
+    execution: "immediate",
+  },
+  {
+    name: "compact",
+    aliases: ["condense", "summarize"],
+    description:
+      "Compact session context to free tokens while preserving critical file edits and decisions",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "compact-session",
     execution: "immediate",
   },
 ];

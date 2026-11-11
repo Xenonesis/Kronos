@@ -59,6 +59,7 @@ describe("resolveClientSlashCommand", () => {
     ).toEqual([
       ["exit", ["quit", "q"], "immediate"],
       ["clear", ["new"], "immediate"],
+      ["compact", ["condense", "summarize"], "immediate"],
     ]);
   });
 
@@ -83,6 +84,14 @@ describe("resolveClientSlashCommand", () => {
     expect(resolveClientSlashCommand({ text: "/new", hasAttachments: false })).toMatchObject({
       name: "clear",
       kind: "replace-agent-with-draft",
+    });
+    expect(resolveClientSlashCommand({ text: "/compact", hasAttachments: false })).toMatchObject({
+      name: "compact",
+      kind: "compact-session",
+    });
+    expect(resolveClientSlashCommand({ text: "/condense", hasAttachments: false })).toMatchObject({
+      name: "compact",
+      kind: "compact-session",
     });
   });
 

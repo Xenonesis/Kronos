@@ -50,6 +50,87 @@ impl CommandRiskAssessment {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BudgetAssessment {
+    pub is_exceeded: bool,
+    pub current_tokens: u64,
+    pub max_tokens: Option<u64>,
+    pub current_cost_usd: f64,
+    pub max_cost_usd: Option<f64>,
+    pub message: Option<String>,
+}
+
+impl BudgetAssessment {
+    pub fn within_budget(current_tokens: u64, current_cost_usd: f64) -> Self {
+        Self {
+            is_exceeded: false,
+            current_tokens,
+            max_tokens: None,
+            current_cost_usd,
+            max_cost_usd: None,
+            message: None,
+        }
+    }
+
+    pub fn exceeded(
+        current_tokens: u64,
+        max_tokens: Option<u64>,
+        current_cost_usd: f64,
+        max_cost_usd: Option<f64>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            is_exceeded: true,
+            current_tokens,
+            max_tokens,
+            current_cost_usd,
+            max_cost_usd,
+            message: Some(message.into()),
+        }
+    }
+}
+
+/// Evaluates current session token & cost consumption against hard budget ceilings
+pub fn evaluate_session_budget(
+    current_tokens: u64,
+    max_tokens: Option<u64>,
+    current_cost_usd: f64,
+    max_cost_usd: Option<f64>,
+) -> BudgetAssessment {
+    if let Some(max_t) = max_tokens {
+        if max_t > 0 && current_tokens >= max_t {
+            return BudgetAssessment::exceeded(
+                current_tokens,
+                Some(max_t),
+                current_cost_usd,
+                max_cost_usd,
+                format!(
+                    "Session token budget limit of {} tokens reached (accumulated: {} tokens).",
+                    max_t, current_tokens
+                ),
+            );
+        }
+    }
+
+    if let Some(max_c) = max_cost_usd {
+        if max_c > 0.0 && current_cost_usd >= max_c {
+            return BudgetAssessment::exceeded(
+                current_tokens,
+                max_tokens,
+                current_cost_usd,
+                Some(max_c),
+                format!(
+                    "Session cost budget limit of ${:.2} reached (accumulated: ${:.2}).",
+                    max_c, current_cost_usd
+                ),
+            );
+        }
+    }
+
+    BudgetAssessment::within_budget(current_tokens, current_cost_usd)
+}
+
 /// Evaluates command string against safety guardrail heuristics.
 pub fn evaluate_command_risk(command: &str) -> CommandRiskAssessment {
     let trimmed = command.trim();
@@ -206,5 +287,22 @@ mod tests {
 
         let git_restore = evaluate_command_risk("git restore .");
         assert_eq!(git_restore.risk_level, CommandRiskLevel::Caution);
+    }
+
+    #[test]
+    fn test_budget_evaluation() {
+        // Within budget
+        let ok = evaluate_session_budget(50_000, Some(100_000), 0.50, Some(2.00));
+        assert!(!ok.is_exceeded);
+
+        // Exceeds tokens
+        let token_exceeded = evaluate_session_budget(120_000, Some(100_000), 0.50, Some(2.00));
+        assert!(token_exceeded.is_exceeded);
+        assert!(token_exceeded.message.unwrap().contains("token budget limit"));
+
+        // Exceeds cost
+        let cost_exceeded = evaluate_session_budget(50_000, Some(100_000), 2.50, Some(2.00));
+        assert!(cost_exceeded.is_exceeded);
+        assert!(cost_exceeded.message.unwrap().contains("cost budget limit"));
     }
 }

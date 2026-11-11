@@ -14,8 +14,12 @@ import {
   type PressableStateCallbackType,
 } from "react-native";
 import Animated, { runOnJS, useAnimatedReaction } from "react-native-reanimated";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { Keyboard as KeyboardIcon, KeyboardOff as KeyboardOffIcon } from "lucide-react-native";
+import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
+import {
+  Keyboard as KeyboardIcon,
+  KeyboardOff as KeyboardOffIcon,
+  Sparkles,
+} from "lucide-react-native";
 import type { TerminalKeyInput } from "@getpaseo/protocol/terminal-key-input";
 import {
   DEFAULT_TERMINAL_INPUT_MODE_STATE,
@@ -85,7 +89,7 @@ import {
   type TerminalResizeRequest,
 } from "./terminal-resize-debouncer";
 import { useIsCompactFormFactor } from "@/constants/layout";
-import { isNative } from "@/constants/platform";
+import { isNative, isWeb } from "@/constants/platform";
 import { useKeyboardFocusSurface } from "@/keyboard";
 import {
   applyTerminalRendererReadyChange,
@@ -104,6 +108,9 @@ import {
   type OpenFileDisposition,
   type WorkspaceFileOpenRequest,
 } from "@/workspace/file-open";
+import { TerminalAiCommandBar } from "@/terminal/terminal-ai-command-bar";
+
+const ThemedSparkles = withUnistyles(Sparkles);
 
 interface TerminalPaneProps {
   serverId: string;
@@ -1055,6 +1062,46 @@ export function TerminalPane({
     requestTerminalFocus();
   });
 
+  const [isAiCommandBarOpen, setIsAiCommandBarOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isPaneFocused || !isWeb) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setIsAiCommandBarOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isPaneFocused]);
+
+  const handleCloseAiCommandBar = useCallback(() => {
+    setIsAiCommandBarOpen(false);
+  }, []);
+
+  const handleToggleAiCommandBar = useCallback(() => {
+    setIsAiCommandBarOpen((prev) => !prev);
+  }, []);
+
+  const handleInsertAiCommand = useCallback(
+    (cmd: string) => {
+      pasteTerminalText(cmd);
+      requestTerminalFocus();
+    },
+    [pasteTerminalText, requestTerminalFocus],
+  );
+
+  const handleExecuteAiCommand = useCallback(
+    (cmd: string) => {
+      pasteTerminalText(cmd + "\n");
+      requestTerminalFocus();
+    },
+    [pasteTerminalText, requestTerminalFocus],
+  );
+
   const sendTerminalResize = useStableEvent((input: TerminalResizeRequest) => {
     const nextSize = { rows: input.rows, cols: input.cols };
     const claim = resolveTerminalResizeClaim({
@@ -1338,6 +1385,25 @@ export function TerminalPane({
           focusTerminal={requestTerminalFocus}
         />
 
+        <TerminalAiCommandBar
+          visible={isAiCommandBarOpen}
+          cwd={cwd}
+          onClose={handleCloseAiCommandBar}
+          onInsertCommand={handleInsertAiCommand}
+          onExecuteCommand={handleExecuteAiCommand}
+        />
+
+        <View pointerEvents="box-none" style={styles.floatingAiButtonContainer}>
+          <Pressable
+            onPress={handleToggleAiCommandBar}
+            style={styles.floatingAiButton}
+            accessibilityLabel="AI Command Bar (Ctrl+K)"
+          >
+            <ThemedSparkles size={12} color={theme.colors.accent} />
+            <Text style={styles.floatingAiButtonText}>AI Ctrl+K</Text>
+          </Pressable>
+        </View>
+
         {showLoadingOverlay ? (
           <View style={styles.attachOverlay} pointerEvents="none" testID="terminal-attach-loading">
             <LoadingSpinner size="small" color={theme.colors.foregroundMuted} />
@@ -1399,6 +1465,31 @@ const styles = StyleSheet.create((theme) => ({
     right: theme.spacing[3],
     bottom: theme.spacing[12],
     zIndex: 2,
+  },
+  floatingAiButtonContainer: {
+    position: "absolute",
+    right: theme.spacing[3],
+    top: theme.spacing[2],
+    zIndex: 10,
+  },
+  floatingAiButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: theme.colors.surface2,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 3,
+    borderRadius: theme.borderRadius.sm,
+  },
+  floatingAiButtonText: {
+    fontSize: theme.fontSize.code,
+    fontWeight: "600",
+    color: theme.colors.accent,
+  },
+  sparkleIcon: {
+    color: theme.colors.accent,
   },
   errorRow: {
     flexDirection: "row",
