@@ -2,8 +2,9 @@ import { TerminalFind, type TerminalPaneFindHandle } from "@/terminal/find";
 import type { TerminalFindResult } from "@/terminal/runtime/terminal-emulator-runtime";
 import type { TerminalCharacterWidths } from "@/terminal/character-widths";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { Button } from "@/components/ui/button";
 import { useRetainedPanelActive } from "@/components/retained-panel";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Clipboard from "expo-clipboard";
 import {
   Pressable,
@@ -75,6 +76,7 @@ import { resolveTerminalRestoreOptions } from "@/terminal/runtime/terminal-resto
 import { usePanelStore } from "@/stores/panel-store";
 import { useBlockMobilePanelOpenGestures } from "@/mobile-panels/provider";
 import { useSessionStore } from "@/stores/session-store";
+import { useDraftStore } from "@/stores/draft-store";
 import { toXtermTheme } from "@/utils/to-xterm-theme";
 import TerminalEmulator, { type TerminalEmulatorHandle } from "./terminal-emulator";
 import { TerminalFloatingCopyAction, TerminalPasteAction } from "./terminal-copy-paste-actions";
@@ -229,6 +231,57 @@ interface KeyboardToggleButtonProps {
   onToggle: () => void;
 }
 
+interface TerminalErrorDebugBarProps {
+  streamError: string | null;
+  serverId: string;
+}
+
+const TerminalErrorDebugBar = memo(function TerminalErrorDebugBar({
+  streamError,
+  serverId,
+}: TerminalErrorDebugBarProps) {
+  const focusedAgentId = useSessionStore(
+    (state) => state.sessions[serverId]?.focusedAgentId ?? null,
+  );
+  const toast = useToast();
+  const handleDebugWithAi = useCallback(() => {
+    if (!streamError) {
+      return;
+    }
+    const session = useSessionStore.getState().sessions[serverId];
+    const firstAgent = session?.agents ? Array.from(session.agents.values())[0] : undefined;
+    const agentId = focusedAgentId || firstAgent?.id;
+    if (!agentId) {
+      toast.show("No active agent available to debug", { variant: "error" });
+      return;
+    }
+    const draftKey = `agent:${serverId}:${agentId}`;
+    const debugPrompt = `Fix this terminal error:\n\`\`\`\n${streamError}\n\`\`\``;
+    useDraftStore.getState().replaceDraftText({ draftKey, text: debugPrompt });
+    toast.show("Error sent to agent composer", { variant: "success" });
+  }, [streamError, serverId, focusedAgentId, toast]);
+
+  if (!streamError) {
+    return null;
+  }
+
+  return (
+    <View style={styles.errorRow}>
+      <Text style={styles.statusError} numberOfLines={2}>
+        {streamError}
+      </Text>
+      <Button
+        size="sm"
+        variant="destructive"
+        onPress={handleDebugWithAi}
+        testID="terminal-debug-with-ai"
+      >
+        Debug with AI
+      </Button>
+    </View>
+  );
+});
+
 function KeyboardToggleButton({
   isKeyboardVisible,
   iconColor,
@@ -256,6 +309,103 @@ function KeyboardToggleButton({
     </Pressable>
   );
 }
+
+interface TerminalVirtualKeyBarProps {
+  visible: boolean;
+  onLayout: (event: LayoutChangeEvent) => void;
+  isWideNative: boolean;
+  rows: ReturnType<typeof resolveTerminalVirtualKeyboardRows>;
+  modifiers: ModifierState;
+  showPasteAction: boolean;
+  hasClipboardContent: boolean;
+  keyboardToggleIconColor: string;
+  isKeyboardToggleVisible: boolean;
+  onSendKey: (key: string) => void;
+  onToggleModifier: (modifier: keyof ModifierState) => void;
+  onPaste: () => void;
+  onToggleKeyboard: () => void;
+}
+
+const TerminalVirtualKeyBar = memo(function TerminalVirtualKeyBar({
+  visible,
+  onLayout,
+  isWideNative,
+  rows,
+  modifiers,
+  showPasteAction,
+  hasClipboardContent,
+  keyboardToggleIconColor,
+  isKeyboardToggleVisible,
+  onSendKey,
+  onToggleModifier,
+  onPaste,
+  onToggleKeyboard,
+}: TerminalVirtualKeyBarProps) {
+  if (!visible) {
+    return null;
+  }
+
+  const renderControl = (control: TerminalVirtualKeyboardControl) => {
+    const controlId = getTerminalVirtualKeyboardControlId(control);
+    switch (control.type) {
+      case "key":
+        return (
+          <VirtualKeyButton
+            key={controlId}
+            id={control.button.id}
+            label={control.button.label}
+            keyValue={control.button.key}
+            onSend={onSendKey}
+          />
+        );
+      case "modifier":
+        return (
+          <ModifierButton
+            key={controlId}
+            modifier={control.modifier}
+            active={modifiers[control.modifier]}
+            onToggle={onToggleModifier}
+          />
+        );
+      case "paste":
+        return showPasteAction ? (
+          <TerminalPasteAction
+            key={controlId}
+            hasClipboardContent={hasClipboardContent}
+            onPaste={onPaste}
+          />
+        ) : null;
+      case "keyboardToggle":
+        return (
+          <KeyboardToggleButton
+            key={controlId}
+            iconColor={keyboardToggleIconColor}
+            isKeyboardVisible={isKeyboardToggleVisible}
+            onToggle={onToggleKeyboard}
+          />
+        );
+    }
+  };
+
+  return (
+    <View style={styles.keyboardContainer} testID="terminal-virtual-keyboard">
+      <View
+        style={styles.keyboardRows}
+        onLayout={onLayout}
+        testID={isWideNative ? "terminal-virtual-keyboard-native-wide" : undefined}
+      >
+        {rows.map((row) => (
+          <View
+            key={row.map(getTerminalVirtualKeyboardControlId).join(":")}
+            style={styles.keyboardRow}
+          >
+            {row.map(renderControl)}
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+});
 
 export function TerminalPane({
   serverId,
@@ -1119,47 +1269,6 @@ export function TerminalPane({
   });
   const keyboardToggleIconColor = theme.colors.foregroundMuted;
 
-  const renderVirtualKeyboardControl = (control: TerminalVirtualKeyboardControl) => {
-    const controlId = getTerminalVirtualKeyboardControlId(control);
-    switch (control.type) {
-      case "key":
-        return (
-          <VirtualKeyButton
-            key={controlId}
-            id={control.button.id}
-            label={control.button.label}
-            keyValue={control.button.key}
-            onSend={sendVirtualKey}
-          />
-        );
-      case "modifier":
-        return (
-          <ModifierButton
-            key={controlId}
-            modifier={control.modifier}
-            active={modifiers[control.modifier]}
-            onToggle={toggleModifier}
-          />
-        );
-      case "paste":
-        return showPasteAction ? (
-          <TerminalPasteAction
-            key={controlId}
-            hasClipboardContent={hasClipboardText || hasClipboardImage}
-            onPaste={handleTerminalPaste}
-          />
-        ) : null;
-      case "keyboardToggle":
-        return (
-          <KeyboardToggleButton
-            key={controlId}
-            iconColor={keyboardToggleIconColor}
-            isKeyboardVisible={isKeyboardToggleVisible}
-            onToggle={handleKeyboardToggle}
-          />
-        );
-    }
-  };
   const showLoadingOverlay = shouldShowTerminalLoadingOverlay({
     isWorkspaceFocused: isTerminalPresented,
     hasStreamError: Boolean(streamError),
@@ -1242,32 +1351,23 @@ export function TerminalPane({
         ) : null}
       </FileDropZone>
 
-      {streamError ? (
-        <View style={styles.errorRow}>
-          <Text style={styles.statusError} numberOfLines={2}>
-            {streamError}
-          </Text>
-        </View>
-      ) : null}
+      <TerminalErrorDebugBar streamError={streamError} serverId={serverId} />
 
-      {showVirtualKeyBar ? (
-        <View style={styles.keyboardContainer} testID="terminal-virtual-keyboard">
-          <View
-            style={styles.keyboardRows}
-            onLayout={handleKeyBarLayout}
-            testID={isNative && !isMobile ? "terminal-virtual-keyboard-native-wide" : undefined}
-          >
-            {virtualKeyboardRows.map((row) => (
-              <View
-                key={row.map(getTerminalVirtualKeyboardControlId).join(":")}
-                style={styles.keyboardRow}
-              >
-                {row.map(renderVirtualKeyboardControl)}
-              </View>
-            ))}
-          </View>
-        </View>
-      ) : null}
+      <TerminalVirtualKeyBar
+        visible={showVirtualKeyBar}
+        onLayout={handleKeyBarLayout}
+        isWideNative={isNative && !isMobile}
+        rows={virtualKeyboardRows}
+        modifiers={modifiers}
+        showPasteAction={showPasteAction}
+        hasClipboardContent={hasClipboardText || hasClipboardImage}
+        keyboardToggleIconColor={keyboardToggleIconColor}
+        isKeyboardToggleVisible={isKeyboardToggleVisible}
+        onSendKey={sendVirtualKey}
+        onToggleModifier={toggleModifier}
+        onPaste={handleTerminalPaste}
+        onToggleKeyboard={handleKeyboardToggle}
+      />
     </Animated.View>
   );
 }
@@ -1301,15 +1401,34 @@ const styles = StyleSheet.create((theme) => ({
     zIndex: 2,
   },
   errorRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: theme.spacing[3],
     paddingVertical: theme.spacing[1],
     borderTopWidth: 1,
     borderTopColor: theme.colors.border,
     backgroundColor: theme.colors.surface1,
+    gap: theme.spacing[2],
   },
   statusError: {
+    flex: 1,
     color: theme.colors.destructive,
     fontSize: theme.fontSize.sm,
+  },
+  debugButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1],
+    backgroundColor: theme.colors.destructive || "#ef4444",
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 4,
+    borderRadius: theme.borderRadius.sm,
+  },
+  debugButtonText: {
+    color: "#ffffff",
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.semibold,
   },
   keyboardContainer: {
     borderTopWidth: 1,

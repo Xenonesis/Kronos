@@ -810,6 +810,7 @@ async fn execute_local_http_provider_turn(
     provider: &str,
     model: Option<&str>,
     prompt: &str,
+    system_prompt: Option<&str>,
 ) -> Result<ProviderOutput, String> {
     use futures_util::StreamExt;
     let mut output = ProviderOutput::default();
@@ -829,13 +830,25 @@ async fn execute_local_http_provider_turn(
         })
         .unwrap_or("llama3");
 
+    let mut messages = Vec::new();
+    if let Some(sys) = system_prompt.filter(|s| !s.trim().is_empty()) {
+        messages.push(serde_json::json!({
+            "role": "system",
+            "content": sys
+        }));
+    }
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": prompt
+    }));
+
     if provider == "ollama" {
         let endpoint =
             std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
         let url = format!("{endpoint}/api/chat");
         let body = serde_json::json!({
             "model": clean_model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "stream": true
         });
 
@@ -868,6 +881,15 @@ async fn execute_local_http_provider_turn(
                     continue;
                 }
                 if let Ok(val) = serde_json::from_str::<Value>(&line) {
+                    if val.get("done").and_then(|v| v.as_bool()) == Some(true) {
+                        let inp = val.get("prompt_eval_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let out = val.get("eval_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                        output.usage = Some(serde_json::json!({
+                            "inputTokens": inp,
+                            "outputTokens": out,
+                            "totalCostUsd": 0.0
+                        }));
+                    }
                     if let Some(msg) = val.get("message") {
                         if let Some(thinking) = msg.get("thinking").and_then(|v| v.as_str()) {
                             let mut live = Vec::new();
@@ -921,7 +943,7 @@ async fn execute_local_http_provider_turn(
         let url = format!("{endpoint}/v1/chat/completions");
         let body = serde_json::json!({
             "model": clean_model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "stream": true
         });
 
@@ -960,6 +982,15 @@ async fn execute_local_http_provider_turn(
                     break;
                 }
                 if let Ok(val) = serde_json::from_str::<Value>(data) {
+                    if let Some(usage) = val.get("usage") {
+                        let inp = usage.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let out = usage.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                        output.usage = Some(serde_json::json!({
+                            "inputTokens": inp,
+                            "outputTokens": out,
+                            "totalCostUsd": 0.0
+                        }));
+                    }
                     if let Some(choices) = val.get("choices").and_then(|c| c.as_array()) {
                         for choice in choices {
                             if let Some(content) =
@@ -1021,10 +1052,37 @@ async fn execute_provider_turn(
     // Automatic shadow git checkpoint before turn execution
     let _ = crate::kernel::git::GitEngine::create_checkpoint(&cwd, &turn.token).await;
 
+    // Automatic Project Rules and High-Altitude Repo Map auto-ingestion
+    let is_initial_turn = turn
+        .manager()
+        .storage()
+        .with_timeline(&agent.id, |items| {
+            !items.iter().any(|item| {
+                matches!(
+                    item,
+                    crate::agent::types::AgentTimelineItem::AssistantMessage { .. }
+                )
+            })
+        })
+        .unwrap_or(true);
+
+    let mut context_prefix = String::new();
+    if let Some(rules) = crate::agent::rules::load_workspace_rules(&cwd) {
+        context_prefix.push_str(&rules);
+        context_prefix.push_str("\n\n");
+    }
+    if is_initial_turn {
+        if let Some(map) = crate::kernel::repo_map::generate_repo_map(&cwd) {
+            context_prefix.push_str(&map);
+            context_prefix.push_str("\n\n");
+        }
+    }
+    let system_context = (!context_prefix.is_empty()).then(|| context_prefix.trim().to_string());
+
     if provider == "ollama" || provider == "lmstudio" {
         let _ = turn.mark_provider_started();
         let prompt = turn.prompt.clone();
-        return execute_local_http_provider_turn(turn, provider, model, &prompt).await;
+        return execute_local_http_provider_turn(turn, provider, model, &prompt, system_context.as_deref()).await;
     }
     let mut handle = provider_handle(&agent)?;
     if handle.is_none() && agent.runtime_info.is_none() {
@@ -1073,12 +1131,17 @@ async fn execute_provider_turn(
                 .map_err(|e| format!("Failed to create provider session directory: {e}"))?;
         }
     }
+    let enriched_prompt = if let Some(ref sys) = system_context {
+        format!("{sys}\n\n{}", turn.prompt)
+    } else {
+        turn.prompt.clone()
+    };
     let args = provider_arguments(
         provider,
         model,
         thinking,
         &cwd,
-        &turn.prompt,
+        &enriched_prompt,
         handle.as_deref(),
         Some(&session_dir),
     )?;

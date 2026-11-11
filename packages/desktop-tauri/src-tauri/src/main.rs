@@ -2331,6 +2331,49 @@ try {{
                 }
             });
 
+            // Windows Taskbar Progress dynamic sync with Agent Turn states
+            let handle_for_taskbar = app.handle().clone();
+            std::thread::spawn(move || {
+                let mut rx = crate::kernel::server::get_provider_push_tx().subscribe();
+                while let Ok(msg_str) = rx.blocking_recv() {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&msg_str) {
+                        if let Some(event_type) = val.pointer("/message/payload/event/type").and_then(|v| v.as_str()) {
+                            if let Some(win) = handle_for_taskbar.get_webview_window("main") {
+                                match event_type {
+                                    "turn_started" => {
+                                        let _ = win.set_progress_bar(tauri::window::ProgressBarState {
+                                            progress: None,
+                                            status: Some(tauri::window::ProgressBarStatus::Indeterminate),
+                                        });
+                                    }
+                                    "turn_completed" | "turn_canceled" => {
+                                        let _ = win.set_progress_bar(tauri::window::ProgressBarState {
+                                            progress: None,
+                                            status: Some(tauri::window::ProgressBarStatus::None),
+                                        });
+                                    }
+                                    "turn_failed" => {
+                                        let _ = win.set_progress_bar(tauri::window::ProgressBarState {
+                                            progress: Some(100),
+                                            status: Some(tauri::window::ProgressBarStatus::Error),
+                                        });
+                                        let win_err = win.clone();
+                                        std::thread::spawn(move || {
+                                            std::thread::sleep(std::time::Duration::from_secs(3));
+                                            let _ = win_err.set_progress_bar(tauri::window::ProgressBarState {
+                                                progress: None,
+                                                status: Some(tauri::window::ProgressBarStatus::None),
+                                            });
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
             // Register global shortcuts to toggle main window visibility
             let window_clone = win.clone();
             for shortcut in ["Alt+Space", "CommandOrControl+Shift+K", "CommandOrControl+Shift+P"] {

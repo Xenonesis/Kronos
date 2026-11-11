@@ -643,6 +643,18 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       }
     });
 
+    const unsubDevServer = client.on(
+      "dev_server_detected" as unknown as "activity_log",
+      (message) => {
+        const payload = (message as unknown as { payload?: { url?: string } })?.payload;
+        if (payload?.url) {
+          toast.show(`🚀 Dev server detected: ${payload.url}`, {
+            variant: "success",
+          });
+        }
+      },
+    );
+
     const unsubActivity = client.on("activity_log", (message) => {
       if (message.type !== "activity_log") return;
       notifyVoiceAbortFailure(message.payload, toast.error);
@@ -692,6 +704,7 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       unsubPermissionRequest();
       unsubPermissionResolved();
       unsubAudioOutput();
+      unsubDevServer();
       unsubActivity();
       unsubTranscription();
       unsubVoiceInputState();

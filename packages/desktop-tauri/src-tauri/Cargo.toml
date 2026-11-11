@@ -81,6 +81,7 @@ features = [
   "Win32_Graphics_Dwm",
   "Win32_System_ProcessStatus",
   "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Shell",
   "Win32_System_Console",
   "Win32_System_IO",
 ]

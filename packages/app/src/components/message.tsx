@@ -13,6 +13,8 @@ import {
   AttachmentThumbnail,
 } from "@/components/attachment-pill";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
+import { AgentPlanWidget } from "@/components/agent-plan-widget";
+import { useSessionStore } from "@/stores/session-store";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { RewindMenu, type RewindMode } from "@/components/rewind/rewind-menu";
 import { useRewindAgentMutation } from "@/components/rewind/use-rewind-agent-mutation";
@@ -643,6 +645,20 @@ const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
   hiddenLabel: {
     opacity: 0,
   },
+  usageBadge: {
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 1,
+    borderRadius: 9999,
+    backgroundColor: theme.colors.surface2,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    alignSelf: "center",
+  },
+  usageText: {
+    fontSize: STREAM_METADATA_FONT_SIZE,
+    color: theme.colors.foregroundMuted,
+    fontWeight: "500",
+  },
 }));
 
 const TIMESTAMP_REVEAL_MS = 3000;
@@ -753,6 +769,32 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
   );
   const canFork = Boolean(onFork);
 
+  const lastUsage = useSessionStore((state) => {
+    if (!serverId || !agentId) return null;
+    const session = state.sessions[serverId];
+    const agent = session?.agents?.get(agentId);
+    return (
+      (
+        agent as
+          | { lastUsage?: { inputTokens?: number; outputTokens?: number; totalCostUsd?: number } }
+          | undefined
+      )?.lastUsage ?? null
+    );
+  });
+
+  const usageLabel = useMemo(() => {
+    if (!lastUsage) return null;
+    const inTokens = lastUsage.inputTokens ?? 0;
+    const outTokens = lastUsage.outputTokens ?? 0;
+    const total = inTokens + outTokens;
+    if (total === 0) return null;
+    const tokenStr = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : `${total}`;
+    if (typeof lastUsage.totalCostUsd === "number" && lastUsage.totalCostUsd > 0) {
+      return `⚡ ${tokenStr} ($${lastUsage.totalCostUsd.toFixed(3)})`;
+    }
+    return `⚡ ${tokenStr} tok`;
+  }, [lastUsage]);
+
   return (
     <View style={assistantTurnFooterStylesheet.container}>
       <AssistantTurnActions
@@ -764,6 +806,11 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
         serverId={serverId}
         agentId={agentId}
       />
+      {usageLabel ? (
+        <View style={assistantTurnFooterStylesheet.usageBadge}>
+          <Text style={assistantTurnFooterStylesheet.usageText}>{usageLabel}</Text>
+        </View>
+      ) : null}
       {primaryLabel ? (
         <Pressable
           style={assistantTurnFooterStylesheet.labelButton}
@@ -1415,14 +1462,17 @@ export const AssistantMessage = memo(function AssistantMessage({
           </Text>
         </View>
       ) : (
-        <MarkdownRenderer
-          text={revealedMessage}
-          agentCommands
-          streaming={isStreaming}
-          client={client}
-          workspaceRoot={workspaceRoot}
-          serverId={serverId}
-        />
+        <>
+          <AgentPlanWidget text={revealedMessage} />
+          <MarkdownRenderer
+            text={revealedMessage}
+            agentCommands
+            streaming={isStreaming}
+            client={client}
+            workspaceRoot={workspaceRoot}
+            serverId={serverId}
+          />
+        </>
       )}
       {isStreaming ? (
         <View

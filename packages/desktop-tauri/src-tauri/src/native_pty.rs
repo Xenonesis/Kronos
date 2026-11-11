@@ -52,6 +52,36 @@ impl Default for NativePtyManager {
     }
 }
 
+fn sniff_dev_server_url(chunk: &[u8]) -> Option<(u16, String)> {
+    let text = String::from_utf8_lossy(chunk);
+    for line in text.lines() {
+        let line_lower = line.to_ascii_lowercase();
+        let offset = if let Some(idx) = line_lower.find("localhost:") {
+            Some(idx + "localhost:".len())
+        } else if let Some(idx) = line_lower.find("127.0.0.1:") {
+            Some(idx + "127.0.0.1:".len())
+        } else if let Some(idx) = line_lower.find("0.0.0.0:") {
+            Some(idx + "0.0.0.0:".len())
+        } else {
+            None
+        };
+
+        if let Some(start) = offset {
+            let port_str: String = line[start..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if let Ok(port) = port_str.parse::<u16>() {
+                if (1024..=65535).contains(&port) {
+                    let url = format!("http://localhost:{port}");
+                    return Some((port, url));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Finds the index where an incomplete trailing UTF-8 byte sequence starts, if any.
 /// Returns the byte offset into `bytes` where valid complete UTF-8 ends.
 fn split_incomplete_utf8(bytes: &[u8]) -> usize {
@@ -196,6 +226,7 @@ impl NativePtyManager {
         std::thread::spawn(move || {
             let mut reader = reader;
             let mut buf = [0u8; 16384];
+            let mut detected_ports = std::collections::HashSet::<u16>::new();
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
@@ -209,6 +240,22 @@ impl NativePtyManager {
                                     let excess = bg.len() - MAX_BACKLOG;
                                     bg.drain(0..excess);
                                 }
+                            }
+                        }
+                        if let Some((port, url)) = sniff_dev_server_url(chunk) {
+                            if detected_ports.insert(port) {
+                                let evt = serde_json::json!({
+                                    "type": "session",
+                                    "message": {
+                                        "type": "dev_server_detected",
+                                        "payload": {
+                                            "terminalId": term_id,
+                                            "port": port,
+                                            "url": url,
+                                        }
+                                    }
+                                });
+                                let _ = crate::kernel::server::get_provider_push_tx().send(evt.to_string());
                             }
                         }
                         let _ = broadcaster.send(TerminalOutputChunk {
