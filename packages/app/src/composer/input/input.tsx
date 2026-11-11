@@ -49,12 +49,26 @@ import {
   composerToolbarOverhang,
   resolveComposerLeadingEdge,
 } from "@/composer/input/toolbar-rails";
-import { ArrowUp, Mic, MicOff, CornerDownLeft, Plus, Square } from "lucide-react-native";
+import {
+  ArrowUp,
+  Mic,
+  MicOff,
+  CornerDownLeft,
+  Plus,
+  Square,
+  AtSign,
+  Wand2,
+} from "lucide-react-native";
 import * as Haptics from "expo-haptics";
 import { useDictation } from "@/hooks/use-dictation";
 import { hasFinePointer } from "@/hooks/pointer-capabilities";
 import { DictationOverlay } from "@/components/dictation-controls";
 import { RealtimeVoiceOverlay } from "@/components/realtime-voice-overlay";
+import { enhancePromptText } from "@/composer/prompt-enhancer";
+import { playAudioCue } from "@/utils/audio-cues";
+import { MentionPalette } from "@/composer/at-mentions/mention-palette";
+import type { MentionItem } from "@/composer/at-mentions/types";
+import { PressHighlight } from "@/components/ui/press-highlight";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useSessionStore } from "@/stores/session-store";
 import { useVoiceOptional } from "@/contexts/voice-context";
@@ -1938,12 +1952,46 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       t,
     });
 
+    const [showMentionPalette, setShowMentionPalette] = useState(false);
+    const handleCloseMentionPalette = useCallback(() => setShowMentionPalette(false), []);
+    const handleToggleMentionPalette = useCallback(
+      () => setShowMentionPalette((prev) => !prev),
+      [],
+    );
+
+    const handleSelectMention = useCallback(
+      (item: MentionItem) => {
+        const current = valueRef.current;
+        const next = current.endsWith("@")
+          ? current.slice(0, -1) + item.insertToken
+          : `${current ? current + " " : ""}${item.insertToken}`;
+        valueRef.current = next;
+        onChangeText(next);
+        setShowMentionPalette(false);
+        playAudioCue("mic_toggle");
+      },
+      [onChangeText],
+    );
+
+    const handleEnhancePrompt = useCallback(() => {
+      const current = valueRef.current;
+      if (!current.trim()) return;
+      const result = enhancePromptText(current);
+      valueRef.current = result.enhanced;
+      onChangeText(result.enhanced);
+      playAudioCue("mic_toggle");
+      toast.show(`✨ Prompt enhanced with ${result.intent} specification!`);
+    }, [onChangeText, toast]);
+
     const handleInputChange = useCallback(
       (nextValue: string) => {
         updateComposerHeightForText?.(valueRef.current, nextValue);
         valueRef.current = nextValue;
         updateLiveTextPresence(nextValue);
         onChangeText(nextValue);
+        if (nextValue.endsWith("@")) {
+          setShowMentionPalette(true);
+        }
       },
       [onChangeText, updateComposerHeightForText, updateLiveTextPresence],
     );
@@ -2207,41 +2255,75 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
     );
     const toolbar = useMemo(
       () => (
-        <View style={buttonRowStyle}>
-          {/* Toolbar left: attachment button + agent controls */}
-          <View style={styles.leftButtonGroup}>
-            <AttachmentDropdown
-              visible={mode.showAttachments}
-              isConnected={isConnected}
-              disabled={disabled}
-              attachButtonStyle={attachButtonStyle}
-              renderAttachButtonIcon={renderAttachButtonIcon}
-              attachmentMenuItems={attachmentMenuItems}
-              addAttachmentLabel={t("composer.input.addAttachment")}
-            />
-            {leftContent}
-          </View>
+        <View>
+          <MentionPalette
+            visible={showMentionPalette}
+            onSelect={handleSelectMention}
+            onClose={handleCloseMentionPalette}
+          />
+          <View style={buttonRowStyle}>
+            {/* Toolbar left: attachment button + agent controls */}
+            <View style={styles.leftButtonGroup}>
+              <AttachmentDropdown
+                visible={mode.showAttachments}
+                isConnected={isConnected}
+                disabled={disabled}
+                attachButtonStyle={attachButtonStyle}
+                renderAttachButtonIcon={renderAttachButtonIcon}
+                attachmentMenuItems={attachmentMenuItems}
+                addAttachmentLabel={t("composer.input.addAttachment")}
+              />
+              <PressHighlight
+                style={attachButtonStyle}
+                onPress={handleToggleMentionPalette}
+                accessibilityRole="button"
+                accessibilityLabel="Attach Context (@)"
+                testID="composer-at-mention-button"
+              >
+                <ThemedAtSign size={toolbarGlyph.size} />
+              </PressHighlight>
+              {leftContent}
+            </View>
 
-          {/* Right: dictation, then the trailing action (voice mode, send or stop) */}
-          <View style={styles.rightButtonGroup}>
-            {beforeVoiceContent}
-            <VoiceButtonTooltip
-              visible={mode.showVoice}
-              onVoicePress={handleVoicePress}
-              isDictationStartEnabled={isDictationStartEnabled}
-              voiceButtonAccessibilityLabel={voiceButtonAccessibilityLabel}
-              voiceButtonStyle={voiceButtonStyle}
-              renderVoiceButtonIcon={renderVoiceButtonIcon}
-              voiceTooltipText={voiceTooltipText}
-              isRealtimeVoiceForCurrentAgent={isRealtimeVoiceForCurrentAgent}
-              voiceMuteToggleKeys={voiceMuteToggleKeys}
-              dictationToggleKeys={dictationToggleKeys}
-            />
-            <View style={styles.trailingDisc}>{sendButton}</View>
+            {/* Right: dictation, then the trailing action (voice mode, send or stop) */}
+            <View style={styles.rightButtonGroup}>
+              {props.value.trim().length > 0 ? (
+                <PressHighlight
+                  style={attachButtonStyle}
+                  onPress={handleEnhancePrompt}
+                  accessibilityRole="button"
+                  accessibilityLabel="Enhance Prompt (Magic Wand)"
+                  testID="composer-enhance-prompt-button"
+                >
+                  <ThemedWand2 size={toolbarGlyph.size} />
+                </PressHighlight>
+              ) : null}
+              {beforeVoiceContent}
+              <VoiceButtonTooltip
+                visible={mode.showVoice}
+                onVoicePress={handleVoicePress}
+                isDictationStartEnabled={isDictationStartEnabled}
+                voiceButtonAccessibilityLabel={voiceButtonAccessibilityLabel}
+                voiceButtonStyle={voiceButtonStyle}
+                renderVoiceButtonIcon={renderVoiceButtonIcon}
+                voiceTooltipText={voiceTooltipText}
+                isRealtimeVoiceForCurrentAgent={isRealtimeVoiceForCurrentAgent}
+                voiceMuteToggleKeys={voiceMuteToggleKeys}
+                dictationToggleKeys={dictationToggleKeys}
+              />
+              <View style={styles.trailingDisc}>{sendButton}</View>
+            </View>
           </View>
         </View>
       ),
       [
+        showMentionPalette,
+        handleSelectMention,
+        handleCloseMentionPalette,
+        handleToggleMentionPalette,
+        toolbarGlyph.size,
+        props.value,
+        handleEnhancePrompt,
         buttonRowStyle,
         mode.showAttachments,
         isConnected,
@@ -2569,6 +2651,10 @@ const ThemedMicOff = withUnistyles(MicOff);
 const ThemedArrowUp = withUnistyles(ArrowUp);
 const ThemedCornerDownLeft = withUnistyles(CornerDownLeft);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
+const ThemedAtSign = withUnistyles(AtSign, (theme: Theme) => ({
+  color: theme.colors.foregroundMuted,
+}));
+const ThemedWand2 = withUnistyles(Wand2, (theme: Theme) => ({ color: theme.colors.primary }));
 
 const iconForegroundMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const iconForegroundMutedMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });

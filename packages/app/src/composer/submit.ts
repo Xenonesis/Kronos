@@ -1,4 +1,5 @@
 import { i18n } from "@/i18n/i18next";
+import { resolvePromptMentions } from "@/composer/at-mentions/mention-resolver";
 
 export type AgentInputSubmitResult = "noop" | "queued" | "submitted" | "failed";
 
@@ -26,6 +27,7 @@ export async function submitAgentInput<TAttachment>(
   input: AgentInputSubmitActionInput<TAttachment>,
 ): Promise<AgentInputSubmitResult> {
   const trimmedMessage = input.message.trim();
+  const resolvedMessage = resolvePromptMentions(trimmedMessage);
   const attachments = input.attachments;
   const shouldClearOnSubmit = input.submitBehavior !== "preserve-and-lock";
 
@@ -43,7 +45,7 @@ export async function submitAgentInput<TAttachment>(
   }
 
   if (input.isAgentRunning && !input.forceSend) {
-    input.queueMessage({ message: trimmedMessage, attachments });
+    input.queueMessage({ message: resolvedMessage, attachments });
     if (shouldClearOnSubmit) {
       input.setUserInput("");
       input.setAttachments([]);
@@ -60,7 +62,7 @@ export async function submitAgentInput<TAttachment>(
   input.setIsProcessing(true);
 
   try {
-    await input.submitMessage({ message: trimmedMessage, attachments });
+    await input.submitMessage({ message: resolvedMessage, attachments });
     input.clearDraft("sent");
     input.setIsProcessing(false);
     return "submitted";

@@ -4,6 +4,7 @@ import { useFocusEffect } from "expo-router/react-navigation";
 import { Switch } from "@/components/ui/switch";
 import { useCliInstall } from "@/desktop/hooks/use-install-status";
 import { SettingsCard, SettingsRow, SettingsSection } from "@/components/settings";
+import { McpServersCard } from "@/desktop/components/mcp-servers-card";
 
 const CLI_DOCS_URL = "https://paseo.sh/docs/cli";
 
@@ -41,6 +42,7 @@ export function IntegrationsSection() {
           disabled={cli.status === null || cli.isWorking}
         />
       </SettingsCard>
+      <McpServersCard />
     </SettingsSection>
   );
 }

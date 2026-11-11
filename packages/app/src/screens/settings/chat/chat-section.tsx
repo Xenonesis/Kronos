@@ -37,6 +37,14 @@ export function ChatSection() {
     (chatOutlineEnabled: boolean) => void updateSettings({ chatOutlineEnabled }),
     [updateSettings],
   );
+  const changeBlockDestructiveCommands = useCallback(
+    (blockDestructiveCommands: boolean) => void updateSettings({ blockDestructiveCommands }),
+    [updateSettings],
+  );
+  const changeEnableSelfHealing = useCallback(
+    (enableSelfHealing: boolean) => void updateSettings({ enableSelfHealing }),
+    [updateSettings],
+  );
 
   return (
     <View>
@@ -63,6 +71,23 @@ export function ChatSection() {
               onValueChange={changeChatOutline}
             />
           )}
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title="Safety Guardrails & Autonomous Execution">
+        <SettingsCard>
+          <SettingsSwitch
+            label="Block Destructive Commands"
+            hint="Automatically block commands that can permanently wipe files, databases, or git history (rm -rf, del /s, git reset --hard)"
+            value={settings.blockDestructiveCommands ?? true}
+            onValueChange={changeBlockDestructiveCommands}
+          />
+          <SettingsSwitch
+            label="Autonomous Self-Healing Loop"
+            hint="Automatically run compile & typecheck probes after agent file edits and auto-repair syntax errors before concluding turns"
+            value={settings.enableSelfHealing ?? true}
+            onValueChange={changeEnableSelfHealing}
+          />
         </SettingsCard>
       </SettingsSection>
     </View>

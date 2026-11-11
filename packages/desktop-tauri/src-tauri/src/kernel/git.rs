@@ -366,4 +366,48 @@ impl GitEngine {
             Err(format!("Checkpoint '{turn_id}' not found"))
         }
     }
+
+    /// Creates an automated conventional semantic git commit from the current workspace changes.
+    pub async fn create_semantic_commit(
+        repo: &Path,
+        scope: Option<&str>,
+        description: &str,
+    ) -> Result<String, String> {
+        // Stage all modified & untracked changes
+        let _ = Self::git_exec(repo, &["add", "-A"]).await?;
+
+        // Determine conventional commit type based on status
+        let status = Self::status_summary(repo).unwrap_or(GitStatusSummary {
+            current_branch: None,
+            is_dirty: true,
+            modified_count: 1,
+            untracked_count: 0,
+            staged_count: 1,
+        });
+
+        if !status.is_dirty && status.staged_count == 0 {
+            return Ok("Working tree is clean; no commit created".to_string());
+        }
+
+        let desc_lower = description.to_lowercase();
+        let commit_type = if desc_lower.contains("fix") || desc_lower.contains("bug") || desc_lower.contains("error") {
+            "fix"
+        } else if desc_lower.contains("test") {
+            "test"
+        } else if desc_lower.contains("refactor") {
+            "refactor"
+        } else if desc_lower.contains("doc") || desc_lower.contains("readme") {
+            "docs"
+        } else {
+            "feat"
+        };
+
+        let formatted_msg = if let Some(s) = scope {
+            format!("{commit_type}({s}): {description}")
+        } else {
+            format!("{commit_type}: {description}")
+        };
+
+        Self::commit(repo, &formatted_msg).await
+    }
 }
