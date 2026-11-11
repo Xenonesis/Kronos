@@ -10,6 +10,7 @@ export interface MentionItem {
   label: string;
   detail?: string;
   insertToken: string;
+  path?: string;
 }
 
 export const STATIC_MENTIONS: readonly MentionItem[] = [

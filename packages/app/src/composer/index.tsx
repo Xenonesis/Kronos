@@ -294,16 +294,29 @@ function buildRealtimeVoiceButtonStyle(pressed: boolean, voiceButtonDisabled: bo
 
 function buildAgentStateSelector(serverId: string, agentId: string) {
   return (state: ReturnType<typeof useSessionStore.getState>) => {
-    const agent = state.sessions[serverId]?.agents?.get(agentId) ?? null;
+    const agent = state.sessions[serverId]?.agents?.get(agentId);
+    if (!agent) {
+      return {
+        status: null,
+        provider: null,
+        contextWindowMaxTokens: null,
+        contextWindowUsedTokens: null,
+        totalCostUsd: null,
+        outputTokens: null,
+        model: null,
+        runtimeModelId: null,
+      };
+    }
+    const usage = agent.lastUsage;
     return {
-      status: agent?.status ?? null,
-      provider: agent?.provider ?? null,
-      contextWindowMaxTokens: agent?.lastUsage?.contextWindowMaxTokens ?? null,
-      contextWindowUsedTokens: agent?.lastUsage?.contextWindowUsedTokens ?? null,
-      totalCostUsd: agent?.lastUsage?.totalCostUsd ?? null,
-      outputTokens: agent?.lastUsage?.outputTokens ?? null,
-      model: agent?.model ?? null,
-      runtimeModelId: agent?.runtimeInfo?.model ?? null,
+      status: agent.status,
+      provider: agent.provider,
+      contextWindowMaxTokens: usage?.contextWindowMaxTokens ?? null,
+      contextWindowUsedTokens: usage?.contextWindowUsedTokens ?? null,
+      totalCostUsd: usage?.totalCostUsd ?? null,
+      outputTokens: usage?.outputTokens ?? null,
+      model: agent.model,
+      runtimeModelId: agent.runtimeInfo?.model ?? null,
     };
   };
 }
@@ -1768,6 +1781,8 @@ function ComposerContentImpl({
         forceSend,
         submitBehavior,
         isAgentRunning,
+        cwd,
+        client,
         // Parent-managed submits are still valid submit paths even when the
         // transport is disconnected, because the parent decides the failure mode.
         canSubmit: Boolean(sendAgentMessageRef.current || onSubmitMessageRef.current),
@@ -1801,7 +1816,9 @@ function ComposerContentImpl({
       allowEmptySubmit,
       beginSubmit,
       clearDraft,
+      client,
       completeSubmit,
+      cwd,
       hasExternalContent,
       isAgentRunning,
       queueMessage,

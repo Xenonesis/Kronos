@@ -1953,21 +1953,33 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
     });
 
     const [showMentionPalette, setShowMentionPalette] = useState(false);
-    const handleCloseMentionPalette = useCallback(() => setShowMentionPalette(false), []);
-    const handleToggleMentionPalette = useCallback(
-      () => setShowMentionPalette((prev) => !prev),
-      [],
-    );
+    const [mentionSearchQuery, setMentionSearchQuery] = useState("");
+    const handleCloseMentionPalette = useCallback(() => {
+      setShowMentionPalette(false);
+      setMentionSearchQuery("");
+    }, []);
+    const handleToggleMentionPalette = useCallback(() => {
+      setShowMentionPalette((prev) => {
+        if (!prev) {
+          const match = valueRef.current.match(/@([\w./\\-]*)$/);
+          setMentionSearchQuery(match ? match[1] || "" : "");
+        }
+        return !prev;
+      });
+    }, []);
 
     const handleSelectMention = useCallback(
       (item: MentionItem) => {
         const current = valueRef.current;
-        const next = current.endsWith("@")
-          ? current.slice(0, -1) + item.insertToken
-          : `${current ? current + " " : ""}${item.insertToken}`;
+        const atMatch = current.match(/@[\w./\\-]*$/);
+        const next =
+          atMatch && atMatch.index !== undefined
+            ? current.slice(0, atMatch.index) + item.insertToken
+            : `${current ? current + " " : ""}${item.insertToken}`;
         valueRef.current = next;
         onChangeText(next);
         setShowMentionPalette(false);
+        setMentionSearchQuery("");
         playAudioCue("mic_toggle");
       },
       [onChangeText],
@@ -1989,11 +2001,18 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         valueRef.current = nextValue;
         updateLiveTextPresence(nextValue);
         onChangeText(nextValue);
-        if (nextValue.endsWith("@")) {
+
+        // Detect active @mention trigger or continuation
+        const atMatch = nextValue.match(/@([\w./\\-]*)$/);
+        if (atMatch) {
           setShowMentionPalette(true);
+          setMentionSearchQuery(atMatch[1] || "");
+        } else if (showMentionPalette) {
+          setShowMentionPalette(false);
+          setMentionSearchQuery("");
         }
       },
-      [onChangeText, updateComposerHeightForText, updateLiveTextPresence],
+      [onChangeText, updateComposerHeightForText, updateLiveTextPresence, showMentionPalette],
     );
 
     const handleInputFocus = useCallback(() => {
@@ -2258,6 +2277,10 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         <View>
           <MentionPalette
             visible={showMentionPalette}
+            query={mentionSearchQuery}
+            onQueryChange={setMentionSearchQuery}
+            cwd={cwd}
+            client={client}
             onSelect={handleSelectMention}
             onClose={handleCloseMentionPalette}
           />
@@ -2318,6 +2341,9 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       ),
       [
         showMentionPalette,
+        mentionSearchQuery,
+        cwd,
+        client,
         handleSelectMention,
         handleCloseMentionPalette,
         handleToggleMentionPalette,

@@ -1,5 +1,9 @@
 import { i18n } from "@/i18n/i18next";
-import { resolvePromptMentions } from "@/composer/at-mentions/mention-resolver";
+import {
+  resolvePromptMentions,
+  resolvePromptMentionsAsync,
+  type ResolveMentionsOptions,
+} from "@/composer/at-mentions/mention-resolver";
 
 export type AgentInputSubmitResult = "noop" | "queued" | "submitted" | "failed";
 
@@ -12,6 +16,8 @@ export interface AgentInputSubmitActionInput<TAttachment> {
   forceSend?: boolean;
   isAgentRunning: boolean;
   canSubmit: boolean;
+  cwd?: string;
+  client?: ResolveMentionsOptions["client"];
   queueMessage: (input: { message: string; attachments: TAttachment[] }) => void;
   submitMessage: (input: { message: string; attachments: TAttachment[] }) => Promise<void>;
   clearDraft: (lifecycle: "sent" | "abandoned") => void;
@@ -27,7 +33,17 @@ export async function submitAgentInput<TAttachment>(
   input: AgentInputSubmitActionInput<TAttachment>,
 ): Promise<AgentInputSubmitResult> {
   const trimmedMessage = input.message.trim();
-  const resolvedMessage = resolvePromptMentions(trimmedMessage);
+  const needsAsync = Boolean(
+    (trimmedMessage.includes("@file:") || trimmedMessage.includes("@folder:")) &&
+    input.client &&
+    input.cwd,
+  );
+  const resolvedMessage = needsAsync
+    ? await resolvePromptMentionsAsync(trimmedMessage, {
+        cwd: input.cwd,
+        client: input.client,
+      })
+    : resolvePromptMentions(trimmedMessage);
   const attachments = input.attachments;
   const shouldClearOnSubmit = input.submitBehavior !== "preserve-and-lock";
 
