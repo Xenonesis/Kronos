@@ -36,6 +36,8 @@ const BUILTIN_PROVIDER_ICONS: Record<string, ProviderIconComponent> = {
   omp: OmpIcon as unknown as ProviderIconComponent,
   opencode: OpenCodeIcon as unknown as ProviderIconComponent,
   pi: PiIcon as unknown as ProviderIconComponent,
+  ollama: Bot as unknown as ProviderIconComponent,
+  lmstudio: Bot as unknown as ProviderIconComponent,
 };
 
 const CATALOG_ICON_SVGS = new Map<string, string>(

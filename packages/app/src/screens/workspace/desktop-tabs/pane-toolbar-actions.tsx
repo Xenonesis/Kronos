@@ -2,7 +2,7 @@ import React, { useMemo } from "react";
 import { View, type LayoutChangeEvent } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
-import { Columns2, Rows2, Ellipsis, Maximize, Minimize, Plus, X } from "lucide-react-native";
+import { Columns2, Rows2, Ellipsis, Globe, Maximize, Minimize, Plus, X } from "lucide-react-native";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { ToolbarButton, ToolbarControls } from "@/components/ui/pane-content-toolbar";
 import { TOOLBAR_CONTROL_HEIGHT } from "@/components/ui/control-geometry";
@@ -26,6 +26,7 @@ const ThemedEllipsis = withUnistyles(Ellipsis);
 const ThemedMaximize = withUnistyles(Maximize);
 const ThemedMinimize = withUnistyles(Minimize);
 const ThemedX = withUnistyles(X);
+const ThemedGlobe = withUnistyles(Globe);
 
 const extraMutedColorMapping = (theme: Theme) => ({
   color: theme.colors.foregroundExtraMuted,
@@ -92,6 +93,7 @@ export function WorkspacePaneToolbarActions({
   serverId,
   paneId,
   newTabShortcutKeys,
+  onOpenPreview,
   onSplitRight,
   onSplitDown,
   onTogglePaneMaximized,
@@ -106,6 +108,7 @@ export function WorkspacePaneToolbarActions({
   serverId: string;
   paneId?: string;
   newTabShortcutKeys: ShortcutKey[][] | null;
+  onOpenPreview?: () => void;
   onSplitRight?: () => void;
   onSplitDown?: () => void;
   onTogglePaneMaximized?: () => void;
@@ -131,10 +134,20 @@ export function WorkspacePaneToolbarActions({
     [splitDownKeys],
   );
   const maximizeActionVisible = showMaximizeAction && Boolean(onTogglePaneMaximized);
-  if (!showNewTabButton && !splitActionsVisible && !maximizeActionVisible) return null;
+  if (!showNewTabButton && !splitActionsVisible && !maximizeActionVisible && !onOpenPreview)
+    return null;
 
   return (
     <ToolbarControls style={styles.paneSplitActions}>
+      {onOpenPreview ? (
+        <ToolbarButton
+          label={t("workspace.tabs.fallback.browser") || "Live Preview"}
+          testID="workspace-live-preview-button"
+          onPress={onOpenPreview}
+        >
+          <ThemedGlobe size={14} uniProps={extraMutedColorMapping} />
+        </ToolbarButton>
+      ) : null}
       {showNewTabButton ? (
         <WorkspaceNewTabButton
           panePanelKinds={panePanelKinds}

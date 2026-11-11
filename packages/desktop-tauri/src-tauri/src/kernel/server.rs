@@ -164,22 +164,26 @@ pub async fn version_check() -> axum::response::Json<serde_json::Value> {
 pub async fn handle_indexed_history_http(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Json<serde_json::Value> {
-    let scope = params.get("scope").map(|s| s.as_str()).unwrap_or("workspace");
+    let scope = params
+        .get("scope")
+        .map(|s| s.as_str())
+        .unwrap_or("workspace");
     let cwd = params.get("cwd").map(|s| s.as_str());
-    let query = params.get("query").or_else(|| params.get("search")).map(|s| s.as_str());
-    let sort = params.get("sort").map(|s| s.as_str()).unwrap_or("last_updated");
+    let query = params
+        .get("query")
+        .or_else(|| params.get("search"))
+        .map(|s| s.as_str());
+    let sort = params
+        .get("sort")
+        .map(|s| s.as_str())
+        .unwrap_or("last_updated");
     let limit = params
         .get("limit")
         .and_then(|l| l.parse::<usize>().ok())
         .unwrap_or(250);
 
-    let res = crate::agent::sessions::scan_all_indexed_sessions(
-        scope,
-        cwd,
-        query,
-        sort,
-        limit,
-    ).await;
+    let res =
+        crate::agent::sessions::scan_all_indexed_sessions(scope, cwd, query, sort, limit).await;
 
     axum::response::Json(serde_json::json!({
         "ok": true,
@@ -1331,7 +1335,13 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
 
             let cwd = std::path::Path::new(cwd_str);
             let target_path = std::path::Path::new(path_str);
-            let res = crate::kernel::git::GitEngine::worktree_add(cwd, target_path, branch, create_branch).await;
+            let res = crate::kernel::git::GitEngine::worktree_add(
+                cwd,
+                target_path,
+                branch,
+                create_branch,
+            )
+            .await;
             let success = res.is_ok();
             serde_json::json!({
                 "type": "git/worktree/add/response",
@@ -2133,9 +2143,18 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             if let Some(aid) = filter_agent_id {
                 if let Some(agent) = get_agent_manager().get_agent(aid) {
                     let (inp, out, cost) = if let Some(ref usage) = agent.last_usage {
-                        let inp = usage.get("inputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                        let out = usage.get("outputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                        let cost = usage.get("totalCostUsd").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let inp = usage
+                            .get("inputTokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let out = usage
+                            .get("outputTokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let cost = usage
+                            .get("totalCostUsd")
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.0);
                         (inp, out, cost)
                     } else {
                         (0, 0, 0.0)
@@ -2217,13 +2236,14 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
 
             let push_tx = get_provider_push_tx();
             for report in &reports {
-                let update_msg = crate::kernel::protocol::wrap_session_outbound(serde_json::json!({
-                    "type": "usage.list_reports.update",
-                    "payload": {
-                        "requestId": request_id,
-                        "report": report
-                    }
-                }));
+                let update_msg =
+                    crate::kernel::protocol::wrap_session_outbound(serde_json::json!({
+                        "type": "usage.list_reports.update",
+                        "payload": {
+                            "requestId": request_id,
+                            "report": report
+                        }
+                    }));
                 let _ = push_tx.send(update_msg.to_string());
             }
 
@@ -3006,8 +3026,30 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("initialPrompt")))
                 .and_then(|v| v.as_str());
 
+            let is_worktree = msg
+                .get("worktree")
+                .or_else(|| payload.and_then(|p| p.get("worktree")))
+                .or_else(|| source_config.and_then(|c| c.get("worktree")))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
             let mgr = get_agent_manager();
-            match mgr.create_agent(provider, cwd, title, ws_id.clone(), Some(config)) {
+            let create_result = if is_worktree {
+                let slug = format!("worktree-{}", &crate::agent::manager::uuid_v4_simple()[..8]);
+                mgr.create_agent_in_worktree(
+                    provider,
+                    cwd,
+                    &slug,
+                    None,
+                    title,
+                    ws_id.clone(),
+                    Some(config),
+                )
+                .await
+            } else {
+                mgr.create_agent(provider, cwd, title, ws_id.clone(), Some(config))
+            };
+            match create_result {
                 Ok(mut record) => {
                     let mut prompt_started = false;
                     if let Some(prompt) = initial_prompt {
@@ -3105,15 +3147,20 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .and_then(|v| v.as_str())
                 .unwrap_or("sandbox");
             let branch = format!("kronos/{}", slug);
-            let target_path = std::path::Path::new(cwd).join(".kronos").join("worktrees").join(slug);
-            let _ = std::fs::create_dir_all(target_path.parent().unwrap_or(std::path::Path::new(".")));
+            let target_path = std::path::Path::new(cwd)
+                .join(".kronos")
+                .join("worktrees")
+                .join(slug);
+            let _ =
+                std::fs::create_dir_all(target_path.parent().unwrap_or(std::path::Path::new(".")));
 
             let res = crate::kernel::git::GitEngine::worktree_add(
                 std::path::Path::new(cwd),
                 &target_path,
                 &branch,
                 true,
-            ).await;
+            )
+            .await;
 
             match res {
                 Ok(_) => serde_json::json!({
@@ -3150,7 +3197,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             let res = crate::kernel::git::GitEngine::worktree_remove(
                 std::path::Path::new(cwd),
                 std::path::Path::new(wt_path),
-            ).await;
+            )
+            .await;
             serde_json::json!({
                 "type": "paseo_worktree_archive_response",
                 "payload": {
@@ -3523,11 +3571,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .unwrap_or(150) as usize;
 
             let result = crate::agent::sessions::scan_all_indexed_sessions(
-                scope,
-                filter_cwd,
-                query,
-                sort,
-                limit,
+                scope, filter_cwd, query, sort, limit,
             )
             .await;
 
@@ -3551,7 +3595,11 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
 
             if let Some(ref query) = search_query {
                 agents.retain(|rec| {
-                    rec.title.as_deref().unwrap_or("").to_lowercase().contains(query)
+                    rec.title
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(query)
                         || rec.id.to_lowercase().contains(query)
                         || rec.cwd.to_lowercase().contains(query)
                         || rec.provider.to_lowercase().contains(query)
@@ -3726,33 +3774,31 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }
             })
         }
-        "schedule/create" => {
-            match crate::kernel::schedules::create_schedule(msg) {
-                Ok(stored) => {
-                    let summary = crate::kernel::schedules::to_schedule_summary(&stored);
-                    serde_json::json!({
-                        "type": "schedule/create/response",
+        "schedule/create" => match crate::kernel::schedules::create_schedule(msg) {
+            Ok(stored) => {
+                let summary = crate::kernel::schedules::to_schedule_summary(&stored);
+                serde_json::json!({
+                    "type": "schedule/create/response",
+                    "requestId": request_id,
+                    "payload": {
                         "requestId": request_id,
-                        "payload": {
-                            "requestId": request_id,
-                            "schedule": summary,
-                            "error": serde_json::Value::Null
-                        }
-                    })
-                }
-                Err(e) => {
-                    serde_json::json!({
-                        "type": "schedule/create/response",
-                        "requestId": request_id,
-                        "payload": {
-                            "requestId": request_id,
-                            "schedule": serde_json::Value::Null,
-                            "error": format!("Failed to create schedule: {e}")
-                        }
-                    })
-                }
+                        "schedule": summary,
+                        "error": serde_json::Value::Null
+                    }
+                })
             }
-        }
+            Err(e) => {
+                serde_json::json!({
+                    "type": "schedule/create/response",
+                    "requestId": request_id,
+                    "payload": {
+                        "requestId": request_id,
+                        "schedule": serde_json::Value::Null,
+                        "error": format!("Failed to create schedule: {e}")
+                    }
+                })
+            }
+        },
         "schedule/inspect" => {
             let sched_id = msg
                 .get("scheduleId")
@@ -3788,7 +3834,10 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .unwrap_or("");
             match crate::kernel::schedules::load_schedule(sched_id) {
                 Some(schedule) => {
-                    let runs = schedule.get("runs").cloned().unwrap_or(serde_json::json!([]));
+                    let runs = schedule
+                        .get("runs")
+                        .cloned()
+                        .unwrap_or(serde_json::json!([]));
                     serde_json::json!({
                         "type": "schedule/logs/response",
                         "requestId": request_id,
@@ -4844,7 +4893,9 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     let modified_at = meta
                         .and_then(|m| m.modified().ok())
                         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| crate::agent::sessions::format_epoch_millis_iso(d.as_millis() as i64))
+                        .map(|d| {
+                            crate::agent::sessions::format_epoch_millis_iso(d.as_millis() as i64)
+                        })
                         .unwrap_or_else(crate::agent::types::now_iso);
                     serde_json::json!({
                         "type": "file_explorer_response",
@@ -4873,13 +4924,28 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                             let modified_at = meta
                                 .and_then(|m| m.modified().ok())
                                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                                .map(|d| crate::agent::sessions::format_epoch_millis_iso(d.as_millis() as i64))
+                                .map(|d| {
+                                    crate::agent::sessions::format_epoch_millis_iso(
+                                        d.as_millis() as i64
+                                    )
+                                })
                                 .unwrap_or_else(crate::agent::types::now_iso);
                             let (kind, encoding, content) = match std::str::from_utf8(&bytes) {
                                 Ok(s) => ("text", "utf-8", s.to_string()),
-                                Err(_) => ("binary", "base64", base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)),
+                                Err(_) => (
+                                    "binary",
+                                    "base64",
+                                    base64::Engine::encode(
+                                        &base64::engine::general_purpose::STANDARD,
+                                        &bytes,
+                                    ),
+                                ),
                             };
-                            let mime_type = if kind == "text" { "text/plain" } else { "application/octet-stream" };
+                            let mime_type = if kind == "text" {
+                                "text/plain"
+                            } else {
+                                "application/octet-stream"
+                            };
                             serde_json::json!({
                                 "type": "file_explorer_response",
                                 "payload": {
@@ -5493,8 +5559,7 @@ impl DaemonHandle {
             Err(e) if is_production || port == 6767 => {
                 eprintln!(
                     "[kernel] Port {} unavailable ({}), falling back to OS ephemeral port",
-                    port,
-                    e
+                    port, e
                 );
                 tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?
             }
@@ -5555,9 +5620,15 @@ impl DaemonHandle {
             .route("/api/health", get(health_check))
             .route("/health", get(health_check))
             .route("/api/version", get(version_check))
-            .route("/api/agent-history/indexed", get(handle_indexed_history_http))
+            .route(
+                "/api/agent-history/indexed",
+                get(handle_indexed_history_http),
+            )
             .route("/api/omp-sessions", get(handle_omp_sessions_list_http))
-            .route("/api/omp-sessions/{id}", get(handle_omp_session_inspect_http))
+            .route(
+                "/api/omp-sessions/{id}",
+                get(handle_omp_session_inspect_http),
+            )
             .merge(crate::kernel::browser_proxy::router())
             .merge(ws_routes)
             .layer(axum::middleware::from_fn_with_state(
@@ -5653,7 +5724,13 @@ async fn guard_http(
     let path = request.uri().path();
     let public = matches!(
         path,
-        "/health" | "/api/health" | "/api/version" | "/" | "/ws" | "/api/agent-history/indexed" | "/api/omp-sessions"
+        "/health"
+            | "/api/health"
+            | "/api/version"
+            | "/"
+            | "/ws"
+            | "/api/agent-history/indexed"
+            | "/api/omp-sessions"
     ) || path.starts_with("/api/omp-sessions/");
     let proxy_ticket = request.method() == axum::http::Method::GET
         && path == "/api/browser-proxy"
@@ -6886,7 +6963,9 @@ async fn discover_opencode_models(cwd: &str) -> Vec<serde_json::Value> {
         #[cfg(windows)]
         fallback_cmd.creation_flags(0x08000000);
 
-        if let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(5), fallback_cmd.output()).await {
+        if let Ok(Ok(out)) =
+            tokio::time::timeout(Duration::from_secs(5), fallback_cmd.output()).await
+        {
             if out.status.success() {
                 let text = String::from_utf8_lossy(&out.stdout);
                 let models = opencode_models_from_plain_cli_output(&text);
@@ -7018,14 +7097,7 @@ pub(crate) fn opencode_models_from_plain_cli_output(text: &str) -> Vec<serde_jso
         if trimmed.contains('/') {
             if seen.insert(trimmed.to_string()) {
                 let label = trimmed.rsplit('/').next().unwrap_or(trimmed);
-                let model = dynamic_model(
-                    "opencode",
-                    trimmed,
-                    Some(label),
-                    None,
-                    false,
-                    None,
-                );
+                let model = dynamic_model("opencode", trimmed, Some(label), None, false, None);
                 models.push(model);
             }
         }
@@ -7120,7 +7192,9 @@ async fn discover_lmstudio_models() -> Vec<serde_json::Value> {
     }
 }
 
-pub(crate) fn lmstudio_models_from_response(response: &serde_json::Value) -> Vec<serde_json::Value> {
+pub(crate) fn lmstudio_models_from_response(
+    response: &serde_json::Value,
+) -> Vec<serde_json::Value> {
     let mut seen = std::collections::HashSet::new();
     response
         .get("data")

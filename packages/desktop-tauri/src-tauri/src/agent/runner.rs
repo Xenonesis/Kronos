@@ -620,7 +620,11 @@ fn ingest_provider_event(
 ) -> Result<(), String> {
     if let Some(observed) = observed_provider_handle(provider, event) {
         if handle.as_deref().is_some_and(|saved| saved != observed) {
-            eprintln!("[Runner] Provider {provider} session handle updated: was {:?}, now {}", handle.as_deref(), observed);
+            eprintln!(
+                "[Runner] Provider {provider} session handle updated: was {:?}, now {}",
+                handle.as_deref(),
+                observed
+            );
             let _ = turn.persist_provider_handle(observed);
             *handle = Some(observed.to_owned());
         } else if handle.is_none() {
@@ -735,9 +739,18 @@ async fn run_reserved_turn(mut turn: ReservedTurn, command: Option<Command>) {
             agent.last_usage = Some(usage.clone());
             let _ = manager.storage().save_record(agent);
         }
-        let inp = usage.get("inputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let out = usage.get("outputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let cost = usage.get("totalCostUsd").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let inp = usage
+            .get("inputTokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let out = usage
+            .get("outputTokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let cost = usage
+            .get("totalCostUsd")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
         get_plugin_manager().record_tokens(&provider, inp, out, cost);
     }
 
@@ -792,6 +805,196 @@ async fn cleanup_failed_provider_start(
     output
 }
 
+async fn execute_local_http_provider_turn(
+    turn: &mut ReservedTurn,
+    provider: &str,
+    model: Option<&str>,
+    prompt: &str,
+) -> Result<ProviderOutput, String> {
+    use futures_util::StreamExt;
+    let mut output = ProviderOutput::default();
+    output.identity = turn.token.clone();
+    output.cleanup_confirmed = true;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(300))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
+
+    let clean_model = model
+        .map(|m| {
+            m.strip_prefix("ollama/")
+                .or_else(|| m.strip_prefix("lmstudio/"))
+                .unwrap_or(m)
+        })
+        .unwrap_or("llama3");
+
+    if provider == "ollama" {
+        let endpoint =
+            std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+        let url = format!("{endpoint}/api/chat");
+        let body = serde_json::json!({
+            "model": clean_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": true
+        });
+
+        let resp = client.post(&url).json(&body).send().await.map_err(|e| {
+            format!("Failed to connect to Ollama at {url}: {e}. Ensure Ollama is running.")
+        })?;
+
+        if !resp.status().is_success() {
+            return Err(format!(
+                "Ollama returned HTTP error status {}",
+                resp.status()
+            ));
+        }
+
+        let mut stream = resp.bytes_stream();
+        let mut buffer = String::new();
+
+        while let Some(chunk_result) = stream.next().await {
+            if turn.is_cancelled() {
+                break;
+            }
+            let bytes = chunk_result.map_err(|e| format!("Error streaming from Ollama: {e}"))?;
+            let text = String::from_utf8_lossy(&bytes);
+            buffer.push_str(&text);
+
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line = buffer[..newline_pos].trim().to_string();
+                buffer.drain(..=newline_pos);
+                if line.is_empty() {
+                    continue;
+                }
+                if let Ok(val) = serde_json::from_str::<Value>(&line) {
+                    if let Some(msg) = val.get("message") {
+                        if let Some(thinking) = msg.get("thinking").and_then(|v| v.as_str()) {
+                            let mut live = Vec::new();
+                            output.update(
+                                "local_thinking".to_string(),
+                                OutputKind::Reasoning,
+                                thinking,
+                                false,
+                                &mut live,
+                            );
+                            for item in live {
+                                let _ = get_provider_push_tx().send(
+                                    stream_message(
+                                        &turn.agent.id,
+                                        provider,
+                                        &output.identity,
+                                        &item,
+                                    )
+                                    .to_string(),
+                                );
+                            }
+                        }
+                        if let Some(content) = msg.get("content").and_then(|v| v.as_str()) {
+                            let mut live = Vec::new();
+                            output.update(
+                                "local_answer".to_string(),
+                                OutputKind::Assistant,
+                                content,
+                                false,
+                                &mut live,
+                            );
+                            for item in live {
+                                let _ = get_provider_push_tx().send(
+                                    stream_message(
+                                        &turn.agent.id,
+                                        provider,
+                                        &output.identity,
+                                        &item,
+                                    )
+                                    .to_string(),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if provider == "lmstudio" {
+        let endpoint =
+            std::env::var("LMSTUDIO_HOST").unwrap_or_else(|_| "http://127.0.0.1:1234".to_string());
+        let url = format!("{endpoint}/v1/chat/completions");
+        let body = serde_json::json!({
+            "model": clean_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": true
+        });
+
+        let resp = client.post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to connect to LM Studio at {url}: {e}. Ensure LM Studio local server is started."))?;
+
+        if !resp.status().is_success() {
+            return Err(format!(
+                "LM Studio returned HTTP error status {}",
+                resp.status()
+            ));
+        }
+
+        let mut stream = resp.bytes_stream();
+        let mut buffer = String::new();
+
+        while let Some(chunk_result) = stream.next().await {
+            if turn.is_cancelled() {
+                break;
+            }
+            let bytes = chunk_result.map_err(|e| format!("Error streaming from LM Studio: {e}"))?;
+            let text = String::from_utf8_lossy(&bytes);
+            buffer.push_str(&text);
+
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line = buffer[..newline_pos].trim().to_string();
+                buffer.drain(..=newline_pos);
+                if line.is_empty() || line.starts_with(':') {
+                    continue;
+                }
+                let data = line.strip_prefix("data: ").unwrap_or(&line).trim();
+                if data == "[DONE]" {
+                    break;
+                }
+                if let Ok(val) = serde_json::from_str::<Value>(data) {
+                    if let Some(choices) = val.get("choices").and_then(|c| c.as_array()) {
+                        for choice in choices {
+                            if let Some(content) =
+                                choice.pointer("/delta/content").and_then(|c| c.as_str())
+                            {
+                                let mut live = Vec::new();
+                                output.update(
+                                    "local_answer".to_string(),
+                                    OutputKind::Assistant,
+                                    content,
+                                    false,
+                                    &mut live,
+                                );
+                                for item in live {
+                                    let _ = get_provider_push_tx().send(
+                                        stream_message(
+                                            &turn.agent.id,
+                                            provider,
+                                            &output.identity,
+                                            &item,
+                                        )
+                                        .to_string(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(output)
+}
+
 async fn execute_provider_turn(
     turn: &mut ReservedTurn,
     command: Option<Command>,
@@ -814,6 +1017,15 @@ async fn execute_provider_turn(
     } else {
         PathBuf::from(&agent.cwd)
     };
+
+    // Automatic shadow git checkpoint before turn execution
+    let _ = crate::kernel::git::GitEngine::create_checkpoint(&cwd, &turn.token).await;
+
+    if provider == "ollama" || provider == "lmstudio" {
+        let _ = turn.mark_provider_started();
+        let prompt = turn.prompt.clone();
+        return execute_local_http_provider_turn(turn, provider, model, &prompt).await;
+    }
     let mut handle = provider_handle(&agent)?;
     if handle.is_none() && agent.runtime_info.is_none() {
         let prior_conversation = turn
@@ -979,7 +1191,11 @@ async fn execute_provider_turn(
             }
         })
         .await;
-        if drain.is_err() && output.error.is_none() && !turn.is_cancelled() && output.rows.is_empty() {
+        if drain.is_err()
+            && output.error.is_none()
+            && !turn.is_cancelled()
+            && output.rows.is_empty()
+        {
             output.error = Some("Provider stdout did not close after process-tree cleanup".into());
         }
     }

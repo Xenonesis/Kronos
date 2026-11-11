@@ -131,7 +131,7 @@ import { NewTabLauncherProvider, type NewTabLauncher } from "@/workspace-tabs/la
 import type { BulkCloseConfirmationLabels } from "@/screens/workspace/workspace-bulk-close";
 import { useModifiedPanelTabIds } from "@/panels/panel-instance-attributes";
 import { supportsDesktopPaneSplits, useIsCompactFormFactor } from "@/constants/layout";
-import { getIsElectron, isNative } from "@/constants/platform";
+import { isNative } from "@/constants/platform";
 import { useWorkspaceTerminals } from "@/screens/workspace/terminals/use-workspace-terminals";
 import {
   createWorkspaceFileTabTarget,
@@ -1471,7 +1471,7 @@ function WorkspaceScreenContent({
     () => createTerminalMutation.isPending || pendingTerminalCreateInput !== null,
     [createTerminalMutation.isPending, pendingTerminalCreateInput],
   );
-  const showCreateBrowserTab = getIsElectron();
+  const showCreateBrowserTab = true;
   const newTabLauncher = useMemo<NewTabLauncher>(
     () => ({
       showChanges: isGitCheckout,

@@ -122,7 +122,9 @@ impl GitEngine {
         let mut untracked_count = 0;
         let mut staged_count = 0;
         if let Ok(head_tree_id) = repo.head_tree_id() {
-            if let (Ok(head_index), Ok(current_index)) = (repo.index_from_tree(&head_tree_id), repo.index_or_empty()) {
+            if let (Ok(head_index), Ok(current_index)) =
+                (repo.index_from_tree(&head_tree_id), repo.index_or_empty())
+            {
                 let head_map: std::collections::HashMap<_, _> = head_index
                     .entries()
                     .iter()
@@ -148,8 +150,12 @@ impl GitEngine {
         } else if let Ok(current_index) = repo.index_or_empty() {
             staged_count = current_index.entries().len();
         }
-        let platform = repo.status(gix::progress::Discard).map_err(|e| e.to_string())?;
-        let iter = platform.into_index_worktree_iter(Vec::new()).map_err(|e| e.to_string())?;
+        let platform = repo
+            .status(gix::progress::Discard)
+            .map_err(|e| e.to_string())?;
+        let iter = platform
+            .into_index_worktree_iter(Vec::new())
+            .map_err(|e| e.to_string())?;
         for item in iter {
             let item = item.map_err(|e| e.to_string())?;
             if let Some(summary) = item.summary() {
@@ -191,7 +197,11 @@ impl GitEngine {
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
             return Err(if err.is_empty() {
-                format!("git {:?} failed with exit code {:?}", args, output.status.code())
+                format!(
+                    "git {:?} failed with exit code {:?}",
+                    args,
+                    output.status.code()
+                )
             } else {
                 err
             });
@@ -210,11 +220,17 @@ impl GitEngine {
 
     pub async fn list_branches(cwd: &Path) -> Result<Vec<String>, String> {
         let out = Self::git_exec(cwd, &["branch", "--format=%(refname:short)"]).await?;
-        Ok(out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+        Ok(out
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
     }
 
     pub async fn create_branch(cwd: &Path, branch: &str) -> Result<(), String> {
-        Self::git_exec(cwd, &["checkout", "-b", branch]).await.map(|_| ())
+        Self::git_exec(cwd, &["checkout", "-b", branch])
+            .await
+            .map(|_| ())
     }
 
     pub async fn checkout(cwd: &Path, target: &str) -> Result<(), String> {
@@ -225,18 +241,29 @@ impl GitEngine {
         Self::git_exec(cwd, &["commit", "-m", message]).await
     }
 
-    pub async fn worktree_add(repo: &Path, path: &Path, branch: &str, create_branch: bool) -> Result<(), String> {
+    pub async fn worktree_add(
+        repo: &Path,
+        path: &Path,
+        branch: &str,
+        create_branch: bool,
+    ) -> Result<(), String> {
         let path_str = path.to_str().ok_or("Invalid worktree path")?;
         if create_branch {
-            Self::git_exec(repo, &["worktree", "add", "-b", branch, path_str]).await.map(|_| ())
+            Self::git_exec(repo, &["worktree", "add", "-b", branch, path_str])
+                .await
+                .map(|_| ())
         } else {
-            Self::git_exec(repo, &["worktree", "add", path_str, branch]).await.map(|_| ())
+            Self::git_exec(repo, &["worktree", "add", path_str, branch])
+                .await
+                .map(|_| ())
         }
     }
 
     pub async fn worktree_remove(repo: &Path, path: &Path) -> Result<(), String> {
         let path_str = path.to_str().ok_or("Invalid worktree path")?;
-        Self::git_exec(repo, &["worktree", "remove", "--force", path_str]).await.map(|_| ())
+        Self::git_exec(repo, &["worktree", "remove", "--force", path_str])
+            .await
+            .map(|_| ())
     }
 
     pub async fn worktree_list(repo: &Path) -> Result<Vec<WorktreeEntry>, String> {
@@ -309,8 +336,34 @@ impl GitEngine {
     pub async fn restore_checkpoint(repo: &Path, turn_id: &str) -> Result<(), String> {
         let clean_id = turn_id.replace(['/', '\\', ' '], "-");
         let ref_name = format!("refs/kronos/checkpoints/{}", clean_id);
-        Self::git_exec(repo, &["checkout", &ref_name, "--", "."])
+        if Self::git_exec(repo, &["checkout", &ref_name, "--", "."])
             .await
-            .map(|_| ())
+            .is_ok()
+        {
+            return Ok(());
+        }
+        // Fallback: check if any checkpoint matches prefix or get the latest checkpoint
+        let refs = Self::git_exec(
+            repo,
+            &[
+                "for-each-ref",
+                "--sort=-committerdate",
+                "--format=%(refname)",
+                "refs/kronos/checkpoints/",
+            ],
+        )
+        .await
+        .unwrap_or_default();
+        if let Some(target_ref) = refs
+            .lines()
+            .find(|r| r.contains(&clean_id))
+            .or_else(|| refs.lines().next())
+        {
+            Self::git_exec(repo, &["checkout", target_ref.trim(), "--", "."])
+                .await
+                .map(|_| ())
+        } else {
+            Err(format!("Checkpoint '{turn_id}' not found"))
+        }
     }
 }

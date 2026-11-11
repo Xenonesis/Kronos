@@ -1,4 +1,4 @@
-import { memo, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { memo, useCallback, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { FloatingHeaderLayout } from "@/components/floating-header";
@@ -75,6 +75,10 @@ export const WorkspaceCenterColumn = memo(function WorkspaceCenterColumn({
   desktopFocusModeEnabled,
   toggleFocusMode,
 }: WorkspaceCenterColumnProps) {
+  const handleOpenPreview = useCallback(() => {
+    newTabLauncher.launch({ kind: "browser" }, { kind: "open" });
+  }, [newTabLauncher]);
+
   if (isMobile) {
     return (
       <View style={styles.centerColumn}>
@@ -119,6 +123,7 @@ export const WorkspaceCenterColumn = memo(function WorkspaceCenterColumn({
             onCloseOtherTabs={handleCloseOtherTabs}
             onCreateNewTab={handleCreateNewTab}
             onReorderTabs={handleReorderTabsInFocusedPane}
+            onOpenPreview={handleOpenPreview}
             focusModeEnabled={desktopFocusModeEnabled}
             onExitFocusMode={toggleFocusMode}
           />

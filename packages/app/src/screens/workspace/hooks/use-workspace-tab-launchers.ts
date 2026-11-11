@@ -1,6 +1,5 @@
 import { useCallback } from "react";
 import type { TerminalProfile } from "@getpaseo/protocol/messages";
-import { getIsElectron } from "@/constants/platform";
 import { createWorkspaceBrowser } from "@/desktop/browser/store";
 import { useDesktopBrowserNewTabRequests } from "@/desktop/browser/new-tab-requests";
 import { generateDraftId } from "@/stores/draft-keys";
@@ -79,7 +78,7 @@ export function useWorkspaceTabLaunchers({
 
   const handleCreateBrowserTab = useCallback(
     (input?: { paneId?: string }) => {
-      if (!persistenceKey || !getIsElectron()) {
+      if (!persistenceKey) {
         return;
       }
       const { browserId } = createWorkspaceBrowser();
@@ -146,7 +145,7 @@ export function useWorkspaceTabLaunchers({
 
   const handleOpenUrlInBrowserTab = useCallback(
     (url: string) => {
-      if (!persistenceKey || !getIsElectron()) {
+      if (!persistenceKey) {
         return;
       }
       const { browserId } = createWorkspaceBrowser({ initialUrl: url });

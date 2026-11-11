@@ -51,7 +51,7 @@ export function BrowserPaneView({
   const browserRecord = useBrowserStore((state) => state.browsersById[browserId]);
   const updateBrowser = useBrowserStore((state) => state.updateBrowser);
 
-  const initialUrl = browserRecord?.url || "http://localhost:3000/medical-inquiry";
+  const initialUrl = browserRecord?.url || "http://localhost:3000";
 
   // Multi-tab management
   const [tabs, setTabs] = useState<TabState[]>([

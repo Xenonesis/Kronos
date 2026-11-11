@@ -852,6 +852,14 @@ function ModelRow({
             ) : null}
           </View>
           <View style={styles.browserRowTrailing}>
+            {row.provider === "ollama" || row.provider === "lmstudio" ? (
+              <View
+                style={styles.localBadge}
+                testID={`model-local-badge-${row.provider}-${row.modelId}`}
+              >
+                <Text style={styles.localBadgeText}>LOCAL</Text>
+              </View>
+            ) : null}
             {row.contextWindowMaxTokens ? (
               <View
                 style={styles.contextBadge}
@@ -1735,6 +1743,20 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.surface2,
     borderWidth: 1,
     borderColor: theme.colors.surface3,
+  },
+  localBadge: {
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: theme.borderRadius.sm,
+    backgroundColor: theme.colors.surface2,
+    borderWidth: 1,
+    borderColor: "#10b981",
+  },
+  localBadgeText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: "#10b981",
+    fontFamily: theme.fontFamily.mono,
   },
   contextBadgeText: {
     fontSize: 11,

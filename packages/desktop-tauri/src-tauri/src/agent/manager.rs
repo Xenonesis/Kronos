@@ -211,7 +211,10 @@ struct DeletionGuard {
 
 impl Drop for DeletionGuard {
     fn drop(&mut self) {
-        self.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.id);
+        self.pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.id);
     }
 }
 
@@ -274,10 +277,20 @@ impl AgentManager {
     }
 
     fn ensure_inactive(&self, id: &str) -> Result<(), String> {
-        if self.deleting.lock().unwrap_or_else(|e| e.into_inner()).contains(id) {
+        if self
+            .deleting
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(id)
+        {
             return Err(format!("Agent {id} is being deleted"));
         }
-        if self.active_turns.lock().unwrap_or_else(|e| e.into_inner()).contains_key(id) {
+        if self
+            .active_turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(id)
+        {
             Err(format!("Agent {id} has an active turn; wait for cancellation/completion before changing it"))
         } else {
             Ok(())
@@ -354,7 +367,10 @@ impl AgentManager {
     ) -> Result<StoredAgentRecord, String> {
         let repo_path = std::path::Path::new(repo_root);
         let branch_name = branch.unwrap_or(worktree_slug);
-        let target_path = repo_path.join(".kronos").join("worktrees").join(worktree_slug);
+        let target_path = repo_path
+            .join(".kronos")
+            .join("worktrees")
+            .join(worktree_slug);
 
         if let Some(parent) = target_path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -375,9 +391,16 @@ impl AgentManager {
             config,
         )?;
 
-        record.labels.insert("worktree_path".to_string(), target_path.to_string_lossy().to_string());
-        record.labels.insert("worktree_branch".to_string(), branch_name.to_string());
-        record.labels.insert("main_repo".to_string(), repo_root.to_string());
+        record.labels.insert(
+            "worktree_path".to_string(),
+            target_path.to_string_lossy().to_string(),
+        );
+        record
+            .labels
+            .insert("worktree_branch".to_string(), branch_name.to_string());
+        record
+            .labels
+            .insert("main_repo".to_string(), repo_root.to_string());
 
         let _ = self.storage.save_record(record.clone());
 
@@ -385,9 +408,17 @@ impl AgentManager {
     }
 
     pub async fn remove_agent_worktree(&self, agent_id: &str) -> Result<(), String> {
-        let record = self.get_agent(agent_id).ok_or_else(|| format!("Agent {agent_id} not found"))?;
-        let repo_root = record.labels.get("main_repo").ok_or("Agent not associated with a main repo")?;
-        let worktree_path = record.labels.get("worktree_path").ok_or("Agent not associated with a worktree path")?;
+        let record = self
+            .get_agent(agent_id)
+            .ok_or_else(|| format!("Agent {agent_id} not found"))?;
+        let repo_root = record
+            .labels
+            .get("main_repo")
+            .ok_or("Agent not associated with a main repo")?;
+        let worktree_path = record
+            .labels
+            .get("worktree_path")
+            .ok_or("Agent not associated with a worktree path")?;
 
         crate::kernel::git::GitEngine::worktree_remove(
             std::path::Path::new(repo_root),
@@ -401,7 +432,12 @@ impl AgentManager {
 
     pub fn get_agent(&self, id: &str) -> Option<StoredAgentRecord> {
         let mut record = self.storage.get_record(id)?;
-        if let Some(status) = self.active_statuses.read().unwrap_or_else(|e| e.into_inner()).get(id) {
+        if let Some(status) = self
+            .active_statuses
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+        {
             record.last_status = *status;
         }
         Some(record)
@@ -409,7 +445,10 @@ impl AgentManager {
 
     pub fn list_agents(&self) -> Vec<StoredAgentRecord> {
         let mut list = self.storage.list_records();
-        let statuses = self.active_statuses.read().unwrap_or_else(|e| e.into_inner());
+        let statuses = self
+            .active_statuses
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
         for rec in &mut list {
             if let Some(status) = statuses.get(&rec.id) {
                 rec.last_status = *status;
@@ -429,22 +468,27 @@ impl AgentManager {
         let token = uuid_v4_simple();
         let (cancel, cancellation) = tokio::sync::watch::channel(false);
         let (finished, _) = tokio::sync::watch::channel(false);
-        self.active_turns.lock().unwrap_or_else(|e| e.into_inner()).insert(
-            id.to_string(),
-            TurnControl {
-                token: token.clone(),
-                cancel,
-                finished,
-            },
-        );
-        let effective_prompt = if text.trim_start().starts_with("/council") || text.trim_start().starts_with("/swarm") {
+        self.active_turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                id.to_string(),
+                TurnControl {
+                    token: token.clone(),
+                    cancel,
+                    finished,
+                },
+            );
+        let effective_prompt = if text.trim_start().starts_with("/council")
+            || text.trim_start().starts_with("/swarm")
+        {
             let task = text
                 .trim_start()
                 .trim_start_matches("/council")
                 .trim_start_matches("/swarm")
                 .trim();
             format!(
-r#"[KRONOS COUNCIL SWARM PROTOCOL ACTIVATED]
+                r#"[KRONOS COUNCIL SWARM PROTOCOL ACTIVATED]
 Operate as an autonomous multi-perspective AI Council:
 
 Phase 1: [COUNCIL: ARCHITECT]
@@ -523,10 +567,18 @@ TASK:
             Ok::<(), String>(())
         })();
         if let Err(error) = setup {
-            if let Some(turn) = self.active_turns.lock().unwrap_or_else(|e| e.into_inner()).remove(id) {
+            if let Some(turn) = self
+                .active_turns
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(id)
+            {
                 turn.finished.send_replace(true);
             }
-            self.active_statuses.write().unwrap_or_else(|e| e.into_inner()).remove(id);
+            self.active_statuses
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(id);
             reservation.completed = true;
             return Err(error);
         }
@@ -669,7 +721,12 @@ TASK:
         let _guard = gate.lock().unwrap_or_else(|e| e.into_inner());
         self.get_agent(id)
             .ok_or_else(|| format!("Agent {id} not found"))?;
-        if let Some(turn) = self.active_turns.lock().unwrap_or_else(|e| e.into_inner()).get(id) {
+        if let Some(turn) = self
+            .active_turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+        {
             turn.cancel.send_replace(true);
         }
         Ok(())
@@ -679,7 +736,12 @@ TASK:
         let (waiting, _admission) = {
             let gate = self.lifecycle_gate(id);
             let _guard = gate.lock().unwrap_or_else(|e| e.into_inner());
-            if !self.deleting.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_owned()) {
+            if !self
+                .deleting
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(id.to_owned())
+            {
                 return Err(format!("Agent {id} is already being deleted"));
             }
             let admission = DeletionGuard {
@@ -713,7 +775,12 @@ TASK:
     pub fn delete_agent(&self, id: &str) -> Result<bool, String> {
         let gate = self.lifecycle_gate(id);
         let _guard = gate.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(turn) = self.active_turns.lock().unwrap_or_else(|e| e.into_inner()).get(id) {
+        if let Some(turn) = self
+            .active_turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+        {
             turn.cancel.send_replace(true);
             return Err(
                 "Cancellation requested; agent retained until provider cleanup completes".into(),
@@ -723,12 +790,15 @@ TASK:
             .storage
             .delete_record(id)
             .map_err(|e| format!("Failed to delete agent: {e}"))?;
-        self.active_statuses.write().unwrap_or_else(|e| e.into_inner()).remove(id);
+        self.active_statuses
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
         Ok(deleted)
     }
 }
 
-fn uuid_v4_simple() -> String {
+pub(crate) fn uuid_v4_simple() -> String {
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default();

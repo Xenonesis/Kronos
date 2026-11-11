@@ -157,6 +157,7 @@ export interface WorkspaceDesktopTabsRowProps {
   onTogglePaneMaximized?: () => void;
   onSplitRight?: () => void;
   onSplitDown?: () => void;
+  onOpenPreview?: () => void;
   focusModeEnabled: boolean;
   onExitFocusMode: () => void;
 }
@@ -258,6 +259,7 @@ function ResolvedWorkspaceDesktopTabsRow({
   onTogglePaneMaximized,
   onSplitRight,
   onSplitDown,
+  onOpenPreview,
   focusModeEnabled,
   onExitFocusMode,
 }: ResolvedWorkspaceDesktopTabsRowProps) {
@@ -647,6 +649,7 @@ function ResolvedWorkspaceDesktopTabsRow({
         newTabShortcutKeys={newTabKeys}
         onSplitRight={onSplitRight}
         onSplitDown={onSplitDown}
+        onOpenPreview={onOpenPreview}
         onTogglePaneMaximized={onTogglePaneMaximized}
       />
     </View>

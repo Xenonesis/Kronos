@@ -36,9 +36,17 @@ export function useRewindAgentMutation(input: UseRewindAgentMutationInput): {
         throw new Error(t("common.errors.daemonClientUnavailable"));
       }
       await input.client.rewindAgent(input.agentId, input.messageId, mode);
-      if (mode === "both") {
+      if (mode === "both" || mode === "files") {
         try {
-          await restoreTurnCheckpoint(".", input.messageId);
+          const session = input.serverId
+            ? useSessionStore.getState().sessions[input.serverId]
+            : undefined;
+          const agent = session && input.agentId ? session.agents.get(input.agentId) : undefined;
+          const repoPath = agent?.cwd || ".";
+          const restored = await restoreTurnCheckpoint(repoPath, input.messageId);
+          if (restored) {
+            toast.show("Workspace files rolled back to turn checkpoint");
+          }
         } catch {
           // Checkpoint restore fallback
         }

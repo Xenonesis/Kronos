@@ -255,6 +255,36 @@ export const AGENT_PROVIDER_DEFINITIONS: AgentProviderDefinition[] = [
     defaultModeId: "full",
     modes: OMP_MODES,
   },
+  {
+    id: "ollama",
+    label: "Ollama",
+    description: "Local neural engine running on http://127.0.0.1:11434",
+    defaultModeId: "default",
+    modes: [
+      {
+        id: "default",
+        label: "Default",
+        description: "Standard local model inference",
+        icon: "Cpu",
+        colorTier: "safe",
+      },
+    ],
+  },
+  {
+    id: "lmstudio",
+    label: "LM Studio",
+    description: "Local LLM inference server running on http://127.0.0.1:1234",
+    defaultModeId: "default",
+    modes: [
+      {
+        id: "default",
+        label: "Default",
+        description: "Standard local model inference",
+        icon: "Cpu",
+        colorTier: "safe",
+      },
+    ],
+  },
 ];
 
 export const DEV_AGENT_PROVIDER_DEFINITIONS: AgentProviderDefinition[] = [
