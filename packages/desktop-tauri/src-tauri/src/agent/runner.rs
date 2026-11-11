@@ -100,6 +100,12 @@ impl Default for ProviderOutput {
 }
 
 impl ProviderOutput {
+    pub fn has_assistant_message(&self) -> bool {
+        self.rows
+            .iter()
+            .any(|row| row.kind == OutputKind::Assistant && !row.text.trim().is_empty())
+    }
+
     fn update(
         &mut self,
         key: String,
@@ -325,7 +331,11 @@ impl ProviderOutput {
                 .or_else(|| event["error"]["message"].as_str())
                 .or_else(|| event["error"]["data"]["message"].as_str());
             if let Some(message) = message {
-                self.error = Some(message.to_string());
+                let is_cancelled_prompt = message.contains("Cancelled a request for input")
+                    || message.contains("this run cannot answer");
+                if !is_cancelled_prompt {
+                    self.error = Some(message.to_string());
+                }
             }
         }
         if let Some(stats) = event.get("stats") {
@@ -709,13 +719,21 @@ async fn run_reserved_turn(mut turn: ReservedTurn, command: Option<Command>) {
     );
     let result = execute_provider_turn(&mut turn, command).await;
     let (mut error, cleanup_confirmed, output_usage) = match result {
-        Ok(ref output) => (
-            persist_output(&manager, &agent_id, output)
+        Ok(ref output) => {
+            let mut err = persist_output(&manager, &agent_id, output)
                 .err()
-                .or_else(|| output.error.clone()),
-            output.cleanup_confirmed,
-            output.usage.clone(),
-        ),
+                .or_else(|| output.error.clone());
+            if output.has_assistant_message() {
+                if let Some(ref e) = err {
+                    if e.contains("Cancelled a request for input")
+                        || e.contains("this run cannot answer")
+                    {
+                        err = None;
+                    }
+                }
+            }
+            (err, output.cleanup_confirmed, output.usage.clone())
+        }
         Err(error) => (Some(error), true, None),
     };
     if let Some(error) = &error {
@@ -1274,7 +1292,17 @@ async fn execute_provider_turn(
     }
     let stderr = finish_stderr(stderr_task).await;
     if let Some(status) = exited {
-        if !status.success() && output.error.is_none() && !turn.is_cancelled() {
+        if status.success() {
+            if output.has_assistant_message() {
+                if let Some(ref err) = output.error {
+                    if err.contains("Cancelled a request for input")
+                        || err.contains("this run cannot answer")
+                    {
+                        output.error = None;
+                    }
+                }
+            }
+        } else if output.error.is_none() && !turn.is_cancelled() {
             output.error = Some(format!(
                 "{provider} exited with {status}: {}",
                 String::from_utf8_lossy(&stderr).trim()

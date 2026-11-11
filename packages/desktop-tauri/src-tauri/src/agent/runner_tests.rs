@@ -227,6 +227,48 @@ fn successful_pi_omp_retries_do_not_report_a_recovered_error() {
 }
 
 #[test]
+fn opencode_cancelled_input_request_does_not_fail_successful_turn() {
+    let mut output = ProviderOutput::default();
+    // Simulate OpenCode emitting an error event for a cancelled interactive prompt (e.g. Web Search)
+    output.ingest(
+        "opencode",
+        &json!({
+            "type": "error",
+            "error": {
+                "message": "Cancelled a request for input this run cannot answer: Web Search"
+            }
+        }),
+    );
+    // Should NOT record the cancelled prompt as a fatal error
+    assert!(output.error.is_none());
+
+    // Model recovers and emits reasoning and assistant message
+    output.ingest(
+        "opencode",
+        &json!({
+            "type": "reasoning",
+            "part": {
+                "id": "thk_1",
+                "text": "The web search was cancelled. Let me fetch news directly."
+            }
+        }),
+    );
+    output.ingest(
+        "opencode",
+        &json!({
+            "type": "text",
+            "part": {
+                "id": "msg_1",
+                "text": "Here is the NVIDIA news summary."
+            }
+        }),
+    );
+
+    assert!(output.has_assistant_message());
+    assert!(output.error.is_none());
+}
+
+#[test]
 fn persisted_reasoning_answer_and_followup_have_distinct_canonical_rows() {
     let directory = tempfile::tempdir().unwrap();
     let manager = crate::agent::manager::AgentManager::new(directory.path());
