@@ -1067,6 +1067,16 @@ async fn execute_provider_turn(
         .unwrap_or(true);
 
     let mut context_prefix = String::new();
+    let persona_id = agent
+        .config
+        .as_ref()
+        .and_then(|config| config["modeId"].as_str().or_else(|| config["persona"].as_str()));
+    if let Some(pid) = persona_id {
+        if let Some(persona_prompt) = crate::agent::personas::get_persona_instructions(pid) {
+            context_prefix.push_str(persona_prompt);
+            context_prefix.push_str("\n\n");
+        }
+    }
     if let Some(rules) = crate::agent::rules::load_workspace_rules(&cwd) {
         context_prefix.push_str(&rules);
         context_prefix.push_str("\n\n");

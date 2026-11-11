@@ -9,6 +9,7 @@ import {
 } from "@/components/settings";
 import { isNative } from "@/constants/platform";
 import { useAppSettings, type ChatDisplay } from "@/hooks/use-settings";
+import { PermissionsMatrixCard } from "@/desktop/components/permissions-matrix-card";
 
 const CHAT_DISPLAYS: readonly ChatDisplay[] = ["full", "collapseToolCalls", "collapseTurns"];
 
@@ -90,6 +91,8 @@ export function ChatSection() {
           />
         </SettingsCard>
       </SettingsSection>
+
+      <PermissionsMatrixCard />
     </View>
   );
 }

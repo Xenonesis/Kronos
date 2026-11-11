@@ -8,4 +8,5 @@ pub mod sessions;
 pub mod rules;
 pub mod guardrails;
 pub mod self_healing;
+pub mod personas;
 

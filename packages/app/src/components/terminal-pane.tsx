@@ -256,7 +256,7 @@ const TerminalErrorDebugBar = memo(function TerminalErrorDebugBar({
       return;
     }
     const draftKey = `agent:${serverId}:${agentId}`;
-    const debugPrompt = `Fix this terminal error:\n\`\`\`\n${streamError}\n\`\`\``;
+    const debugPrompt = `### ⚡ Terminal Debug Request\nThe terminal execution failed with the following diagnostic output:\n\`\`\`\n${streamError}\n\`\`\`\nPlease analyze the root cause, identify affected files, and apply a fix.`;
     useDraftStore.getState().replaceDraftText({ draftKey, text: debugPrompt });
     toast.show("Error sent to agent composer", { variant: "success" });
   }, [streamError, serverId, focusedAgentId, toast]);

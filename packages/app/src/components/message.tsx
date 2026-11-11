@@ -14,6 +14,8 @@ import {
 } from "@/components/attachment-pill";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { AgentPlanWidget } from "@/components/agent-plan-widget";
+import { TurnUndoButton } from "@/agent-stream/turn-undo-button";
+import { restoreTurnCheckpoint } from "@/desktop/native-desktop-bridge";
 import { useSessionStore } from "@/stores/session-store";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { RewindMenu, type RewindMode } from "@/components/rewind/rewind-menu";
@@ -682,12 +684,26 @@ function AssistantTurnActions({
   serverId,
   agentId,
 }: AssistantTurnActionsProps) {
+  const handleUndo = useCallback(async () => {
+    if (!serverId || !agentId || !messageId) return;
+    const session = useSessionStore.getState().sessions[serverId];
+    const agent = session?.agents?.get(agentId);
+    const repoPath = agent?.cwd || ".";
+    await restoreTurnCheckpoint(repoPath, messageId);
+  }, [serverId, agentId, messageId]);
+
   if (!getContent && !canFork) return null;
   return (
     <View style={assistantTurnFooterStylesheet.actions}>
       {getContent ? (
         <TurnCopyButton
           getContent={getContent}
+          containerStyle={assistantTurnFooterStylesheet.copyButton}
+        />
+      ) : null}
+      {messageId ? (
+        <TurnUndoButton
+          onUndo={handleUndo}
           containerStyle={assistantTurnFooterStylesheet.copyButton}
         />
       ) : null}

@@ -410,4 +410,27 @@ impl GitEngine {
 
         Self::commit(repo, &formatted_msg).await
     }
+
+    /// Creates an isolated git worktree branch for background agent execution.
+    pub async fn create_agent_worktree(
+        repo: &Path,
+        branch_name: &str,
+        target_dir: &Path,
+    ) -> Result<String, String> {
+        let dir_str = target_dir.to_str().ok_or("Invalid worktree path")?;
+        Self::git_exec(repo, &["worktree", "add", "-b", branch_name, dir_str, "HEAD"]).await
+    }
+
+    /// Removes an isolated agent worktree and prunes tracking references.
+    pub async fn remove_agent_worktree(repo: &Path, target_dir: &Path) -> Result<String, String> {
+        let dir_str = target_dir.to_str().ok_or("Invalid worktree path")?;
+        let res = Self::git_exec(repo, &["worktree", "remove", "--force", dir_str]).await?;
+        let _ = Self::git_exec(repo, &["worktree", "prune"]).await;
+        Ok(res)
+    }
+
+    /// Merges an agent worktree branch into the active branch.
+    pub async fn merge_agent_branch(repo: &Path, branch_name: &str) -> Result<String, String> {
+        Self::git_exec(repo, &["merge", "--no-ff", "-m", &format!("merge: agent branch {branch_name}"), branch_name]).await
+    }
 }

@@ -107,6 +107,14 @@ export interface AppSettings {
   chatOutlineEnabled: boolean;
   blockDestructiveCommands: boolean;
   enableSelfHealing: boolean;
+  executionMode: "guarded" | "yolo";
+  autoApproveReadFiles: boolean;
+  autoApproveTerminalSafe: boolean;
+  autoApproveFileEdits: boolean;
+  autoApproveWebSearch: boolean;
+  autoApproveMcp: boolean;
+  audioNotificationsEnabled: boolean;
+  audioVolume: number;
   vimKeybindings: boolean;
   sendShortcut: SendShortcut;
   filePanelAssociations: Record<string, string>;
@@ -166,6 +174,14 @@ export const DEFAULT_CLIENT_SETTINGS: AppSettings = {
   chatOutlineEnabled: true,
   blockDestructiveCommands: true,
   enableSelfHealing: true,
+  executionMode: "guarded",
+  autoApproveReadFiles: true,
+  autoApproveTerminalSafe: true,
+  autoApproveFileEdits: false,
+  autoApproveWebSearch: true,
+  autoApproveMcp: false,
+  audioNotificationsEnabled: true,
+  audioVolume: 0.25,
   vimKeybindings: false,
   sendShortcut: "enter",
   filePanelAssociations: {},
@@ -273,6 +289,14 @@ const StoredAppSettingsSchema = z
     chatOutlineEnabled: z.boolean().catch(true),
     blockDestructiveCommands: z.boolean().catch(true),
     enableSelfHealing: z.boolean().catch(true),
+    executionMode: z.enum(["guarded", "yolo"]).catch("guarded"),
+    autoApproveReadFiles: z.boolean().catch(true),
+    autoApproveTerminalSafe: z.boolean().catch(true),
+    autoApproveFileEdits: z.boolean().catch(false),
+    autoApproveWebSearch: z.boolean().catch(true),
+    autoApproveMcp: z.boolean().catch(false),
+    audioNotificationsEnabled: z.boolean().catch(true),
+    audioVolume: z.number().catch(0.25),
     vimKeybindings: z.boolean().catch(false),
     sendShortcut: z.enum(["enter", "mod-enter"]).catch("enter"),
     filePanelAssociations: z.record(z.string(), z.string()).catch({}),
