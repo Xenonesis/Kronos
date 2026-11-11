@@ -168,6 +168,9 @@ const CLIENT_COMMAND_ICONS = {
   "archive-agent": "archive",
   "replace-agent-with-draft": "new-draft",
   "compact-session": "command",
+  "test-loop": "command",
+  "audit-codebase": "command",
+  "consensus-mode": "command",
 } as const satisfies Record<ClientSlashCommand["kind"], AutocompleteOption["icon"]>;
 
 interface CommandOptionContext {

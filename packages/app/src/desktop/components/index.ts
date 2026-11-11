@@ -12,3 +12,33 @@ export { DesktopNotificationsSection } from "./desktop-notifications-section";
 export { DesktopPermissionsSection } from "./desktop-permissions-section";
 export { LocalDaemonSection } from "./desktop-updates-section";
 export { IntegrationsSection } from "./integrations-section";
+export {
+  CodebaseBugHunterModal,
+  type CodebaseBugHunterModalProps,
+  type BugAuditItem,
+} from "@/components/codebase-bug-hunter-modal";
+export {
+  VisualElementInspector,
+  type VisualElementInspectorProps,
+  type InspectedElement,
+} from "@/components/visual-element-inspector";
+export {
+  TemplateScaffolderDialog,
+  type TemplateScaffolderDialogProps,
+  type ProjectTemplate,
+} from "@/new-workspace-launch/template-scaffolder-dialog";
+export {
+  DynamicTaskChecklistHud,
+  type DynamicTaskChecklistHudProps,
+  type TaskChecklistItem,
+} from "@/components/dynamic-task-checklist-hud";
+export {
+  VisualDependencyGraphModal,
+  type VisualDependencyGraphModalProps,
+  type DependencyNode,
+} from "@/components/visual-dependency-graph-modal";
+export {
+  PromptCachingAnalyticsHud,
+  type PromptCachingAnalyticsHudProps,
+  type PromptCachingMetrics,
+} from "@/components/prompt-caching-analytics-hud";

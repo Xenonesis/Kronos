@@ -60,6 +60,9 @@ describe("resolveClientSlashCommand", () => {
       ["exit", ["quit", "q"], "immediate"],
       ["clear", ["new"], "immediate"],
       ["compact", ["condense", "summarize"], "immediate"],
+      ["test-loop", ["testloop", "tl"], "immediate"],
+      ["audit", ["bug-hunt", "scan"], "immediate"],
+      ["consensus", ["debate", "multi-model"], "immediate"],
     ]);
   });
 

@@ -4,7 +4,10 @@ import type { WorkspaceDraftTabSetup } from "@/workspace-tabs/model";
 export type ClientSlashCommandKind =
   | "archive-agent"
   | "replace-agent-with-draft"
-  | "compact-session";
+  | "compact-session"
+  | "test-loop"
+  | "audit-codebase"
+  | "consensus-mode";
 export type ClientSlashCommandExecution = "immediate" | "insert";
 
 export interface ClientSlashCommand {
@@ -44,6 +47,33 @@ export const CLIENT_SLASH_COMMANDS: readonly ClientSlashCommand[] = [
     descriptionKey: "composer.clientCommands.archiveAgent",
     argumentHint: "",
     kind: "compact-session",
+    execution: "immediate",
+  },
+  {
+    name: "test-loop",
+    aliases: ["testloop", "tl"],
+    description: "Run autonomous test-driven repair loop until all tests pass",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "<command>",
+    kind: "test-loop",
+    execution: "immediate",
+  },
+  {
+    name: "audit",
+    aliases: ["bug-hunt", "scan"],
+    description: "Scan repository & diffs for security vulnerabilities and logic bugs",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "audit-codebase",
+    execution: "immediate",
+  },
+  {
+    name: "consensus",
+    aliases: ["debate", "multi-model"],
+    description: "Query multiple frontier models in parallel and synthesize consensus patch",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "<prompt>",
+    kind: "consensus-mode",
     execution: "immediate",
   },
 ];

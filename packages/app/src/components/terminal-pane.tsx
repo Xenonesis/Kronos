@@ -283,7 +283,10 @@ const TerminalErrorDebugBar = memo(function TerminalErrorDebugBar({
         onPress={handleDebugWithAi}
         testID="terminal-debug-with-ai"
       >
-        Debug with AI
+        <Sparkles size={12} color="#ffffff" />
+        <Text style={{ color: "#ffffff", fontWeight: "600", fontSize: 12, marginLeft: 4 }}>
+          Debug with Kronos
+        </Text>
       </Button>
     </View>
   );

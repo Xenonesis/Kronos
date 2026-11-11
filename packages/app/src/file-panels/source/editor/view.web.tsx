@@ -7,6 +7,7 @@ import { getCM, vim } from "@replit/codemirror-vim";
 import type { WorkspaceFileLocation } from "@/workspace/file-open";
 import type { FileEditorModel } from "./model";
 import { editorBaseExtensions, editorTheme, type EditorVisualTheme } from "./extensions.web";
+import { InlineCodeLensToolbar } from "./inline-codelens-toolbar";
 
 interface FileEditorViewProps {
   model: FileEditorModel;
@@ -46,6 +47,11 @@ export function FileEditorView({
   onReady,
 }: FileEditorViewProps) {
   const [find] = useState(() => new FileFindModel());
+  const [selectedText, setSelectedText] = useState("");
+  const [selectionCoords, setSelectionCoords] = useState<{ top: number; left: number } | null>(
+    null,
+  );
+  const [isCodeLensVisible, setIsCodeLensVisible] = useState(false);
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const snapshot = useSyncExternalStore(model.subscribe, model.getSnapshot, model.getSnapshot);
@@ -86,6 +92,28 @@ export function FileEditorView({
               const head = update.state.selection.main.head;
               const line = update.state.doc.lineAt(head);
               onCursorChangeRef.current({ line: line.number, column: head - line.from + 1 });
+
+              if (!update.state.selection.main.empty) {
+                const from = update.state.selection.main.from;
+                const to = update.state.selection.main.to;
+                const text = update.state.doc.sliceString(from, to);
+                if (text.trim().length >= 3) {
+                  setSelectedText(text);
+                  const coords = update.view.coordsAtPos(from);
+                  if (coords && hostRef.current) {
+                    const hostRect = hostRef.current.getBoundingClientRect();
+                    setSelectionCoords({
+                      top: coords.top - hostRect.top,
+                      left: coords.left - hostRect.left,
+                    });
+                  }
+                  setIsCodeLensVisible(true);
+                } else {
+                  setIsCodeLensVisible(false);
+                }
+              } else {
+                setIsCodeLensVisible(false);
+              }
             }
           }),
         ],
@@ -167,6 +195,13 @@ export function FileEditorView({
         style={HOST_STYLE}
       />
       <FileFind model={find} editor={viewRef} />
+      <InlineCodeLensToolbar
+        visible={isCodeLensVisible}
+        filename={filename}
+        selectedText={selectedText}
+        selectionCoords={selectionCoords}
+        onClose={() => setIsCodeLensVisible(false)}
+      />
     </div>
   );
 }

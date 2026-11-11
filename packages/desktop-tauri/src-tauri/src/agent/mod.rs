@@ -12,4 +12,5 @@ pub mod personas;
 pub mod memories;
 pub mod browser_tool;
 pub mod architect;
+pub mod bug_hunter;
 
