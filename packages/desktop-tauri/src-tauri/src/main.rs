@@ -181,12 +181,25 @@ pub fn apply_windows_window_decorations<R: tauri::Runtime>(win: &WebviewWindow<R
     apply_mica_effect(win);
 }
 
+#[cfg(target_os = "windows")]
+pub fn trim_process_memory() {
+    unsafe {
+        use windows_sys::Win32::System::ProcessStatus::EmptyWorkingSet;
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        let _ = EmptyWorkingSet(GetCurrentProcess());
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn trim_process_memory() {}
+
 pub fn toggle_window<R: tauri::Runtime>(win: &WebviewWindow<R>) {
     let is_minimized = win.is_minimized().unwrap_or(false);
     let is_visible = win.is_visible().unwrap_or(false);
     let is_focused = win.is_focused().unwrap_or(false);
     if is_visible && !is_minimized && is_focused {
         let _ = win.hide();
+        trim_process_memory();
     } else {
         let _ = win.unminimize();
         let _ = win.show();
@@ -1265,7 +1278,43 @@ fn fast_inspect_path(path: String) -> PathInspectResult {
 
 #[tauri::command]
 fn desktop_window_minimize(window: WebviewWindow) -> Result<(), String> {
-    window.minimize().map_err(|e| e.to_string())
+    let res = window.minimize().map_err(|e| e.to_string());
+    trim_process_memory();
+    res
+}
+
+#[tauri::command]
+fn trim_memory() -> Result<(), String> {
+    trim_process_memory();
+    Ok(())
+}
+
+#[tauri::command]
+fn ping_watchdog() -> Result<(), String> {
+    crate::kernel::watchdog::record_heartbeat();
+    Ok(())
+}
+
+#[tauri::command]
+fn set_window_progress(
+    window: WebviewWindow,
+    progress: Option<u64>,
+    state: Option<String>,
+) -> Result<(), String> {
+    use tauri::window::{ProgressBarState, ProgressBarStatus};
+    let status = match state.as_deref() {
+        Some("indeterminate") => Some(ProgressBarStatus::Indeterminate),
+        Some("error") => Some(ProgressBarStatus::Error),
+        Some("paused") => Some(ProgressBarStatus::Paused),
+        Some("none") => Some(ProgressBarStatus::None),
+        Some("normal") | _ => Some(ProgressBarStatus::Normal),
+    };
+    window
+        .set_progress_bar(ProgressBarState {
+            progress,
+            status,
+        })
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1277,9 +1326,51 @@ fn desktop_window_toggle_maximize(window: WebviewWindow) -> Result<(), String> {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalProviderDiscovery {
+    pub provider: String,
+    pub is_running: bool,
+    pub endpoint: String,
+    pub models: Vec<String>,
+}
+
+#[tauri::command]
+async fn discover_local_ai_providers() -> Vec<LocalProviderDiscovery> {
+    let mut results = Vec::new();
+
+    // 1. Check Ollama (127.0.0.1:11434)
+    let ollama = crate::agent::providers::ollama::OllamaClient::default_local();
+    if ollama.check_health().await {
+        let models = ollama.list_models().await.unwrap_or_default();
+        results.push(LocalProviderDiscovery {
+            provider: "ollama".to_string(),
+            is_running: true,
+            endpoint: "http://127.0.0.1:11434".to_string(),
+            models,
+        });
+    }
+
+    // 2. Check LM Studio (127.0.0.1:1234)
+    let lmstudio = crate::agent::providers::lmstudio::LmStudioClient::default_local();
+    if lmstudio.check_health().await {
+        let models = lmstudio.list_models().await.unwrap_or_default();
+        results.push(LocalProviderDiscovery {
+            provider: "lmstudio".to_string(),
+            is_running: true,
+            endpoint: "http://127.0.0.1:1234".to_string(),
+            models,
+        });
+    }
+
+    results
+}
+
 #[tauri::command]
 fn desktop_window_close(window: WebviewWindow) -> Result<(), String> {
-    window.hide().map_err(|e| e.to_string())
+    let res = window.hide().map_err(|e| e.to_string());
+    trim_process_memory();
+    res
 }
 
 #[tauri::command]
@@ -1409,10 +1500,10 @@ fn main() {
 
     #[cfg(target_os = "windows")]
     {
-        // Prevent DWM occlusion freezes and Intel GPU driver watchdog timeouts
+        // Prevent DWM occlusion freezes, Intel GPU driver watchdog timeouts, and memory/disk bloat
         std::env::set_var(
             "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-            "--disable-features=CalculateNativeWinOcclusion --disable-gpu-watchdog",
+            "--disable-features=CalculateNativeWinOcclusion --disable-gpu-watchdog --disk-cache-size=104857600 --renderer-process-limit=4",
         );
     }
 
@@ -1528,6 +1619,22 @@ try {{
               console.error('[TauriBridge] setFullscreen failed:', e);
             }}
           }},
+          setProgress: async function(progress, state) {{
+            try {{
+              if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+                await window.__TAURI_INTERNALS__.invoke('set_window_progress', {{ progress: progress, state: state }});
+              }}
+            }} catch (e) {{
+              console.error('[TauriBridge] setProgress failed:', e);
+            }}
+          }},
+          trimMemory: async function() {{
+            try {{
+              if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+                await window.__TAURI_INTERNALS__.invoke('trim_memory');
+              }}
+            }} catch (e) {{}}
+          }},
           onResized: function(callback) {{
             try {{
               if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.listen) {{
@@ -1562,6 +1669,16 @@ try {{
         console.error('[TauriBridge] validateDirectory failed:', e);
       }}
       return null;
+    }},
+    discoverLocalAiProviders: async function() {{
+      try {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          return await window.__TAURI_INTERNALS__.invoke('discover_local_ai_providers');
+        }}
+      }} catch (e) {{
+        console.error('[TauriBridge] discoverLocalAiProviders failed:', e);
+      }}
+      return [];
     }},
     events: {{
       on: function(event, callback) {{
@@ -1984,6 +2101,16 @@ try {{
       }} catch (_) {{}}
     }});
   }} catch (e) {{}}
+  // Active UI Watchdog Heartbeat
+  try {{
+    setInterval(() => {{
+      try {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          window.__TAURI_INTERNALS__.invoke('ping_watchdog').catch(() => {{}});
+        }}
+      }} catch (_) {{}}
+    }}, 4000);
+  }} catch (_) {{}}
 }} catch (e) {{}}
 }})();
 "#
@@ -2028,6 +2155,7 @@ try {{
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let _ = window.hide();
+                trim_process_memory();
                 api.prevent_close();
             }
         })
@@ -2097,9 +2225,14 @@ try {{
             desktop_window_close,
             desktop_window_is_maximized,
             desktop_window_is_fullscreen,
-            desktop_window_set_fullscreen
+            desktop_window_set_fullscreen,
+            trim_memory,
+            set_window_progress,
+            ping_watchdog,
+            discover_local_ai_providers
         ])
         .setup(move |app| {
+            crate::kernel::watchdog::start_watchdog(app.handle().clone());
             let _ = setup_tray(app.handle());
             setup_notification_listeners(app.handle());
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
@@ -2612,5 +2745,20 @@ mod tests {
             push_res.err()
         );
         assert!(push_res.unwrap() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_discover_local_ai_providers() {
+        let res = discover_local_ai_providers().await;
+        // Should complete cleanly and safely
+        for p in &res {
+            assert!(!p.provider.is_empty());
+            assert!(!p.endpoint.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_trim_process_memory() {
+        trim_process_memory();
     }
 }

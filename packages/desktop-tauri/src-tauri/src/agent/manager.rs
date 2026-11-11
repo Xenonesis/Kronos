@@ -342,6 +342,63 @@ impl AgentManager {
         Ok(record)
     }
 
+    pub async fn create_agent_in_worktree(
+        &self,
+        provider: &str,
+        repo_root: &str,
+        worktree_slug: &str,
+        branch: Option<&str>,
+        title: Option<String>,
+        workspace_id: Option<String>,
+        config: Option<Value>,
+    ) -> Result<StoredAgentRecord, String> {
+        let repo_path = std::path::Path::new(repo_root);
+        let branch_name = branch.unwrap_or(worktree_slug);
+        let target_path = repo_path.join(".kronos").join("worktrees").join(worktree_slug);
+
+        if let Some(parent) = target_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        // Add git worktree if target doesn't exist
+        if !target_path.exists() {
+            crate::kernel::git::GitEngine::worktree_add(repo_path, &target_path, branch_name, true)
+                .await
+                .map_err(|e| format!("Failed to create git worktree: {e}"))?;
+        }
+
+        let mut record = self.create_agent(
+            provider,
+            &target_path.to_string_lossy(),
+            title,
+            workspace_id,
+            config,
+        )?;
+
+        record.labels.insert("worktree_path".to_string(), target_path.to_string_lossy().to_string());
+        record.labels.insert("worktree_branch".to_string(), branch_name.to_string());
+        record.labels.insert("main_repo".to_string(), repo_root.to_string());
+
+        let _ = self.storage.save_record(record.clone());
+
+        Ok(record)
+    }
+
+    pub async fn remove_agent_worktree(&self, agent_id: &str) -> Result<(), String> {
+        let record = self.get_agent(agent_id).ok_or_else(|| format!("Agent {agent_id} not found"))?;
+        let repo_root = record.labels.get("main_repo").ok_or("Agent not associated with a main repo")?;
+        let worktree_path = record.labels.get("worktree_path").ok_or("Agent not associated with a worktree path")?;
+
+        crate::kernel::git::GitEngine::worktree_remove(
+            std::path::Path::new(repo_root),
+            std::path::Path::new(worktree_path),
+        )
+        .await
+        .map_err(|e| format!("Failed to remove git worktree: {e}"))?;
+
+        Ok(())
+    }
+
     pub fn get_agent(&self, id: &str) -> Option<StoredAgentRecord> {
         let mut record = self.storage.get_record(id)?;
         if let Some(status) = self.active_statuses.read().unwrap_or_else(|e| e.into_inner()).get(id) {
@@ -863,5 +920,45 @@ mod tests {
 
         assert!(manager.delete_agent(&created.id).unwrap());
         assert_eq!(manager.list_agents().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_agent_manager_worktree_metadata() {
+        let dir = tempdir().unwrap();
+        let manager = AgentManager::new(dir.path());
+
+        let repo_dir = dir.path().join("mock_repo");
+        let _ = std::fs::create_dir_all(&repo_dir);
+
+        let mut rec = manager
+            .create_agent(
+                "mock",
+                &repo_dir.to_string_lossy(),
+                Some("Worktree Task Agent".to_string()),
+                Some("wks-wt-1".to_string()),
+                None,
+            )
+            .unwrap();
+        rec.labels.insert(
+            "worktree_path".to_string(),
+            repo_dir
+                .join(".kronos/worktrees/feat")
+                .to_string_lossy()
+                .to_string(),
+        );
+        rec.labels
+            .insert("worktree_branch".to_string(), "feat".to_string());
+        rec.labels.insert(
+            "main_repo".to_string(),
+            repo_dir.to_string_lossy().to_string(),
+        );
+        manager.storage.save_record(rec.clone()).unwrap();
+
+        let retrieved = manager.get_agent(&rec.id).unwrap();
+        assert_eq!(retrieved.labels.get("worktree_branch").unwrap(), "feat");
+        assert_eq!(
+            retrieved.labels.get("main_repo").unwrap(),
+            &repo_dir.to_string_lossy().to_string()
+        );
     }
 }

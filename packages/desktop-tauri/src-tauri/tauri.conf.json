@@ -34,7 +34,7 @@
         "installMode": "both",
         "languages": ["English"],
         "installerHooks": "hooks/nsis-hooks.nsh",
-        "compression": "zlib",
+        "compression": "lzma",
         "installerIcon": "icons/icon.ico",
         "uninstallerIcon": "icons/icon.ico"
       }

@@ -25,6 +25,7 @@ pub mod terminal;
 pub mod services;
 pub mod schedules;
 pub mod relay_crypto;
+pub mod watchdog;
 
 #[cfg(test)]
 mod protocol_test;

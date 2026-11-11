@@ -88,6 +88,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(window) = app.get_webview_window("main") {
                     if window.is_visible().unwrap_or(false) {
                         let _ = window.hide();
+                        crate::trim_process_memory();
                     } else {
                         let _ = window.show();
                         let _ = window.unminimize();
@@ -137,6 +138,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(window) = app.get_webview_window("main") {
                     if window.is_visible().unwrap_or(false) {
                         let _ = window.hide();
+                        crate::trim_process_memory();
                     } else {
                         let _ = window.show();
                         let _ = window.unminimize();
