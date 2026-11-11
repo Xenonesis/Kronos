@@ -90,7 +90,7 @@ function ToolbarAction({
     <Tooltip>
       <TooltipTrigger>
         <Button
-          size="xs"
+          size="sm"
           variant={variant ?? "ghost"}
           style={styles.iconBtn}
           disabled={disabled}
@@ -123,7 +123,7 @@ function BrowserNavigationControls({
   return (
     <View style={styles.navControls}>
       <Button
-        size="xs"
+        size="sm"
         variant="ghost"
         style={styles.iconBtn}
         disabled={!canGoBack || !onGoBack}
@@ -137,7 +137,7 @@ function BrowserNavigationControls({
       </Button>
 
       <Button
-        size="xs"
+        size="sm"
         variant="ghost"
         style={styles.iconBtn}
         disabled={!canGoForward || !onGoForward}
@@ -151,7 +151,7 @@ function BrowserNavigationControls({
       </Button>
 
       <Button
-        size="xs"
+        size="sm"
         variant="ghost"
         style={styles.iconBtn}
         disabled={!onReload}
@@ -222,7 +222,7 @@ function BrowserActionTools({
         <Tooltip>
           <TooltipTrigger>
             <Button
-              size="xs"
+              size="sm"
               variant="outline"
               style={styles.importBtn}
               onPress={onOpenImport}

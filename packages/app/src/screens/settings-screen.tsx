@@ -1,11 +1,9 @@
-import { useCallback, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import { useCallback, useMemo } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
-import { Buffer } from "buffer";
 import { useAppSettings } from "@/hooks/use-settings";
 import { useHosts } from "@/runtime/host-runtime";
 import { resolveActiveHostServerId } from "@/types/host-connection";
@@ -15,17 +13,8 @@ import { PageLayout } from "@/components/page-layout";
 import { isElectronRuntime } from "@/desktop/host";
 import { formatVersionWithPrefix } from "@/desktop/updates/desktop-updates";
 import { resolveAppVersion } from "@/utils/app-version";
-import { THINKING_TONE_NATIVE_PCM_BASE64 } from "@/utils/thinking-tone.native-pcm";
-import { useVoiceAudioEngineOptional } from "@/contexts/voice-context";
 import type { AppLanguage } from "@/i18n/locales";
-import { PluginSettingsContent } from "@/plugins/settings";
 import { useInstalledPlugins } from "@/plugins/registry";
-import { LanguageSection } from "@/screens/settings/general/language-section";
-import { OpenLocationSection } from "@/screens/settings/open-location/open-location-section";
-import { SendingSection } from "@/screens/settings/general/sending-section";
-import { DiagnosticsSection } from "@/screens/settings/diagnostics-section";
-import { AboutSection } from "@/screens/settings/about-section";
-import ProjectSettingsScreen from "@/screens/project-settings-screen";
 import { SETTINGS_DESKTOP_DETAIL_MIN_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
 import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
 import {
@@ -38,13 +27,13 @@ import { selectSettingsHost, useSettingsHostSelection } from "@/navigation/setti
 import { returnFromSettings, type SettingsView } from "@/navigation/settings-navigation";
 import {
   HOST_SECTION_ITEMS,
-  isSectionAvailable,
   SIDEBAR_SECTION_ITEMS,
   SettingsSidebar,
   useSortedHosts,
 } from "@/screens/settings/settings-sidebar";
-import { renderHostSettingsContent } from "@/screens/settings/host-settings-dispatcher";
 import { useAddHost } from "@/hosts/add-host";
+import { useAudioPlaybackTest } from "@/screens/settings/use-audio-playback-test";
+import { SettingsContentDispatcher } from "@/screens/settings/settings-content-dispatcher";
 
 export interface SettingsScreenProps {
   view: SettingsView;
@@ -53,10 +42,9 @@ export interface SettingsScreenProps {
 export default function SettingsScreen({ view }: SettingsScreenProps) {
   const router = useRouter();
   const { t } = useTranslation();
-  const voiceAudioEngine = useVoiceAudioEngineOptional();
   const { settings, isLoading: settingsLoading, updateSettings } = useAppSettings();
-  const [isPlaybackTestRunning, setIsPlaybackTestRunning] = useState(false);
-  const [playbackTestResult, setPlaybackTestResult] = useState<string | null>(null);
+  const { canTestPlayback, isPlaybackTestRunning, playbackTestResult, handlePlaybackTest } =
+    useAudioPlaybackTest(t);
   const isDesktopApp = isElectronRuntime();
   const appVersion = resolveAppVersion();
   const appVersionText = formatVersionWithPrefix(appVersion);
@@ -87,35 +75,6 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
     },
     [updateSettings],
   );
-
-  const handlePlaybackTest = useCallback(async () => {
-    if (!voiceAudioEngine || isPlaybackTestRunning) {
-      return;
-    }
-
-    setIsPlaybackTestRunning(true);
-    setPlaybackTestResult(null);
-
-    try {
-      const bytes = Buffer.from(THINKING_TONE_NATIVE_PCM_BASE64, "base64");
-      await voiceAudioEngine.initialize();
-      voiceAudioEngine.stop();
-      await voiceAudioEngine.play({
-        type: "audio/pcm;rate=16000;bits=16",
-        size: bytes.byteLength,
-        async arrayBuffer() {
-          return Uint8Array.from(bytes).buffer;
-        },
-      });
-      setPlaybackTestResult(null);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("[Settings] Playback test failed", error);
-      setPlaybackTestResult(t("settings.diagnostics.playbackFailed", { message }));
-    } finally {
-      setIsPlaybackTestRunning(false);
-    }
-  }, [isPlaybackTestRunning, t, voiceAudioEngine]);
 
   const handleHostAdded = useCallback(
     (serverId: string) => {
@@ -187,7 +146,6 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
     [activeHostServerId, handleAddHost, isCompactLayout, router],
   );
 
-
   const handleHostRemoved = useCallback(() => {
     const fallback = buildSettingsSectionRoute("general");
     if (isCompactLayout) {
@@ -228,68 +186,23 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
     return undefined;
   })();
 
-  const content: ReactNode = (() => {
-    if (view.kind === "plugin")
-      return (
-        <PluginSettingsContent
-          serverId={view.serverId}
-          pluginId={view.pluginId}
-          screenId={view.screenId}
-          onBackToPlugins={handleBackFromDetail}
-          showBackToPlugins={!isCompactLayout}
-        />
-      );
-    if (view.kind === "host") {
-      return renderHostSettingsContent(view, handleHostRemoved);
-    }
-    if (view.kind === "project") {
-      return (
-        <ProjectSettingsScreen
-          serverId={view.serverId}
-          projectId={view.projectId}
-          onBackToProjects={handleBackFromDetail}
-          showBackToProjects={!isCompactLayout}
-        />
-      );
-    }
-    if (view.kind === "section") {
-      const item = SIDEBAR_SECTION_ITEMS.find((candidate) => candidate.id === view.section);
-      if (!item || !isSectionAvailable(item, isDesktopApp)) return null;
-      switch (view.section) {
-        case "general":
-          return (
-            <>
-              <LanguageSection
-                language={settings.language}
-                onLanguageChange={handleLanguageChange}
-              />
-              <SendingSection />
-              {isDesktopApp ? <OpenLocationSection /> : null}
-            </>
-          );
-        case "diagnostics":
-          return (
-            <DiagnosticsSection
-              canTestPlayback={Boolean(voiceAudioEngine)}
-              isPlaybackTestRunning={isPlaybackTestRunning}
-              playbackTestResult={playbackTestResult}
-              onPlaybackTest={handlePlaybackTest}
-            />
-          );
-        case "about":
-          return (
-            <AboutSection
-              appVersion={appVersion}
-              appVersionText={appVersionText}
-              isDesktopApp={isDesktopApp}
-            />
-          );
-        default:
-          return item.Content ? <item.Content /> : null;
-      }
-    }
-    return null;
-  })();
+  const content = (
+    <SettingsContentDispatcher
+      view={view}
+      isCompactLayout={isCompactLayout}
+      isDesktopApp={isDesktopApp}
+      handleBackFromDetail={handleBackFromDetail}
+      handleHostRemoved={handleHostRemoved}
+      language={settings.language}
+      onLanguageChange={handleLanguageChange}
+      canTestPlayback={canTestPlayback}
+      isPlaybackTestRunning={isPlaybackTestRunning}
+      playbackTestResult={playbackTestResult}
+      onPlaybackTest={handlePlaybackTest}
+      appVersion={appVersion}
+      appVersionText={appVersionText}
+    />
+  );
 
   if (settingsLoading) {
     return (

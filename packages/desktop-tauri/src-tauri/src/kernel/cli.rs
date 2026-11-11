@@ -255,22 +255,27 @@ pub fn execute_cached_search_in(
     let mut files = Vec::new();
     collect_search_files(&canon_root, 0, 10, &mut files, 1000);
 
-    let mut doc_payloads: Vec<(String, String)> = Vec::new();
-    let mut file_mtimes = std::collections::HashMap::new();
-
-    for path in files {
-        if let Ok(meta) = std::fs::metadata(&path) {
+    use rayon::prelude::*;
+    let read_results: Vec<(std::path::PathBuf, std::time::SystemTime, String)> = files
+        .par_iter()
+        .filter_map(|path| {
+            let meta = std::fs::metadata(path).ok()?;
             if meta.len() > 1_048_576 {
-                continue;
+                return None;
             }
-            if let Ok(mtime) = meta.modified() {
-                file_mtimes.insert(path.clone(), mtime);
-            }
-        }
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            let path_str = path.to_string_lossy().to_string();
-            doc_payloads.push((path_str, content));
-        }
+            let mtime = meta.modified().ok()?;
+            let content = std::fs::read_to_string(path).ok()?;
+            Some((path.clone(), mtime, content))
+        })
+        .collect();
+
+    let mut doc_payloads: Vec<(String, String)> = Vec::with_capacity(read_results.len());
+    let mut file_mtimes = std::collections::HashMap::with_capacity(read_results.len());
+
+    for (path, mtime, content) in read_results {
+        let path_str = path.to_string_lossy().to_string();
+        file_mtimes.insert(path, mtime);
+        doc_payloads.push((path_str, content));
     }
 
     let doc_refs: Vec<(&str, &str)> = doc_payloads

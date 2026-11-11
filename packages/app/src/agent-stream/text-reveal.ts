@@ -16,9 +16,9 @@
  * which keeps the policy testable without a renderer.
  */
 
-// Backlog is drained over this horizon. Shorter feels more like the raw arrival
-// pattern; longer adds lag the user can notice at the end of a turn.
-export const TEXT_REVEAL_HORIZON_MS = 150;
+// Backlog is drained over this horizon. Calibrated for a smooth, natural
+// ChatGPT-style typewriter cadence without stalling behind fast models.
+export const TEXT_REVEAL_HORIZON_MS = 250;
 
 /** Reveal at most once per 60Hz frame, even on high-refresh displays. */
 export const TEXT_REVEAL_FRAME_INTERVAL_MS = 1000 / 60;
@@ -128,13 +128,19 @@ export interface TextRevealState {
 }
 
 /**
- * First sight of a text is revealed whole. Only growth is paced, which is what
- * makes history hydration, timeline replay, a virtualized row remounting on
+ * First sight of a text is revealed whole by default. Only growth is paced, which
+ * is what makes history hydration, timeline replay, a virtualized row remounting on
  * scroll, and an already-finished message all render complete on first paint
  * without a special case for each.
+ *
+ * For an actively streaming turn, `initialRevealed = 0` can be passed to give
+ * the new message a smooth, word-by-word ChatGPT-style typewriter opening.
  */
-export function beginTextReveal(text: string): TextRevealState {
-  return { target: text, revealed: text.length };
+export function beginTextReveal(text: string, initialRevealed?: number): TextRevealState {
+  return {
+    target: text,
+    revealed: initialRevealed !== undefined ? Math.min(initialRevealed, text.length) : text.length,
+  };
 }
 
 /** Point the reveal at newly arrived text without changing how much is shown. */

@@ -7,7 +7,11 @@ use super::auth::{matches_local_credential, verify_daemon_password, write_local_
 /// Never send this daemon's credential to a saved remote host.
 pub fn is_managed_target(listen: &str) -> bool {
     #[cfg(windows)]
-    if listen == r"pipe://\\.\pipe\kronos-ipc" {
+    if listen == r"pipe://\\.\pipe\kronos-ipc" || listen == r"\\.\pipe\kronos-ipc" {
+        return true;
+    }
+    #[cfg(not(windows))]
+    if listen == "unix:///tmp/kronos-ipc.sock" || listen == "/tmp/kronos-ipc.sock" {
         return true;
     }
     let normalized;
@@ -20,9 +24,10 @@ pub fn is_managed_target(listen: &str) -> bool {
     let Ok(url) = url::Url::parse(candidate) else {
         return false;
     };
+    let active_port = crate::daemon::get_active_daemon_port();
     matches!(url.scheme(), "tcp" | "ws" | "http")
         && matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
-        && url.port_or_known_default() == Some(6767)
+        && (url.port_or_known_default() == Some(6767) || url.port_or_known_default() == Some(active_port))
         && url.username().is_empty()
         && url.password().is_none()
         && matches!(url.path(), "" | "/" | "/ws")

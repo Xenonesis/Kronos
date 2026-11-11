@@ -711,7 +711,11 @@ export class TerminalEmulatorRuntime {
     let imageAddon: ImageAddon | null = null;
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(new Unicode11Addon());
-    terminal.loadAddon(new UnicodeGraphemesAddon());
+    try {
+      terminal.loadAddon(new UnicodeGraphemesAddon());
+    } catch (e) {
+      console.warn("[Terminal] Failed to load UnicodeGraphemesAddon:", e);
+    }
     applyCharacterWidths(terminal, this.characterWidths);
     terminal.loadAddon(new WebLinksAddon(openExternalLink));
     const localFileLinkProvider = terminal.registerLinkProvider(

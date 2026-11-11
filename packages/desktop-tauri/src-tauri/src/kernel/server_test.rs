@@ -825,9 +825,7 @@ mod tests {
             .await
             .unwrap();
 
-        let unwatch_reply = ws_stream.next().await.unwrap().unwrap();
-        let parsed_unwatch: serde_json::Value =
-            serde_json::from_str(unwatch_reply.to_text().unwrap()).unwrap();
+        let parsed_unwatch = wait_for_rpc_response(&mut ws_stream, "ws-unwatch-1").await;
         assert_eq!(parsed_unwatch["id"], "ws-unwatch-1");
         assert_eq!(parsed_unwatch["success"], true);
 
@@ -1304,6 +1302,44 @@ mod tests {
         assert_eq!(features["kernelIoRing"], true);
         assert_eq!(features["kernelShm"], true);
         assert_eq!(features["kernelSpeech"], true);
+        assert_eq!(features["providerUsageList"], true);
+        assert_eq!(features["usageSources"], true);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_usage_reporting() {
+        use crate::kernel::server::dispatch_session_message;
+
+        // 1. provider.usage.list.request
+        let prov_usage_req = serde_json::json!({
+            "type": "provider.usage.list.request",
+            "requestId": "req-prov-usage-1"
+        });
+        let prov_resp = dispatch_session_message(&prov_usage_req).await;
+        assert_eq!(prov_resp["type"], "provider.usage.list.response");
+        assert_eq!(prov_resp["payload"]["requestId"], "req-prov-usage-1");
+        assert!(prov_resp["payload"]["providers"].is_array());
+
+        // 2. usage.list_reports.request (global, empty)
+        let list_usage_req = serde_json::json!({
+            "type": "usage.list_reports.request",
+            "requestId": "req-usage-reports-1"
+        });
+        let list_resp = dispatch_session_message(&list_usage_req).await;
+        assert_eq!(list_resp["type"], "usage.list_reports.response");
+        assert_eq!(list_resp["payload"]["requestId"], "req-usage-reports-1");
+        assert_eq!(list_resp["payload"]["error"], serde_json::Value::Null);
+
+        // 3. usage.list_reports.request with specific reportIds
+        let specific_req = serde_json::json!({
+            "type": "usage.list_reports.request",
+            "requestId": "req-usage-reports-2",
+            "reportIds": ["claude"]
+        });
+        let specific_resp = dispatch_session_message(&specific_req).await;
+        assert_eq!(specific_resp["type"], "usage.list_reports.response");
+        assert_eq!(specific_resp["payload"]["requestId"], "req-usage-reports-2");
+        assert_eq!(specific_resp["payload"]["error"], serde_json::Value::Null);
     }
 
     #[tokio::test]
@@ -1927,17 +1963,17 @@ mod tests {
         );
 
         // Wait for pushed update frame
-        let pushed_frame = tokio::time::timeout(std::time::Duration::from_secs(15), push_rx.recv())
-            .await
-            .expect("timeout waiting for providers_snapshot_update")
-            .expect("recv error");
-        let parsed_update: serde_json::Value =
-            serde_json::from_str(&pushed_frame).expect("valid json update");
-        assert_eq!(parsed_update["type"], "session");
-        assert_eq!(
-            parsed_update["message"]["type"],
-            "providers_snapshot_update"
-        );
+        let parsed_update = loop {
+            let pushed_frame = tokio::time::timeout(std::time::Duration::from_secs(15), push_rx.recv())
+                .await
+                .expect("timeout waiting for providers_snapshot_update")
+                .expect("recv error");
+            let parsed: serde_json::Value =
+                serde_json::from_str(&pushed_frame).expect("valid json update");
+            if parsed["type"] == "session" && parsed["message"]["type"] == "providers_snapshot_update" {
+                break parsed;
+            }
+        };
         let pushed_entries = parsed_update["message"]["payload"]["entries"]
             .as_array()
             .expect("entries array");
@@ -2154,6 +2190,24 @@ vendor/bare-only
         assert!(
             crate::kernel::server::opencode_models_from_cli_output("vendor/bare-only\n").is_empty()
         );
+    }
+
+    #[test]
+    fn test_opencode_plain_catalog_parses_model_lines() {
+        let text = r#"
+omniroute/kc/openai/gpt-5.5
+opencode/deepseek-v4.1-flash-free
+# comment
+USAGE: opencode models
+"#;
+        let models = crate::kernel::server::opencode_models_from_plain_cli_output(text);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0]["id"], "omniroute/kc/openai/gpt-5.5");
+        assert_eq!(models[0]["label"], "gpt-5.5");
+        assert_eq!(models[0]["provider"], "opencode");
+        assert_eq!(models[1]["id"], "opencode/deepseek-v4.1-flash-free");
+        assert_eq!(models[1]["label"], "deepseek-v4.1-flash-free");
+        assert_eq!(models[1]["provider"], "opencode");
     }
 
     #[test]

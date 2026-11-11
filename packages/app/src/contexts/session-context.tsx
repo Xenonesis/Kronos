@@ -465,6 +465,23 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
     viewedTimelineSyncRef.current?.setConnected(isConnected);
   }, [isConnected]);
 
+  // Synchronize server metadata immediately on mount and on connection state change
+  useEffect(() => {
+    const syncServerInfo = () => {
+      const serverInfo = client.getLastServerInfoMessage();
+      if (serverInfo) {
+        updateSessionServerInfo(serverId, toDaemonServerInfo(serverInfo));
+      }
+    };
+    syncServerInfo();
+    const unsub = client.subscribeConnectionStatus((state) => {
+      if (state.status === "connected") {
+        syncServerInfo();
+      }
+    });
+    return unsub;
+  }, [client, serverId, updateSessionServerInfo]);
+
   // Daemon message handlers - directly update Zustand store
   useEffect(() => {
     const feeds = client.observeEvents(

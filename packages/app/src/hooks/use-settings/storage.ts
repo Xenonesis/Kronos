@@ -1,4 +1,4 @@
-import { isSyntaxThemeId, type SyntaxThemeId } from "@getpaseo/highlight";
+import { isSyntaxThemeId, type SyntaxThemeId } from "@getpaseo/highlight/themes";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 import type { QueryClient } from "@tanstack/react-query";
 import type { DesktopSettings } from "@/desktop/settings/desktop-settings";

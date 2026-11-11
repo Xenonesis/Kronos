@@ -319,7 +319,7 @@ function ShellDetailSection({ command, output, exitCode, cwd, ds }: ShellDetailP
           </View>
           <View style={styles.shellToolbarActions}>
             <Button
-              size="xs"
+              size="sm"
               variant="ghost"
               accessibilityLabel="Copy command"
               leftIcon={copyCmdIcon}
@@ -330,7 +330,7 @@ function ShellDetailSection({ command, output, exitCode, cwd, ds }: ShellDetailP
 
             {hasOutput ? (
               <Button
-                size="xs"
+                size="sm"
                 variant="ghost"
                 accessibilityLabel="Copy output"
                 leftIcon={copyOutIcon}
@@ -341,7 +341,7 @@ function ShellDetailSection({ command, output, exitCode, cwd, ds }: ShellDetailP
             ) : null}
 
             <Button
-              size="xs"
+              size="sm"
               variant="ghost"
               accessibilityLabel={isExpanded ? "Collapse output" : "Expand output"}
               leftIcon={expandIcon}

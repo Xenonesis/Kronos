@@ -8,17 +8,23 @@ import { onQuickToggle } from "@/desktop/native-desktop-bridge";
 
 export function useCommandPalette() {
   const [isOpen, setIsOpen] = useState(false);
+  const [initialMode, setInitialMode] = useState<"commands" | "files">("commands");
   const router = useRouter();
   const hosts = useHosts();
   const sessions = useSessionStore((state) => state.sessions);
 
-  // Global keyboard listener for Ctrl+K / Cmd+K
+  // Global keyboard listener for Ctrl+K (Commands) and Ctrl+P (File Quick-Open)
   useEffect(() => {
     if (Platform.OS !== "web") return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
+        setInitialMode("commands");
+        setIsOpen((prev) => !prev);
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        setInitialMode("files");
         setIsOpen((prev) => !prev);
       }
     };
@@ -27,12 +33,13 @@ export function useCommandPalette() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Global hotkey quick-toggle listener (e.g. summoned via Ctrl+Shift+K / Ctrl+Shift+P)
+  // Global hotkey quick-toggle listener (e.g. summoned via Alt+Space / Ctrl+Shift+K)
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let mounted = true;
     void (async () => {
       const cleanup = await onQuickToggle(() => {
+        setInitialMode("commands");
         setIsOpen(true);
       });
       if (!mounted) {
@@ -47,9 +54,15 @@ export function useCommandPalette() {
     };
   }, []);
 
-  const open = useCallback(() => setIsOpen(true), []);
+  const open = useCallback((mode: "commands" | "files" = "commands") => {
+    setInitialMode(mode);
+    setIsOpen(true);
+  }, []);
   const close = useCallback(() => setIsOpen(false), []);
-  const toggle = useCallback(() => setIsOpen((prev) => !prev), []);
+  const toggle = useCallback((mode: "commands" | "files" = "commands") => {
+    setInitialMode(mode);
+    setIsOpen((prev) => !prev);
+  }, []);
 
   // Built-in actions and active agent items
   const items = useMemo<PaletteItem[]>(() => {
@@ -133,6 +146,7 @@ export function useCommandPalette() {
 
   return {
     isOpen,
+    initialMode,
     open,
     close,
     toggle,

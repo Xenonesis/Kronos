@@ -11,7 +11,7 @@
     "withGlobalTauri": true,
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* http://localhost:* ws: wss: https:; img-src 'self' asset: http://asset.localhost data: blob: https: http:; font-src 'self' data:; media-src 'self' blob: data:; worker-src 'self' blob:; frame-src 'self' blob: data: http: https:; object-src 'none'; base-uri 'self'; form-action 'none'",
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* http://localhost:* ws: wss: https:; img-src 'self' asset: http://asset.localhost data: blob: https: http:; font-src 'self' data:; media-src 'self' blob: data:; worker-src 'self' blob:; frame-src 'self' blob: data: http: https:; object-src 'none'; base-uri 'self'; form-action 'none'",
       "dangerousDisableAssetCspModification": ["style-src"]
     }
   },
@@ -34,7 +34,9 @@
         "installMode": "both",
         "languages": ["English"],
         "installerHooks": "hooks/nsis-hooks.nsh",
-        "compression": "zlib"
+        "compression": "zlib",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
       }
     }
   },

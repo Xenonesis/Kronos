@@ -310,7 +310,7 @@ export function BrowserMarkupOverlay({
           </ToolbarButton>
 
           <Button
-            size="xs"
+            size="sm"
             variant={currentTool === "crop" ? "default" : "ghost"}
             style={styles.toolBtn}
             onPress={handleSelectCrop}
@@ -345,7 +345,7 @@ export function BrowserMarkupOverlay({
         />
 
         <View style={styles.actionGroup}>
-          <Button size="xs" variant="default" style={styles.sendBtn} onPress={handleSend}>
+          <Button size="sm" variant="default" style={styles.sendBtn} onPress={handleSend}>
             <Send size={14} color="#fff" />
             <Text style={styles.sendBtnText}>Send to Agent</Text>
           </Button>

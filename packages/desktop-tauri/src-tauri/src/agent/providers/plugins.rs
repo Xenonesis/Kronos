@@ -67,6 +67,7 @@ impl NativePluginManager {
         entry.input_tokens += input;
         entry.output_tokens += output;
         entry.total_cost_usd += cost;
+        entry.last_updated = crate::agent::types::now_iso();
     }
 
     pub fn get_metrics(&self) -> Vec<UsageMetric> {

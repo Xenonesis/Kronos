@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { detectTerminalLocalLinks } from "./terminal-local-link-parsing";
+import { detectDevServerUrls, detectTerminalLocalLinks } from "./terminal-local-link-parsing";
+
+describe("detectDevServerUrls", () => {
+  it("detects localhost ports from Vite, Next.js, and Metro dev servers", () => {
+    const viteOut = "  ➜  Local:   http://localhost:5173/";
+    const detected = detectDevServerUrls(viteOut);
+    expect(detected).toEqual([{ url: "http://localhost:5173/", port: 5173 }]);
+
+    const nextOut = "- Local:        http://127.0.0.1:3000/app";
+    const detectedNext = detectDevServerUrls(nextOut);
+    expect(detectedNext).toEqual([{ url: "http://localhost:3000/app", port: 3000 }]);
+
+    const barePort = "Ready on localhost:8080";
+    const detectedBare = detectDevServerUrls(barePort);
+    expect(detectedBare).toEqual([{ url: "http://localhost:8080", port: 8080 }]);
+  });
+});
 
 describe("detectTerminalLocalLinks", () => {
   it("detects VS Code-style filename and line suffixes", () => {

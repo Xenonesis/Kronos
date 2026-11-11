@@ -1,4 +1,4 @@
-import type { ComponentProps } from "react";
+import { useMemo, type ComponentProps } from "react";
 import { CompactWorkspaceHeader } from "@/screens/workspace/compact-workspace-header";
 import { MobileWorkspaceTabSwitcher } from "@/screens/workspace/compact-workspace-header/tab-switcher";
 import {
@@ -94,17 +94,8 @@ export function WorkspaceCompactHeader({
   onCopyBranchName,
   onOpenSetupTab,
 }: WorkspaceCompactHeaderProps) {
-  return (
-    <CompactWorkspaceHeader
-      isLoading={isLoading}
-      title={title}
-      subtitle={subtitle}
-      isSubtitleDistinct={isSubtitleDistinct}
-      serverId={normalizedServerId}
-      onToggleExplorer={onToggleExplorer}
-      explorerToggleLabel={explorerToggleLabel}
-      explorerToggleAccessibilityState={explorerToggleAccessibilityState}
-    >
+  const switcher = useMemo(
+    () => (
       <MobileWorkspaceTabSwitcher
         tabs={tabs}
         activeTabKey={activeTabKey}
@@ -125,6 +116,43 @@ export function WorkspaceCompactHeader({
         onCloseTabsBelow={onCloseTabsBelow}
         onCloseOtherTabs={onCloseOtherTabs}
       />
+    ),
+    [
+      tabs,
+      activeTabKey,
+      normalizedServerId,
+      normalizedWorkspaceId,
+      onSelectSwitcherTab,
+      createTerminalDisabled,
+      onCreateDraftTab,
+      onCreateTerminal,
+      onCopyResumeCommand,
+      onCopyAgentId,
+      onCopyTerminalId,
+      onCopyFilePath,
+      onReloadAgent,
+      onRenameTab,
+      onCloseTab,
+      onCloseTabsAbove,
+      onCloseTabsBelow,
+      onCloseOtherTabs,
+    ],
+  );
+
+  return (
+    <CompactWorkspaceHeader
+      isLoading={isLoading}
+      title={title}
+      subtitle={subtitle}
+      isSubtitleDistinct={isSubtitleDistinct}
+      serverId={normalizedServerId}
+      onToggleExplorer={onToggleExplorer}
+      explorerToggleLabel={explorerToggleLabel}
+      explorerToggleAccessibilityState={explorerToggleAccessibilityState}
+      tabSwitcher={switcher}
+      headerVariant="compact"
+      actionsActive={false}
+    >
       <WorkspaceHeaderMenuMobile
         normalizedServerId={normalizedServerId}
         normalizedWorkspaceId={normalizedWorkspaceId}

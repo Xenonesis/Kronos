@@ -5,32 +5,30 @@ import { WorkspaceActions } from "@/git/workspace-actions";
 import { PluginHeaderButtons } from "@/plugins";
 import { WorkspaceOpenInEditorButton } from "@/workspace/open-in-editor/button";
 import { WorkspaceScriptsButton } from "@/screens/workspace/scripts/workspace-scripts-button";
+import { useWorkspaceScriptActions } from "@/screens/workspace/scripts/use-workspace-script-actions";
+import { useHostRuntimeClient } from "@/runtime/host-runtime";
 import {
   EXPLORER_TOGGLE_KEYS,
   WorkspaceHeaderExplorerToggle,
 } from "@/screens/workspace/workspace-explorer-toggle";
 
-type ScriptsButtonProps = ComponentProps<typeof WorkspaceScriptsButton>;
 type ExplorerToggleProps = ComponentProps<typeof WorkspaceHeaderExplorerToggle>;
 type EditorButtonProps = ComponentProps<typeof WorkspaceOpenInEditorButton>;
 
 export interface WorkspaceHeaderActionsProps
   extends
-    Pick<
-      ScriptsButtonProps,
-      | "serverId"
-      | "workspaceId"
-      | "liveTerminalIds"
-      | "onScriptTerminalStarted"
-      | "onViewTerminal"
-      | "onOpenUrlInBrowserTab"
-    >,
     Pick<EditorButtonProps, "projectId" | "activeFile">,
     Pick<
       ExplorerToggleProps,
       "owner" | "onPress" | "label" | "tooltipLabel" | "accessibilityState"
     > {
-  scripts: ScriptsButtonProps["scripts"] | null;
+  serverId: string;
+  workspaceId: string;
+  scripts: ComponentProps<typeof WorkspaceScriptsButton>["scripts"] | null;
+  liveTerminalIds?: readonly string[];
+  onScriptTerminalStarted?: (terminalId: string) => void;
+  onViewTerminal?: (terminalId: string) => void;
+  onOpenUrlInBrowserTab?: (url: string) => void;
   workspaceDirectory: string | null;
 }
 
@@ -51,16 +49,23 @@ export function WorkspaceHeaderActions({
   tooltipLabel,
   accessibilityState,
 }: WorkspaceHeaderActionsProps) {
+  const client = useHostRuntimeClient(serverId);
+  const scriptActions = useWorkspaceScriptActions({
+    client,
+    serverId,
+    workspaceId,
+    scripts: scripts ?? [],
+    onScriptTerminalStarted,
+  });
+
   return (
     <View style={styles.headerRight}>
       <PluginHeaderButtons serverId={serverId} workspaceId={workspaceId} />
       {scripts && scripts.length > 0 ? (
         <WorkspaceScriptsButton
-          serverId={serverId}
-          workspaceId={workspaceId}
+          actions={scriptActions}
           scripts={scripts}
           liveTerminalIds={liveTerminalIds}
-          onScriptTerminalStarted={onScriptTerminalStarted}
           onViewTerminal={onViewTerminal}
           onOpenUrlInBrowserTab={onOpenUrlInBrowserTab}
           hideLabels

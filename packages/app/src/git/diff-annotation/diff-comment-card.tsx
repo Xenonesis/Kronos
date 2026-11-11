@@ -247,7 +247,7 @@ export function DiffCommentCard({
         <View style={styles.actionButtons}>
           <Button
             variant="ghost"
-            size="xs"
+            size="sm"
             onPress={handleCancel}
             disabled={isSubmitting}
             testID={`${testID}-cancel-btn`}
@@ -256,7 +256,7 @@ export function DiffCommentCard({
           </Button>
           <Button
             variant="default"
-            size="xs"
+            size="sm"
             onPress={handleSubmit}
             disabled={!canSubmit}
             loading={isSubmitting}

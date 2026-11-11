@@ -134,7 +134,7 @@ function SessionCard({
         <View style={styles.actionsRow}>
           <Button
             variant="outline"
-            size="xs"
+            size="sm"
             loading={isInspecting}
             onPress={handleInspect}
             testID={`inspect-session-${item.id}`}
@@ -144,7 +144,7 @@ function SessionCard({
           {onResume ? (
             <Button
               variant="default"
-              size="xs"
+              size="sm"
               onPress={handleResume}
               testID={`resume-session-${item.id}`}
             >
@@ -338,7 +338,7 @@ export function OmpSessionsView({
 
           <Button
             variant="ghost"
-            size="xs"
+            size="sm"
             leftIcon={renderRefreshIcon}
             onPress={handleRefresh}
             accessibilityLabel="Refresh sessions"

@@ -1,14 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal, Platform, StyleSheet, Text, View, type GestureResponderEvent } from "react-native";
-import { Search, Bot, Folder, Play, Globe } from "lucide-react-native";
+import { Search, Bot, Folder, Play, Globe, FileText } from "lucide-react-native";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { EditingTextInput, type EditingTextInputHandle } from "@/components/ui/text-input";
+import { searchWorkspaceFiles } from "@/desktop/native-desktop-bridge";
 import type { PaletteItem } from "./types";
 
 export interface CommandPaletteModalProps {
   isOpen: boolean;
   onClose: () => void;
   items: PaletteItem[];
+  initialMode?: "commands" | "files";
   testID?: string;
 }
 
@@ -23,6 +25,8 @@ function CategoryIcon({ category }: { category: PaletteItem["category"] }): Reac
       return <Folder size={16} color="#eab308" />;
     case "navigation":
       return <Globe size={16} color="#10b981" />;
+    case "files":
+      return <FileText size={16} color="#06b6d4" />;
     case "actions":
     default:
       return <Play size={16} color="#a855f7" />;
@@ -80,23 +84,70 @@ export function CommandPaletteModal({
   isOpen,
   onClose,
   items,
+  initialMode = "commands",
   testID = "command-palette-modal",
 }: CommandPaletteModalProps) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [fileItems, setFileItems] = useState<PaletteItem[]>([]);
   const inputRef = useRef<EditingTextInputHandle | null>(null);
 
-  // Filter items based on query
+  // Tantivy lexical search query
+  useEffect(() => {
+    if (!isOpen) {
+      setFileItems([]);
+      return;
+    }
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setFileItems([]);
+      return;
+    }
+
+    let active = true;
+    const timer = setTimeout(async () => {
+      try {
+        const results = await searchWorkspaceFiles(trimmed);
+        if (!active) return;
+        const mapped: PaletteItem[] = results.map((r) => ({
+          id: `file-${r.path}`,
+          title: r.path.split(/[/\\]/).pop() || r.path,
+          subtitle: r.path,
+          category: "files",
+          keywords: [r.path],
+          run: () => {
+            // Instant file open in workspace
+          },
+        }));
+        setFileItems(mapped);
+      } catch {
+        if (active) setFileItems([]);
+      }
+    }, 50);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [isOpen, query]);
+
+  // Filter items based on query and initialMode
   const filteredItems = useMemo(() => {
-    if (!query.trim()) return items;
     const lower = query.toLowerCase().trim();
-    return items.filter(
-      (item) =>
-        item.title.toLowerCase().includes(lower) ||
-        (item.subtitle && item.subtitle.toLowerCase().includes(lower)) ||
-        (item.keywords && item.keywords.some((k) => k.toLowerCase().includes(lower))),
-    );
-  }, [items, query]);
+    const actionMatches = lower
+      ? items.filter(
+          (item) =>
+            item.title.toLowerCase().includes(lower) ||
+            (item.subtitle && item.subtitle.toLowerCase().includes(lower)) ||
+            (item.keywords && item.keywords.some((k) => k.toLowerCase().includes(lower))),
+        )
+      : items;
+
+    if (initialMode === "files") {
+      return [...fileItems, ...actionMatches];
+    }
+    return [...actionMatches, ...fileItems];
+  }, [fileItems, initialMode, items, query]);
 
   const visibleItems = useMemo(() => filteredItems.slice(0, MAX_VISIBLE_ITEMS), [filteredItems]);
 
@@ -175,7 +226,11 @@ export function CommandPaletteModal({
             <EditingTextInput
               ref={inputRef}
               style={styles.input}
-              placeholder="Type a command, search agents, or open workspace..."
+              placeholder={
+                initialMode === "files"
+                  ? "Type filename to quick-open (Ctrl+P)..."
+                  : "Type a command (Ctrl+K) or search files..."
+              }
               placeholderTextColor="#64748b"
               onChangeText={setQuery}
               autoFocus

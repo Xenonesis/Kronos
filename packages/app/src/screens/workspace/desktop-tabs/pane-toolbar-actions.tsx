@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Columns2, Rows2, Ellipsis, Maximize, Minimize, Plus, X } from "lucide-react-native";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { ToolbarButton, ToolbarControls } from "@/components/ui/pane-content-toolbar";
-import { buttonControlHeight } from "@/components/ui/control-geometry";
+import { TOOLBAR_CONTROL_HEIGHT } from "@/components/ui/control-geometry";
 import { Shortcut } from "@/components/ui/shortcut";
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
 import type { ShortcutKey } from "@/utils/format-shortcut";
@@ -247,8 +247,8 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: theme.spacing[1],
   },
   inlineNewTabButton: {
-    width: buttonControlHeight.xs,
-    height: buttonControlHeight.xs,
+    width: TOOLBAR_CONTROL_HEIGHT,
+    height: TOOLBAR_CONTROL_HEIGHT,
   },
   paneSplitActions: {
     paddingHorizontal: PANE_SPLIT_ACTIONS_HORIZONTAL_PADDING,

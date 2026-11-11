@@ -197,6 +197,47 @@ function ensureWebToolCallShimmerKeyframes() {
   webToolCallShimmerRegistered = true;
 }
 
+const WEB_STREAMING_CURSOR_KEYFRAME_ID = "paseo-streaming-cursor-keyframes";
+const WEB_STREAMING_CURSOR_ANIMATION_NAME = "paseo-streaming-cursor-pulse";
+const WEB_STREAMING_CURSOR_KEYFRAME_CSS = `
+  @keyframes ${WEB_STREAMING_CURSOR_ANIMATION_NAME} {
+    0%, 100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.2;
+      transform: scale(0.8);
+    }
+  }
+`;
+let webStreamingCursorRegistered = false;
+
+function ensureWebStreamingCursorKeyframes() {
+  if (isNative) {
+    return;
+  }
+  if (typeof document === "undefined") {
+    return;
+  }
+  const existing = document.getElementById(WEB_STREAMING_CURSOR_KEYFRAME_ID);
+  if (existing) {
+    if (existing.textContent !== WEB_STREAMING_CURSOR_KEYFRAME_CSS) {
+      existing.textContent = WEB_STREAMING_CURSOR_KEYFRAME_CSS;
+    }
+    webStreamingCursorRegistered = true;
+    return;
+  }
+  if (webStreamingCursorRegistered) {
+    return;
+  }
+  const styleElement = document.createElement("style");
+  styleElement.id = WEB_STREAMING_CURSOR_KEYFRAME_ID;
+  styleElement.textContent = WEB_STREAMING_CURSOR_KEYFRAME_CSS;
+  document.head.appendChild(styleElement);
+  webStreamingCursorRegistered = true;
+}
+
 function getWheelEventElementTarget(event: WheelEvent, fallback: HTMLElement): HTMLElement {
   const { target } = event;
   if (target instanceof HTMLElement) {
@@ -606,6 +647,48 @@ const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
 
 const TIMESTAMP_REVEAL_MS = 3000;
 
+interface AssistantTurnActionsProps {
+  getContent?: AssistantTurnFooterProps["getContent"];
+  canFork: boolean;
+  onFork: (target: AssistantForkTarget) => void;
+  messageId?: string;
+  occurrenceKey?: string;
+  serverId?: string;
+  agentId?: string;
+}
+
+function AssistantTurnActions({
+  getContent,
+  canFork,
+  onFork,
+  messageId,
+  occurrenceKey,
+  serverId,
+  agentId,
+}: AssistantTurnActionsProps) {
+  if (!getContent && !canFork) return null;
+  return (
+    <View style={assistantTurnFooterStylesheet.actions}>
+      {getContent ? (
+        <TurnCopyButton
+          getContent={getContent}
+          containerStyle={assistantTurnFooterStylesheet.copyButton}
+        />
+      ) : null}
+      {canFork ? <AssistantForkMenu onFork={onFork} /> : null}
+      {getContent && (messageId || occurrenceKey) ? (
+        <AssistantMessageActionsMenu
+          messageId={messageId ?? occurrenceKey ?? ""}
+          occurrenceKey={occurrenceKey}
+          getContent={getContent}
+          serverId={serverId}
+          agentId={agentId}
+        />
+      ) : null}
+    </View>
+  );
+}
+
 /**
  * Footer rendered next to the copy button at the end of an assistant turn.
  * Shows the turn duration and swaps to the end timestamp when both are known.
@@ -672,26 +755,15 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
 
   return (
     <View style={assistantTurnFooterStylesheet.container}>
-      {getContent || canFork ? (
-        <View style={assistantTurnFooterStylesheet.actions}>
-          {getContent ? (
-            <TurnCopyButton
-              getContent={getContent}
-              containerStyle={assistantTurnFooterStylesheet.copyButton}
-            />
-          ) : null}
-          {canFork ? <AssistantForkMenu onFork={handleFork} /> : null}
-          {getContent && (messageId || occurrenceKey) ? (
-            <AssistantMessageActionsMenu
-              messageId={messageId ?? occurrenceKey ?? ""}
-              occurrenceKey={occurrenceKey}
-              getContent={getContent}
-              serverId={serverId}
-              agentId={agentId}
-            />
-          ) : null}
-        </View>
-      ) : null}
+      <AssistantTurnActions
+        getContent={getContent}
+        canFork={canFork}
+        onFork={handleFork}
+        messageId={messageId}
+        occurrenceKey={occurrenceKey}
+        serverId={serverId}
+        agentId={agentId}
+      />
       {primaryLabel ? (
         <Pressable
           style={assistantTurnFooterStylesheet.labelButton}
@@ -732,6 +804,19 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
   );
 });
 
+function parseStartedAtMs(startedAt: unknown): number {
+  if (startedAt instanceof Date) {
+    return startedAt.getTime();
+  }
+  if (typeof startedAt === "number") {
+    return startedAt;
+  }
+  if (typeof startedAt === "string") {
+    return Date.parse(startedAt) || Date.now();
+  }
+  return Date.now();
+}
+
 interface LiveElapsedProps {
   startedAt: Date;
   active?: boolean;
@@ -749,14 +834,7 @@ export const LiveElapsed = memo(function LiveElapsed({
   style,
   testID,
 }: LiveElapsedProps) {
-  const startedAtMs =
-    startedAt instanceof Date
-      ? startedAt.getTime()
-      : typeof startedAt === "number"
-        ? startedAt
-        : typeof startedAt === "string"
-          ? Date.parse(startedAt) || Date.now()
-          : Date.now();
+  const startedAtMs = parseStartedAtMs(startedAt);
   const [elapsedMs, setElapsedMs] = useState(() => Math.max(0, Date.now() - startedAtMs));
   const visibleElapsedMs = active ? Math.max(0, Date.now() - startedAtMs) : elapsedMs;
 
@@ -840,6 +918,20 @@ export const assistantMessageStylesheet = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
     fontStyle: "italic",
     color: theme.colors.foregroundMuted,
+  },
+  streamingCursor: {
+    width: 9,
+    height: 9,
+    borderRadius: 4.5,
+    backgroundColor: theme.colors.foreground,
+    marginLeft: 2,
+    marginTop: 6,
+    alignSelf: "flex-start",
+    ...(isWeb
+      ? {
+          animation: `${WEB_STREAMING_CURSOR_ANIMATION_NAME} 0.85s ease-in-out infinite`,
+        }
+      : {}),
   },
   imageFrame: {
     width: "100%",
@@ -1294,6 +1386,13 @@ export const AssistantMessage = memo(function AssistantMessage({
   const measureMessage = useStableEvent((event: import("react-native").LayoutChangeEvent) => {
     setAssistantMessageHeight({ markdown: revealedMessage, ...event.nativeEvent.layout });
   });
+
+  useEffect(() => {
+    ensureWebStreamingCursorKeyframes();
+  }, []);
+
+  const isStreaming = phase !== "complete" || revealedMessage.length < renderedMessage.text.length;
+
   return (
     <View
       testID="assistant-message"
@@ -1319,12 +1418,20 @@ export const AssistantMessage = memo(function AssistantMessage({
         <MarkdownRenderer
           text={revealedMessage}
           agentCommands
-          streaming={phase !== "complete" || revealedMessage.length < renderedMessage.text.length}
+          streaming={isStreaming}
           client={client}
           workspaceRoot={workspaceRoot}
           serverId={serverId}
         />
       )}
+      {isStreaming ? (
+        <View
+          style={assistantMessageStylesheet.streamingCursor}
+          testID="assistant-streaming-cursor"
+          accessibilityRole="progressbar"
+          accessibilityLabel="Typing response"
+        />
+      ) : null}
       {fullMessageByteLength !== null ? (
         <Text
           testID="assistant-message-capped-notice"

@@ -110,7 +110,7 @@ use attachments::{
     copy_attachment_file, delete_attachment_file, garbage_collect_attachment_files,
     read_file_base64, write_attachment_base64, write_attachment_bytes,
 };
-use native_diff::compute_file_diff;
+use native_diff::{apply_diff_hunk, compute_file_diff};
 use native_pty::{
     kill_native_terminal, resize_native_terminal, spawn_native_terminal, write_native_terminal,
 };
@@ -435,6 +435,16 @@ async fn workspace_search(
 }
 
 #[tauri::command]
+async fn create_turn_checkpoint(repo_path: String, turn_id: String) -> Result<String, String> {
+    crate::kernel::git::GitEngine::create_checkpoint(std::path::Path::new(&repo_path), &turn_id).await
+}
+
+#[tauri::command]
+async fn restore_turn_checkpoint(repo_path: String, turn_id: String) -> Result<(), String> {
+    crate::kernel::git::GitEngine::restore_checkpoint(std::path::Path::new(&repo_path), &turn_id).await
+}
+
+#[tauri::command]
 async fn watch_directory(path: String, ignore: Option<Vec<String>>) -> Result<String, String> {
     let engine = crate::kernel::server::get_watcher_engine();
     let ignore_patterns = ignore.unwrap_or_default();
@@ -721,11 +731,12 @@ fn get_daemon_status_json() -> String {
         }
     }
 
+    let port = daemon::get_active_daemon_port();
     let is_healthy = wait_for_daemon_health(1);
-    let listen = "127.0.0.1:6767".to_string();
-    let hostname = "localhost".to_string();
+    let listen = format!("127.0.0.1:{}", port);
+    let hostname = "Local (This Device)".to_string();
     let detected_pid = if is_healthy {
-        daemon::find_pid_listening_on_port(6767)
+        daemon::find_pid_listening_on_port(port)
     } else {
         None
     };
@@ -776,8 +787,9 @@ async fn browser_daemon_request(
 ) -> Result<serde_json::Value, String> {
     let credential = kernel::auth::read_local_credential(&get_data_dir())
         .ok_or("The listening daemon has no readable local credential")?;
+    let port = daemon::get_active_daemon_port();
     let response = DAEMON_BROWSER_CLIENT
-        .post(format!("http://127.0.0.1:6767{path}"))
+        .post(format!("http://127.0.0.1:{port}{path}"))
         .bearer_auth(credential)
         .json(&body)
         .send()
@@ -803,7 +815,8 @@ async fn browser_proxy_url(url: String) -> Result<String, String> {
         .as_str()
         .filter(|path| path.starts_with("/api/browser-proxy?"))
         .ok_or("The daemon returned an invalid browser navigation capability")?;
-    Ok(format!("http://127.0.0.1:6767{path}"))
+    let port = daemon::get_active_daemon_port();
+    Ok(format!("http://127.0.0.1:{port}{path}"))
 }
 
 #[tauri::command]
@@ -813,6 +826,184 @@ async fn browser_proxy_cookies(host: String, cookies: String) -> Result<(), Stri
         serde_json::json!({"host":host,"cookies":cookies}),
     )
     .await?;
+    Ok(())
+}
+
+struct LocalTransportSession {
+    sender: tokio::sync::mpsc::UnboundedSender<tokio_tungstenite::tungstenite::Message>,
+}
+
+static LOCAL_TRANSPORT_SESSIONS: std::sync::LazyLock<
+    tokio::sync::Mutex<std::collections::HashMap<String, LocalTransportSession>>,
+> = std::sync::LazyLock::new(|| tokio::sync::Mutex::new(std::collections::HashMap::new()));
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenTransportInput {
+    session_id: String,
+    #[allow(dead_code)]
+    target: serde_json::Value,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SendTransportInput {
+    session_id: String,
+    text: Option<String>,
+    binary_base64: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CloseTransportInput {
+    session_id: String,
+}
+
+#[tauri::command]
+async fn open_local_daemon_transport(
+    app: tauri::AppHandle,
+    input: OpenTransportInput,
+) -> Result<(), String> {
+    use futures_util::{SinkExt, StreamExt};
+    use tauri::Emitter;
+
+    let session_id = input.session_id;
+    let port = daemon::get_active_daemon_port();
+    let ws_url = format!("ws://127.0.0.1:{}/ws", port);
+
+    let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url)
+        .await
+        .map_err(|e| format!("Failed to connect to local daemon WebSocket: {}", e))?;
+
+    let (mut ws_write, mut ws_read) = ws_stream.split();
+    let (out_tx, mut out_rx) =
+        tokio::sync::mpsc::unbounded_channel::<tokio_tungstenite::tungstenite::Message>();
+
+    {
+        let mut sessions = LOCAL_TRANSPORT_SESSIONS.lock().await;
+        sessions.insert(session_id.clone(), LocalTransportSession { sender: out_tx });
+    }
+
+    let _ = app.emit(
+        "local-daemon-transport-event",
+        serde_json::json!({
+            "sessionId": session_id,
+            "kind": "open"
+        }),
+    );
+
+    let sid_out = session_id.clone();
+    let sid_in = session_id.clone();
+    let app_handle = app.clone();
+
+    // Outgoing pump
+    tokio::spawn(async move {
+        while let Some(msg) = out_rx.recv().await {
+            if ws_write.send(msg).await.is_err() {
+                break;
+            }
+        }
+        let _ = ws_write.close().await;
+        let mut sessions = LOCAL_TRANSPORT_SESSIONS.lock().await;
+        sessions.remove(&sid_out);
+    });
+
+    // Incoming pump
+    tokio::spawn(async move {
+        while let Some(msg_res) = ws_read.next().await {
+            match msg_res {
+                Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
+                    let _ = app_handle.emit(
+                        "local-daemon-transport-event",
+                        serde_json::json!({
+                            "sessionId": sid_in,
+                            "kind": "message",
+                            "text": text
+                        }),
+                    );
+                }
+                Ok(tokio_tungstenite::tungstenite::Message::Binary(bin)) => {
+                    use base64::Engine;
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bin);
+                    let _ = app_handle.emit(
+                        "local-daemon-transport-event",
+                        serde_json::json!({
+                            "sessionId": sid_in,
+                            "kind": "message",
+                            "binaryBase64": b64
+                        }),
+                    );
+                }
+                Ok(tokio_tungstenite::tungstenite::Message::Close(frame)) => {
+                    let code = frame.as_ref().map(|f| u16::from(f.code));
+                    let reason = frame.as_ref().map(|f| f.reason.to_string());
+                    let _ = app_handle.emit(
+                        "local-daemon-transport-event",
+                        serde_json::json!({
+                            "sessionId": sid_in,
+                            "kind": "close",
+                            "code": code,
+                            "reason": reason
+                        }),
+                    );
+                    break;
+                }
+                Err(e) => {
+                    let _ = app_handle.emit(
+                        "local-daemon-transport-event",
+                        serde_json::json!({
+                            "sessionId": sid_in,
+                            "kind": "error",
+                            "error": e.to_string()
+                        }),
+                    );
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        let mut sessions = LOCAL_TRANSPORT_SESSIONS.lock().await;
+        sessions.remove(&sid_in);
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn send_local_daemon_transport_message(
+    input: SendTransportInput,
+) -> Result<(), String> {
+    let sessions = LOCAL_TRANSPORT_SESSIONS.lock().await;
+    if let Some(session) = sessions.get(&input.session_id) {
+        if let Some(text) = input.text {
+            let _ = session
+                .sender
+                .send(tokio_tungstenite::tungstenite::Message::Text(text.into()));
+        } else if let Some(b64) = input.binary_base64 {
+            use base64::Engine;
+            if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
+                let _ = session
+                    .sender
+                    .send(tokio_tungstenite::tungstenite::Message::Binary(bytes.into()));
+            }
+        }
+        Ok(())
+    } else {
+        Err(format!("Transport session {} not found", input.session_id))
+    }
+}
+
+#[tauri::command]
+async fn close_local_daemon_transport(
+    input: CloseTransportInput,
+) -> Result<(), String> {
+    let mut sessions = LOCAL_TRANSPORT_SESSIONS.lock().await;
+    if let Some(session) = sessions.remove(&input.session_id) {
+        let _ = session
+            .sender
+            .send(tokio_tungstenite::tungstenite::Message::Close(None));
+    }
     Ok(())
 }
 
@@ -940,7 +1131,7 @@ fn fast_validate_directory(path: String) -> DirectoryValidationResult {
 }
 #[tauri::command]
 fn start_desktop_daemon(state: tauri::State<DaemonState>) -> serde_json::Value {
-    let mut lock = state.process.lock().unwrap();
+    let mut lock = state.process.lock().unwrap_or_else(|e| e.into_inner());
     let is_running = if let Some(child) = lock.as_mut() {
         child
             .try_wait()
@@ -1088,7 +1279,7 @@ fn desktop_window_toggle_maximize(window: WebviewWindow) -> Result<(), String> {
 
 #[tauri::command]
 fn desktop_window_close(window: WebviewWindow) -> Result<(), String> {
-    window.close().map_err(|e| e.to_string())
+    window.hide().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1252,6 +1443,29 @@ try {{
   const listenEndpoint = (daemonData.listen || '127.0.0.1:6767').replace(/^http:\/\//, '').replace(/\/.*$/, '');
   const endpoint = listenEndpoint;
 
+  class TauriBridgeChannel {{
+    constructor(onmessage) {{
+      this.onmessage = onmessage || (() => {{}});
+      if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.transformCallback === 'function') {{
+        this.id = window.__TAURI_INTERNALS__.transformCallback((raw) => {{
+          if (raw && typeof raw === 'object' && 'message' in raw) {{
+            this.onmessage(raw.message);
+          }} else {{
+            this.onmessage(raw);
+          }}
+        }});
+      }} else {{
+        this.id = Math.floor(Math.random() * 1000000);
+      }}
+    }}
+    toJSON() {{
+      return '__CHANNEL__:' + this.id;
+    }}
+    __TAURI_TO_IPC_KEY__() {{
+      return '__CHANNEL__:' + this.id;
+    }}
+  }}
+
   window.paseoDesktop = {{
     platform: 'win32',
     windowChromeMode: 'native-windows',
@@ -1408,8 +1622,8 @@ try {{
     nativeTerminal: {{
       spawn: async function(id, options, onEvent) {{
         if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
-          const channel = new window.__TAURI_INTERNALS__.Channel();
-          channel.onmessage = onEvent;
+          const ChannelCtor = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.Channel) ? window.__TAURI__.core.Channel : TauriBridgeChannel;
+          const channel = new ChannelCtor(onEvent);
           return await window.__TAURI_INTERNALS__.invoke('spawn_native_terminal', {{ id, options, onEvent: channel }});
         }}
         throw new Error('Native terminal unavailable');
@@ -1434,6 +1648,12 @@ try {{
       compute: async function(oldText, newText, contextLines) {{
         if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
           return await window.__TAURI_INTERNALS__.invoke('compute_file_diff', {{ oldText, newText, contextLines }});
+        }}
+        return null;
+      }},
+      applyHunk: async function(filePath, hunk, reverse) {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          return await window.__TAURI_INTERNALS__.invoke('apply_diff_hunk', {{ filePath, hunk, reverse }});
         }}
         return null;
       }}
@@ -1536,6 +1756,15 @@ try {{
       if (command === 'update_active_agents') {{
         return await window.__TAURI_INTERNALS__.invoke('update_active_agents', args || {{}});
       }}
+      if (command === 'apply_diff_hunk') {{
+        return await window.__TAURI_INTERNALS__.invoke('apply_diff_hunk', args || {{}});
+      }}
+      if (command === 'create_turn_checkpoint') {{
+        return await window.__TAURI_INTERNALS__.invoke('create_turn_checkpoint', args || {{}});
+      }}
+      if (command === 'restore_turn_checkpoint') {{
+        return await window.__TAURI_INTERNALS__.invoke('restore_turn_checkpoint', args || {{}});
+      }}
       if (command === 'desktop_local_credential') {{
         return await window.__TAURI_INTERNALS__.invoke('get_live_local_credential', {{ listen: args && args.listen || '' }});
       }}
@@ -1612,6 +1841,21 @@ try {{
         }}
         return null;
       }}
+      if (
+        command === 'open_local_daemon_transport' ||
+        command === 'send_local_daemon_transport_message' ||
+        command === 'close_local_daemon_transport'
+      ) {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            return await window.__TAURI_INTERNALS__.invoke(command, args || {{}});
+          }}
+        }} catch (e) {{
+          console.error('[TauriBridge] ' + command + ' failed:', e);
+          throw e;
+        }}
+        return null;
+      }}
       return null;
     }},
     getKernelTelemetry: async function() {{
@@ -1638,32 +1882,46 @@ try {{
     // Remove any stale loopback entries that do not match the current daemon's serverId
     registry = registry.filter(h => {{
       if (!h || !h.connections) return true;
-      const isLoopback = h.connections.some(c =>
-        c.type === 'directTcp' && (c.endpoint.includes('127.0.0.1') || c.endpoint.includes('localhost'))
+      const isLoopback = h.label === 'Local (This Device)' || h.connections.some(c =>
+        (c.type === 'directTcp' && (c.endpoint.includes('127.0.0.1') || c.endpoint.includes('localhost')))
+        || c.type === 'directPipe'
+        || c.type === 'directSocket'
       );
       return !isLoopback || h.serverId === daemonData.serverId;
     }});
+
+    const isWin = typeof navigator !== 'undefined' && navigator.platform && navigator.platform.toLowerCase().includes('win');
+    const localConn = isWin
+      ? {{ id: 'pipe:\\\\.\\pipe\\kronos-ipc', type: 'directPipe', path: '\\\\.\\pipe\\kronos-ipc' }}
+      : {{ id: 'socket:/tmp/kronos-ipc.sock', type: 'directSocket', path: '/tmp/kronos-ipc.sock' }};
+    const tcpConn = {{ id: 'direct:' + endpoint, type: 'directTcp', endpoint: endpoint, useTls: false }};
 
     const existing = registry.find(h => h && h.serverId === daemonData.serverId);
     if (!existing) {{
       registry.unshift({{
         serverId: daemonData.serverId,
-        label: daemonData.hostname || 'Localhost',
+        label: 'Local (This Device)',
         appearance: {{ color: 'none', badgeDisplay: null }},
         lifecycle: {{}},
-        connections: [{{
-          id: 'direct:' + endpoint,
-          type: 'directTcp',
-          endpoint: endpoint,
-          useTls: false
-        }}],
-        preferredConnectionId: 'direct:' + endpoint,
+        connections: [localConn, tcpConn],
+        preferredConnectionId: localConn.id,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       }});
     }} else {{
-      const conn = existing.connections && existing.connections.find(c => c.type === 'directTcp');
-      if (conn) conn.endpoint = endpoint;
+      existing.label = 'Local (This Device)';
+      if (!existing.connections) existing.connections = [];
+      const hasLocalConn = existing.connections.some(c => c.type === 'directPipe' || c.type === 'directSocket');
+      if (!hasLocalConn) {{
+        existing.connections.unshift(localConn);
+      }}
+      existing.preferredConnectionId = localConn.id;
+      const conn = existing.connections.find(c => c.type === 'directTcp');
+      if (conn) {{
+        conn.endpoint = endpoint;
+      }} else {{
+        existing.connections.push(tcpConn);
+      }}
     }}
     localStorage.setItem(REGISTRY_KEY, JSON.stringify(registry));
   }} catch (e) {{}}
@@ -1763,8 +2021,16 @@ try {{
                         }
                     }
                 }
+            } else {
+                app.exit(0);
             }
         }))
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -1806,11 +2072,14 @@ try {{
             resize_native_terminal,
             kill_native_terminal,
             compute_file_diff,
+            apply_diff_hunk,
             check_app_update,
             install_app_update,
             get_kernel_telemetry,
             mark_first_paint,
             workspace_search,
+            create_turn_checkpoint,
+            restore_turn_checkpoint,
             watch_directory,
             unwatch_directory,
             analyze_ast,
@@ -1820,6 +2089,9 @@ try {{
             get_speech_engine_status,
             get_shm_status,
             push_shm_chunk,
+            open_local_daemon_transport,
+            send_local_daemon_transport_message,
+            close_local_daemon_transport,
             desktop_window_minimize,
             desktop_window_toggle_maximize,
             desktop_window_close,
@@ -1913,7 +2185,7 @@ try {{
                             daemon_start.elapsed()
                         );
                     }
-                    println!("[daemon] Host daemon confirmed healthy on 127.0.0.1:6767");
+                    println!("[daemon] Host daemon confirmed healthy on 127.0.0.1:{}", daemon::get_active_daemon_port());
                     if let Some(w) = handle_for_daemon.get_webview_window("main") {
                         let eval_script = format!(
                             "window.dispatchEvent(new CustomEvent('kronos:daemon-ready', {{ detail: {{ serverId: '{}' }} }}));",
@@ -1937,6 +2209,11 @@ try {{
                         } else if let Some(window_clone) = app.get_webview_window("main") {
                             toggle_window(&window_clone);
                         }
+                        let now_ms = chrono::Utc::now().timestamp_millis();
+                        let _ = app.emit(
+                            "kronos://quick-toggle",
+                            serde_json::json!({ "timestamp": now_ms }),
+                        );
                     }
                 }) {
                     eprintln!("[shortcut] Failed to register global shortcut '{shortcut}': {err}");
@@ -2010,7 +2287,7 @@ try {{
         .expect("error while running tauri application")
         .run(|app_handle, event| match event {
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {
-                let should_kill = std::env::var("KRONOS_STOP_ON_EXIT").map(|v| v == "1" || v == "true").unwrap_or(false);
+                let should_kill = std::env::var("KRONOS_STOP_ON_EXIT").map(|v| v == "1" || v == "true").unwrap_or(true);
                 if should_kill {
                     if let Some(state) = app_handle.try_state::<DaemonState>() {
                         stop_daemon(&state);

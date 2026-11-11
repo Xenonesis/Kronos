@@ -35,7 +35,7 @@ impl ReservedTurn {
 
     pub(crate) fn mark_provider_started(&mut self) -> Result<(), String> {
         let gate = self.manager.lifecycle_gate(&self.agent.id);
-        let _guard = gate.lock().unwrap();
+        let _guard = gate.lock().unwrap_or_else(|e| e.into_inner());
         let mut record = self
             .manager
             .get_agent(&self.agent.id)
@@ -72,7 +72,7 @@ impl ReservedTurn {
             return Ok(());
         }
         let gate = self.manager.lifecycle_gate(&self.agent.id);
-        let _guard = gate.lock().unwrap();
+        let _guard = gate.lock().unwrap_or_else(|e| e.into_inner());
         let mut record = self
             .manager
             .get_agent(&self.agent.id)
@@ -93,7 +93,7 @@ impl ReservedTurn {
 
     pub(crate) fn persist_provider_handle(&mut self, handle: &str) -> Result<(), String> {
         let gate = self.manager.lifecycle_gate(&self.agent.id);
-        let _guard = gate.lock().unwrap();
+        let _guard = gate.lock().unwrap_or_else(|e| e.into_inner());
         let mut record = self
             .manager
             .get_agent(&self.agent.id)
@@ -111,7 +111,7 @@ impl ReservedTurn {
 
     pub(crate) fn retain_cleanup_failure(&mut self, error: &str) {
         let gate = self.manager.lifecycle_gate(&self.agent.id);
-        let _guard = gate.lock().unwrap();
+        let _guard = gate.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(mut record) = self.manager.get_agent(&self.agent.id) {
             record.last_status = AgentStatus::Error;
             record.last_error = Some(error.to_owned());
@@ -121,7 +121,7 @@ impl ReservedTurn {
                     self.manager
                         .active_statuses
                         .write()
-                        .unwrap()
+                        .unwrap_or_else(|e| e.into_inner())
                         .insert(self.agent.id.clone(), AgentStatus::Error);
                 }
                 Err(persist) => eprintln!("[Runner] Failed to persist cleanup failure: {persist}"),
@@ -137,12 +137,12 @@ impl ReservedTurn {
             return Ok(());
         }
         let gate = self.manager.lifecycle_gate(&self.agent.id);
-        let _guard = gate.lock().unwrap();
+        let _guard = gate.lock().unwrap_or_else(|e| e.into_inner());
         if !self
             .manager
             .active_turns
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .get(&self.agent.id)
             .is_some_and(|turn| turn.token == self.token)
         {
@@ -173,14 +173,14 @@ impl ReservedTurn {
             self.manager
                 .active_statuses
                 .write()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .insert(self.agent.id.clone(), status);
         }
         if let Some(turn) = self
             .manager
             .active_turns
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .remove(&self.agent.id)
         {
             turn.finished.send_replace(true);
@@ -211,7 +211,7 @@ struct DeletionGuard {
 
 impl Drop for DeletionGuard {
     fn drop(&mut self) {
-        self.pending.lock().unwrap().remove(&self.id);
+        self.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.id);
     }
 }
 
@@ -235,6 +235,16 @@ impl AgentManager {
         let home_dir = Arc::new(home_dir.into());
         let storage = Arc::new(AgentStorage::try_new(home_dir.as_ref().clone())?);
         let registry = Arc::new(ProviderRegistry::new());
+
+        // Startup reconciliation: reset any agents stranded in 'Running' state across sessions or crashes.
+        for mut record in storage.list_records() {
+            if record.last_status == AgentStatus::Running {
+                record.last_status = AgentStatus::Idle;
+                record.updated_at = now_iso();
+                let _ = storage.save_record(record);
+            }
+        }
+
         Ok(Self {
             storage,
             registry,
@@ -257,17 +267,17 @@ impl AgentManager {
     fn lifecycle_gate(&self, id: &str) -> Arc<Mutex<()>> {
         self.lifecycle_gates
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .entry(id.to_string())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     }
 
     fn ensure_inactive(&self, id: &str) -> Result<(), String> {
-        if self.deleting.lock().unwrap().contains(id) {
+        if self.deleting.lock().unwrap_or_else(|e| e.into_inner()).contains(id) {
             return Err(format!("Agent {id} is being deleted"));
         }
-        if self.active_turns.lock().unwrap().contains_key(id) {
+        if self.active_turns.lock().unwrap_or_else(|e| e.into_inner()).contains_key(id) {
             Err(format!("Agent {id} has an active turn; wait for cancellation/completion before changing it"))
         } else {
             Ok(())
@@ -326,7 +336,7 @@ impl AgentManager {
 
         self.active_statuses
             .write()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(id, AgentStatus::Idle);
 
         Ok(record)
@@ -334,7 +344,7 @@ impl AgentManager {
 
     pub fn get_agent(&self, id: &str) -> Option<StoredAgentRecord> {
         let mut record = self.storage.get_record(id)?;
-        if let Some(status) = self.active_statuses.read().unwrap().get(id) {
+        if let Some(status) = self.active_statuses.read().unwrap_or_else(|e| e.into_inner()).get(id) {
             record.last_status = *status;
         }
         Some(record)
@@ -342,7 +352,7 @@ impl AgentManager {
 
     pub fn list_agents(&self) -> Vec<StoredAgentRecord> {
         let mut list = self.storage.list_records();
-        let statuses = self.active_statuses.read().unwrap();
+        let statuses = self.active_statuses.read().unwrap_or_else(|e| e.into_inner());
         for rec in &mut list {
             if let Some(status) = statuses.get(&rec.id) {
                 rec.last_status = *status;
@@ -353,7 +363,7 @@ impl AgentManager {
 
     pub fn send_message(&self, id: &str, text: &str) -> Result<ReservedTurn, String> {
         let gate = self.lifecycle_gate(id);
-        let _guard = gate.lock().unwrap();
+        let _guard = gate.lock().unwrap_or_else(|e| e.into_inner());
         self.ensure_inactive(id)?;
         let mut record = self
             .get_agent(id)
@@ -362,7 +372,7 @@ impl AgentManager {
         let token = uuid_v4_simple();
         let (cancel, cancellation) = tokio::sync::watch::channel(false);
         let (finished, _) = tokio::sync::watch::channel(false);
-        self.active_turns.lock().unwrap().insert(
+        self.active_turns.lock().unwrap_or_else(|e| e.into_inner()).insert(
             id.to_string(),
             TurnControl {
                 token: token.clone(),
@@ -450,16 +460,16 @@ TASK:
 
             self.active_statuses
                 .write()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .insert(id.to_string(), AgentStatus::Running);
 
             Ok::<(), String>(())
         })();
         if let Err(error) = setup {
-            if let Some(turn) = self.active_turns.lock().unwrap().remove(id) {
+            if let Some(turn) = self.active_turns.lock().unwrap_or_else(|e| e.into_inner()).remove(id) {
                 turn.finished.send_replace(true);
             }
-            self.active_statuses.write().unwrap().remove(id);
+            self.active_statuses.write().unwrap_or_else(|e| e.into_inner()).remove(id);
             reservation.completed = true;
             return Err(error);
         }
@@ -504,7 +514,7 @@ TASK:
 
     pub fn set_agent_status(&self, id: &str, status: AgentStatus) -> Result<(), String> {
         let gate = self.lifecycle_gate(id);
-        let _guard = gate.lock().unwrap();
+        let _guard = gate.lock().unwrap_or_else(|e| e.into_inner());
         self.ensure_inactive(id)?;
         let mut record = self
             .get_agent(id)
@@ -516,7 +526,7 @@ TASK:
             .map_err(|e| format!("Failed to save status: {e}"))?;
         self.active_statuses
             .write()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(id.to_string(), status);
         Ok(())
     }
@@ -532,7 +542,7 @@ TASK:
         provider: Option<&str>,
     ) -> Result<StoredAgentRecord, String> {
         let gate = self.lifecycle_gate(id);
-        let _guard = gate.lock().unwrap();
+        let _guard = gate.lock().unwrap_or_else(|e| e.into_inner());
         self.ensure_inactive(id)?;
         let mut record = self
             .get_agent(id)
@@ -571,7 +581,7 @@ TASK:
         thinking_option_id: Option<&str>,
     ) -> Result<StoredAgentRecord, String> {
         let gate = self.lifecycle_gate(id);
-        let _guard = gate.lock().unwrap();
+        let _guard = gate.lock().unwrap_or_else(|e| e.into_inner());
         self.ensure_inactive(id)?;
         let mut record = self
             .get_agent(id)
@@ -599,10 +609,10 @@ TASK:
 
     pub fn cancel_agent(&self, id: &str) -> Result<(), String> {
         let gate = self.lifecycle_gate(id);
-        let _guard = gate.lock().unwrap();
+        let _guard = gate.lock().unwrap_or_else(|e| e.into_inner());
         self.get_agent(id)
             .ok_or_else(|| format!("Agent {id} not found"))?;
-        if let Some(turn) = self.active_turns.lock().unwrap().get(id) {
+        if let Some(turn) = self.active_turns.lock().unwrap_or_else(|e| e.into_inner()).get(id) {
             turn.cancel.send_replace(true);
         }
         Ok(())
@@ -611,15 +621,15 @@ TASK:
     pub async fn delete_agent_and_wait(&self, id: &str) -> Result<bool, String> {
         let (waiting, _admission) = {
             let gate = self.lifecycle_gate(id);
-            let _guard = gate.lock().unwrap();
-            if !self.deleting.lock().unwrap().insert(id.to_owned()) {
+            let _guard = gate.lock().unwrap_or_else(|e| e.into_inner());
+            if !self.deleting.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_owned()) {
                 return Err(format!("Agent {id} is already being deleted"));
             }
             let admission = DeletionGuard {
                 pending: self.deleting.clone(),
                 id: id.to_owned(),
             };
-            let turns = self.active_turns.lock().unwrap();
+            let turns = self.active_turns.lock().unwrap_or_else(|e| e.into_inner());
             let waiting = turns.get(id).map(|turn| {
                 turn.cancel.send_replace(true);
                 turn.finished.subscribe()
@@ -645,8 +655,8 @@ TASK:
 
     pub fn delete_agent(&self, id: &str) -> Result<bool, String> {
         let gate = self.lifecycle_gate(id);
-        let _guard = gate.lock().unwrap();
-        if let Some(turn) = self.active_turns.lock().unwrap().get(id) {
+        let _guard = gate.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(turn) = self.active_turns.lock().unwrap_or_else(|e| e.into_inner()).get(id) {
             turn.cancel.send_replace(true);
             return Err(
                 "Cancellation requested; agent retained until provider cleanup completes".into(),
@@ -656,7 +666,7 @@ TASK:
             .storage
             .delete_record(id)
             .map_err(|e| format!("Failed to delete agent: {e}"))?;
-        self.active_statuses.write().unwrap().remove(id);
+        self.active_statuses.write().unwrap_or_else(|e| e.into_inner()).remove(id);
         Ok(deleted)
     }
 }

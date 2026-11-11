@@ -141,6 +141,81 @@ pub async fn compute_file_diff(
     .map_err(|e| format!("Diff task failed: {}", e))?
 }
 
+pub fn apply_diff_hunk_sync(
+    file_content: &str,
+    hunk: &DiffHunk,
+    reverse: bool,
+) -> Result<String, String> {
+    let lines: Vec<&str> = file_content.lines().collect();
+    let has_trailing_newline = file_content.ends_with('\n');
+
+    let (start_idx, count, replacement_lines): (usize, usize, Vec<String>) = if !reverse {
+        let start = if hunk.old_start == 0 { 0 } else { hunk.old_start.saturating_sub(1) };
+        let repl: Vec<String> = hunk
+            .lines
+            .iter()
+            .filter(|l| l.line_type != DiffLineType::Deletion)
+            .map(|l| l.content.clone())
+            .collect();
+        (start, hunk.old_lines, repl)
+    } else {
+        let start = if hunk.new_start == 0 { 0 } else { hunk.new_start.saturating_sub(1) };
+        let repl: Vec<String> = hunk
+            .lines
+            .iter()
+            .filter(|l| l.line_type != DiffLineType::Addition)
+            .map(|l| l.content.clone())
+            .collect();
+        (start, hunk.new_lines, repl)
+    };
+
+    if start_idx > lines.len() {
+        return Err(format!(
+            "Hunk start index {} out of range (file has {} lines)",
+            start_idx,
+            lines.len()
+        ));
+    }
+
+    let end_idx = (start_idx + count).min(lines.len());
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + replacement_lines.len());
+
+    for line in &lines[..start_idx] {
+        out.push(line.to_string());
+    }
+    for repl in replacement_lines {
+        out.push(repl);
+    }
+    for line in &lines[end_idx..] {
+        out.push(line.to_string());
+    }
+
+    let mut result = out.join("\n");
+    if has_trailing_newline {
+        result.push('\n');
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn apply_diff_hunk(
+    file_path: String,
+    hunk: DiffHunk,
+    reverse: Option<bool>,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let path = std::path::Path::new(&file_path);
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read file {}: {}", file_path, e))?;
+        let patched = apply_diff_hunk_sync(&content, &hunk, reverse.unwrap_or(false))?;
+        std::fs::write(path, &patched)
+            .map_err(|e| format!("Failed to write patched file {}: {}", file_path, e))?;
+        Ok(patched)
+    })
+    .await
+    .map_err(|e| format!("Diff hunk task failed: {}", e))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +269,21 @@ mod tests {
         let res = compute_file_diff_sync(&old, &new, 3);
         let limit = if cfg!(debug_assertions) { 50_000 } else { 15_000 };
         assert!(res.elapsed_microseconds < limit, "5,000-line diff took {}us (limit {}us)", res.elapsed_microseconds, limit);
+    }
+
+    #[test]
+    fn test_apply_diff_hunk_sync_apply_and_revert() {
+        let original = "line 1\nline 2\nline 3\n";
+        let modified = "line 1\nline 2 updated\nline 3\n";
+        let diff = compute_file_diff_sync(original, modified, 0);
+        assert_eq!(diff.hunks.len(), 1);
+
+        // Apply hunk onto original
+        let patched = apply_diff_hunk_sync(original, &diff.hunks[0], false).unwrap();
+        assert_eq!(patched, modified);
+
+        // Revert hunk from patched
+        let reverted = apply_diff_hunk_sync(&patched, &diff.hunks[0], true).unwrap();
+        assert_eq!(reverted, original);
     }
 }

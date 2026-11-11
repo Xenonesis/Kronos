@@ -175,7 +175,7 @@ pub async fn start_daemon() {
   });
 
   it("delegates to native invoke when window.paseoDesktop is available", async () => {
-    const mockInvoke = async (cmd: string, args: unknown) => {
+    const mockInvoke = async (cmd: string, _args: unknown) => {
       if (cmd === "analyze_ast") {
         return {
           root_kind: "program",

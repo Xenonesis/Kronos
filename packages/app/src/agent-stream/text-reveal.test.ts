@@ -168,6 +168,15 @@ describe("text reveal state", () => {
     expect(isTextRevealSettled(state)).toBe(true);
   });
 
+  it("supports starting an actively streaming turn from 0 for word-by-word reveal", () => {
+    const state = beginTextReveal("hello world", 0);
+    expect(visibleRevealedText(state)).toBe("");
+    expect(isTextRevealSettled(state)).toBe(false);
+
+    const advanced = advanceTextReveal(state, 16);
+    expect(visibleRevealedText(advanced).length).toBeGreaterThan(0);
+  });
+
   it("paces growth instead of painting it whole", () => {
     let state = beginTextReveal("a");
     state = retargetTextReveal(state, `a${"b".repeat(300)}`);

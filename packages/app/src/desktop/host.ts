@@ -237,6 +237,7 @@ export interface NativeDiffBridge {
     newText: string,
     contextLines?: number,
   ) => Promise<FileDiffResult | null>;
+  applyHunk?: (filePath: string, hunk: DiffHunk, reverse?: boolean) => Promise<string | null>;
 }
 
 export interface DesktopHostBridge {

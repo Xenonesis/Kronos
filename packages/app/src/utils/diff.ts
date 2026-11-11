@@ -13,6 +13,17 @@ export function isNativeDiffAvailable(): boolean {
   return typeof window !== "undefined" && Boolean(window.paseoDesktop?.nativeDiff?.compute);
 }
 
+export async function applyNativeDiffHunk(
+  filePath: string,
+  hunk: DiffHunk,
+  reverse: boolean = false,
+): Promise<string | null> {
+  if (typeof window !== "undefined" && window.paseoDesktop?.nativeDiff?.applyHunk) {
+    return window.paseoDesktop.nativeDiff.applyHunk(filePath, hunk, reverse);
+  }
+  return null;
+}
+
 function splitLines(text: string): string[] {
   if (text.length === 0) {
     return [];

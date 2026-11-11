@@ -126,7 +126,7 @@ export function BrowserImportDialog({
             <Text style={styles.title}>Import Browser Session & Cookies</Text>
           </View>
           <Button
-            size="xs"
+            size="sm"
             variant="ghost"
             onPress={onClose}
             style={styles.closeBtn}

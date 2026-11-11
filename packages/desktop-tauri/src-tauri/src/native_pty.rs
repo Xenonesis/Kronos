@@ -24,10 +24,14 @@ pub enum TerminalEvent {
     Error(String),
 }
 
+static INSTANCE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 pub struct ActiveTerminal {
+    pub instance_id: u64,
     pub master: Box<dyn MasterPty + Send>,
     pub child: Box<dyn Child + Send + Sync>,
     pub writer: Box<dyn Write + Send>,
+    pub output_backlog: Arc<Mutex<Vec<u8>>>,
 }
 #[derive(Clone, Debug)]
 pub struct TerminalOutputChunk {
@@ -110,6 +114,19 @@ impl NativePtyManager {
     }
 
     pub fn spawn_terminal(&self, id: String, options: TerminalSpawnOptions) -> Result<(), String> {
+        {
+            let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(existing) = sessions.get_mut(&id) {
+                if let Ok(None) = existing.child.try_wait() {
+                    // Session already exists and child process is running.
+                    return Ok(());
+                } else {
+                    // Child process has terminated; remove stale entry.
+                    sessions.remove(&id);
+                }
+            }
+        }
+
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -168,6 +185,10 @@ impl NativePtyManager {
             .try_clone_reader()
             .map_err(|e| format!("Failed to clone master reader: {}", e))?;
 
+        let instance_id = INSTANCE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let output_backlog = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let backlog_for_reader = output_backlog.clone();
+
         let broadcaster = self.output_broadcaster.clone();
         let term_id = id.clone();
         let sessions_for_exit = self.sessions.clone();
@@ -179,25 +200,42 @@ impl NativePtyManager {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
+                        let chunk = &buf[..n];
+                        {
+                            if let Ok(mut bg) = backlog_for_reader.lock() {
+                                bg.extend_from_slice(chunk);
+                                const MAX_BACKLOG: usize = 128 * 1024;
+                                if bg.len() > MAX_BACKLOG {
+                                    let excess = bg.len() - MAX_BACKLOG;
+                                    bg.drain(0..excess);
+                                }
+                            }
+                        }
                         let _ = broadcaster.send(TerminalOutputChunk {
                             terminal_id: term_id.clone(),
-                            data: buf[..n].to_vec(),
+                            data: chunk.to_vec(),
                         });
                     }
                     Err(_) => break,
                 }
             }
-            let mut lock = sessions_for_exit.lock().unwrap();
-            lock.remove(&term_id);
+            let mut lock = sessions_for_exit.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(active) = lock.get(&term_id) {
+                if active.instance_id == instance_id {
+                    lock.remove(&term_id);
+                }
+            }
         });
 
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         sessions.insert(
             id,
             ActiveTerminal {
+                instance_id,
                 master: pair.master,
                 child,
                 writer,
+                output_backlog,
             },
         );
 
@@ -209,11 +247,16 @@ impl NativePtyManager {
         id: String,
         channel: Channel<TerminalEvent>,
     ) -> Result<(), String> {
-        {
-            let sessions = self.sessions.lock().unwrap();
-            if !sessions.contains_key(&id) {
-                return Err("Session not found".to_string());
-            }
+        let (instance_id, backlog) = {
+            let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            let active = sessions.get(&id).ok_or_else(|| "Session not found".to_string())?;
+            let backlog = active.output_backlog.lock().map(|bg| bg.clone()).unwrap_or_default();
+            (active.instance_id, backlog)
+        };
+
+        if !backlog.is_empty() {
+            let text = String::from_utf8_lossy(&backlog).into_owned();
+            let _ = channel.send(TerminalEvent::Data(text));
         }
 
         let mut broadcast_rx = self.output_broadcaster.subscribe();
@@ -256,7 +299,10 @@ impl NativePtyManager {
         thread::spawn(move || {
             let mut leftover: Vec<u8> = Vec::new();
             let mut batch_text = String::with_capacity(65536);
-            let micro_window = std::time::Duration::from_millis(2);
+            let min_window = std::time::Duration::from_millis(2);
+            let burst_window = std::time::Duration::from_millis(16);
+            let mut recent_bytes_counter = 0usize;
+            let mut last_window_reset = std::time::Instant::now();
             const MAX_BATCH_SIZE: usize = 65536;
 
             loop {
@@ -265,7 +311,8 @@ impl NativePtyManager {
                     Err(_) => break,
                 };
 
-                let mut process_bytes = |bytes: Vec<u8>, text_target: &mut String| {
+                let mut process_bytes = |bytes: Vec<u8>, text_target: &mut String, counter: &mut usize| {
+                    *counter = counter.saturating_add(bytes.len());
                     let mut combined = if leftover.is_empty() {
                         bytes
                     } else {
@@ -285,9 +332,20 @@ impl NativePtyManager {
                     }
                 };
 
+                if last_window_reset.elapsed() > std::time::Duration::from_millis(100) {
+                    recent_bytes_counter = 0;
+                    last_window_reset = std::time::Instant::now();
+                }
+
                 match first_msg {
                     RawPtyMsg::Data(bytes) => {
-                        process_bytes(bytes, &mut batch_text);
+                        process_bytes(bytes, &mut batch_text, &mut recent_bytes_counter);
+
+                        let micro_window = if recent_bytes_counter > 16384 {
+                            burst_window
+                        } else {
+                            min_window
+                        };
 
                         let start = std::time::Instant::now();
                         while batch_text.len() < MAX_BATCH_SIZE {
@@ -297,7 +355,7 @@ impl NativePtyManager {
                             }
                             match rx.recv_timeout(remaining) {
                                 Ok(RawPtyMsg::Data(more_bytes)) => {
-                                    process_bytes(more_bytes, &mut batch_text);
+                                    process_bytes(more_bytes, &mut batch_text, &mut recent_bytes_counter);
                                 }
                                 Ok(RawPtyMsg::Exit(code)) => {
                                     if !batch_text.is_empty() {
@@ -306,7 +364,7 @@ impl NativePtyManager {
                                         )));
                                     }
                                     let _ = channel.send(TerminalEvent::Exit(code));
-                                    let mut lock = sessions_clone.lock().unwrap();
+                                    let mut lock = sessions_clone.lock().unwrap_or_else(|e| e.into_inner());
                                     lock.remove(&session_id);
                                     return;
                                 }
@@ -317,7 +375,7 @@ impl NativePtyManager {
                                         )));
                                     }
                                     let _ = channel.send(TerminalEvent::Error(err));
-                                    let mut lock = sessions_clone.lock().unwrap();
+                                    let mut lock = sessions_clone.lock().unwrap_or_else(|e| e.into_inner());
                                     lock.remove(&session_id);
                                     return;
                                 }
@@ -356,15 +414,19 @@ impl NativePtyManager {
                 }
             }
 
-            let mut lock = sessions_clone.lock().unwrap();
-            lock.remove(&session_id);
+            let mut lock = sessions_clone.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(active) = lock.get(&session_id) {
+                if active.instance_id == instance_id {
+                    lock.remove(&session_id);
+                }
+            }
         });
 
         Ok(())
     }
 
     pub fn write_terminal(&self, id: &str, data: &str) -> Result<(), String> {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         let term = sessions
             .get_mut(id)
             .ok_or_else(|| "Session not found".to_string())?;
@@ -377,7 +439,7 @@ impl NativePtyManager {
     }
 
     pub fn resize_terminal(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         let term = sessions
             .get(id)
             .ok_or_else(|| "Session not found".to_string())?;
@@ -392,7 +454,7 @@ impl NativePtyManager {
     }
 
     pub fn kill_terminal(&self, id: &str) -> Result<(), String> {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(mut term) = sessions.remove(id) {
             let _ = term.child.kill();
         }
@@ -451,6 +513,23 @@ pub fn kill_native_terminal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_native_pty_double_spawn_preserves_session() {
+        let manager = NativePtyManager::new();
+        let session_id = "test-double-spawn".to_string();
+        let opts = TerminalSpawnOptions {
+            command: None,
+            args: vec![],
+            cwd: None,
+            cols: 80,
+            rows: 24,
+        };
+        assert!(manager.spawn_terminal(session_id.clone(), opts.clone()).is_ok());
+        assert!(manager.spawn_terminal(session_id.clone(), opts).is_ok());
+        assert!(manager.write_terminal(&session_id, "echo still_alive\r\n").is_ok());
+        assert!(manager.kill_terminal(&session_id).is_ok());
+    }
 
     #[test]
     fn test_native_pty_lifecycle() {

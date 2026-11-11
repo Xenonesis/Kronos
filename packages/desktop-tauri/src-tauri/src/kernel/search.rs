@@ -101,13 +101,16 @@ impl WorkspaceSearchIndex {
             .read_files_batched(paths)
             .map_err(|e| format!("IoRing batch read failed: {e}"))?;
 
-        let mut strings = Vec::with_capacity(paths.len());
-        for (path, byte_vec) in paths.iter().zip(contents.into_iter()) {
-            if let Ok(text) = String::from_utf8(byte_vec) {
-                let path_str = path.to_string_lossy().to_string();
-                strings.push((path_str, text));
-            }
-        }
+        use rayon::prelude::*;
+        let strings: Vec<(String, String)> = paths
+            .par_iter()
+            .zip(contents.into_par_iter())
+            .filter_map(|(path, byte_vec)| {
+                String::from_utf8(byte_vec).ok().map(|text| {
+                    (path.to_string_lossy().to_string(), text)
+                })
+            })
+            .collect();
 
         let mut docs = Vec::with_capacity(strings.len());
         for (path_str, text) in &strings {

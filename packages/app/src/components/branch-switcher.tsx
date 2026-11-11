@@ -176,7 +176,6 @@ export function BranchSwitcher({
         desktopPreventInitialFlash
         desktopMinWidth={280}
         renderOption={renderBranchOption}
-        footer={renderFooter}
       />
       {workspaceDirectory ? (
         <WorktreeFleetDrawer

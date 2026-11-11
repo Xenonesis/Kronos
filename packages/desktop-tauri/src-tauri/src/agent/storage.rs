@@ -52,34 +52,36 @@ impl AgentStorage {
 
     pub fn save_record(&self, record: StoredAgentRecord) -> io::Result<()> {
         let agent = self.agent_lock(&record.id);
-        let _agent = agent.lock().unwrap();
-        let _commit = self.record_commit.lock().unwrap();
+        let _agent = agent.lock().unwrap_or_else(|e| e.into_inner());
+        let _commit = self.record_commit.lock().unwrap_or_else(|e| e.into_inner());
         let id = record.id.clone();
         let (bytes, record) = {
-            let mut store = self.records.write().unwrap();
+            let mut store = self.records.write().unwrap_or_else(|e| e.into_inner());
             let previous = store.records.insert(id.clone(), record);
             let bytes = serde_json::to_vec_pretty(&*store);
             // Restore the visible snapshot before releasing the lock for I/O.
-            let record = store.records.remove(&id).unwrap();
+            let Some(record) = store.records.remove(&id) else {
+                return Err(io::Error::new(io::ErrorKind::NotFound, "Record missing from store"));
+            };
             if let Some(previous) = previous {
                 store.records.insert(id.clone(), previous);
             }
             (bytes, record)
         };
         self.persist_record_bytes(&bytes.map_err(invalid_data)?)?;
-        self.records.write().unwrap().records.insert(id, record);
+        self.records.write().unwrap_or_else(|e| e.into_inner()).records.insert(id, record);
         Ok(())
     }
 
     pub fn get_record(&self, id: &str) -> Option<StoredAgentRecord> {
-        self.records.read().unwrap().records.get(id).cloned()
+        self.records.read().unwrap_or_else(|e| e.into_inner()).records.get(id).cloned()
     }
 
     pub fn list_records(&self) -> Vec<StoredAgentRecord> {
         let mut list: Vec<_> = self
             .records
             .read()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .records
             .values()
             .cloned()
@@ -90,10 +92,10 @@ impl AgentStorage {
 
     pub fn delete_record(&self, id: &str) -> io::Result<bool> {
         let agent = self.agent_lock(id);
-        let mut timeline = agent.lock().unwrap();
-        let _commit = self.record_commit.lock().unwrap();
+        let mut timeline = agent.lock().unwrap_or_else(|e| e.into_inner());
+        let _commit = self.record_commit.lock().unwrap_or_else(|e| e.into_inner());
         let (bytes, generation, next) = {
-            let mut store = self.records.write().unwrap();
+            let mut store = self.records.write().unwrap_or_else(|e| e.into_inner());
             if !store.records.contains_key(id) {
                 return Ok(false);
             }
@@ -102,7 +104,9 @@ impl AgentStorage {
             let next = generation.checked_add(1).ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidData, "Timeline generation exhausted")
             })?;
-            let record = store.records.remove(id).unwrap();
+            let Some(record) = store.records.remove(id) else {
+                return Ok(false);
+            };
             store.timeline_generations.insert(id.to_owned(), next);
             let bytes = serde_json::to_vec_pretty(&*store);
             store.records.insert(id.to_owned(), record);
@@ -118,7 +122,7 @@ impl AgentStorage {
         };
         self.persist_record_bytes(&bytes.map_err(invalid_data)?)?;
         {
-            let mut store = self.records.write().unwrap();
+            let mut store = self.records.write().unwrap_or_else(|e| e.into_inner());
             store.records.remove(id);
             store.timeline_generations.insert(id.to_owned(), next);
         }
@@ -131,12 +135,14 @@ impl AgentStorage {
 
     pub fn append_timeline_item(&self, agent_id: &str, item: AgentTimelineItem) -> io::Result<()> {
         let agent = self.agent_lock(agent_id);
-        let mut cached = agent.lock().unwrap();
+        let mut cached = agent.lock().unwrap_or_else(|e| e.into_inner());
         let generation = self.generation(agent_id);
         if cached.is_none() {
             *cached = Some(self.load_timeline(agent_id, generation)?);
         }
-        let timeline = cached.as_mut().unwrap();
+        let Some(timeline) = cached.as_mut() else {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "Failed to load agent timeline"));
+        };
         if let Some(error) = &timeline.append_error {
             return Err(io::Error::other(error.clone()));
         }
@@ -200,20 +206,23 @@ impl AgentStorage {
         read: impl FnOnce(&[AgentTimelineItem]) -> T,
     ) -> io::Result<T> {
         let agent = self.agent_lock(agent_id);
-        let mut cached = agent.lock().unwrap();
+        let mut cached = agent.lock().unwrap_or_else(|e| e.into_inner());
         if cached.is_none() {
             *cached = Some(self.load_timeline(agent_id, self.generation(agent_id))?);
         }
-        Ok(read(&cached.as_ref().unwrap().items))
+        let Some(timeline) = cached.as_ref() else {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "Failed to read agent timeline"));
+        };
+        Ok(read(&timeline.items))
     }
 
     fn agent_lock(&self, agent_id: &str) -> Arc<Mutex<Option<Timeline>>> {
-        if let Some(agent) = self.timelines.read().unwrap().get(agent_id) {
+        if let Some(agent) = self.timelines.read().unwrap_or_else(|e| e.into_inner()).get(agent_id) {
             return agent.clone();
         }
         self.timelines
             .write()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .entry(agent_id.to_owned())
             .or_insert_with(|| Arc::new(Mutex::new(None)))
             .clone()
@@ -222,7 +231,7 @@ impl AgentStorage {
     fn generation(&self, agent_id: &str) -> u64 {
         self.records
             .read()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .timeline_generations
             .get(agent_id)
             .copied()

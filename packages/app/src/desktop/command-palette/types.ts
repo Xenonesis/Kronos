@@ -2,7 +2,7 @@ export interface PaletteItem {
   id: string;
   title: string;
   subtitle?: string;
-  category: "agents" | "workspaces" | "actions" | "navigation";
+  category: "agents" | "workspaces" | "actions" | "navigation" | "files";
   shortcut?: string;
   icon?: string;
   keywords?: string[];

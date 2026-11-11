@@ -95,59 +95,59 @@ impl DaemonConfigStore {
     }
 
     pub fn get_config(&self) -> DaemonConfig {
-        self.config.read().unwrap().clone()
+        self.config.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn update_config<F>(&self, update_fn: F) -> std::io::Result<DaemonConfig>
     where
         F: FnOnce(&mut DaemonConfig),
     {
-        let mut cfg = self.config.write().unwrap();
+        let mut cfg = self.config.write().unwrap_or_else(|e| e.into_inner());
         update_fn(&mut cfg);
         Self::save_config_atomic(&self.home_dir, &cfg)?;
         Ok(cfg.clone())
     }
 
     pub fn add_project(&self, project: ProjectRecord) -> std::io::Result<()> {
-        let mut map = self.projects.write().unwrap();
+        let mut map = self.projects.write().unwrap_or_else(|e| e.into_inner());
         map.insert(project.id.clone(), project);
         Self::save_projects_atomic(&self.home_dir, &map)?;
         Ok(())
     }
 
     pub fn list_projects(&self) -> Vec<ProjectRecord> {
-        self.projects.read().unwrap().values().cloned().collect()
+        self.projects.read().unwrap_or_else(|e| e.into_inner()).values().cloned().collect()
     }
 
     pub fn get_project(&self, id: &str) -> Option<ProjectRecord> {
-        self.projects.read().unwrap().get(id).cloned()
+        self.projects.read().unwrap_or_else(|e| e.into_inner()).get(id).cloned()
     }
     pub fn remove_project(&self, id: &str) -> std::io::Result<Option<ProjectRecord>> {
-        let mut map = self.projects.write().unwrap();
+        let mut map = self.projects.write().unwrap_or_else(|e| e.into_inner());
         let removed = map.remove(id);
         Self::save_projects_atomic(&self.home_dir, &map)?;
         Ok(removed)
     }
 
     pub fn add_workspace(&self, workspace: WorkspaceRecord) -> std::io::Result<()> {
-        let mut map = self.workspaces.write().unwrap();
+        let mut map = self.workspaces.write().unwrap_or_else(|e| e.into_inner());
         map.insert(workspace.id.clone(), workspace);
         Self::save_workspaces_atomic(&self.home_dir, &map)?;
         Ok(())
     }
 
     pub fn get_workspace(&self, id: &str) -> Option<WorkspaceRecord> {
-        self.workspaces.read().unwrap().get(id).cloned()
+        self.workspaces.read().unwrap_or_else(|e| e.into_inner()).get(id).cloned()
     }
     pub fn list_workspaces(&self) -> Vec<WorkspaceRecord> {
-        self.workspaces.read().unwrap().values().cloned().collect()
+        self.workspaces.read().unwrap_or_else(|e| e.into_inner()).values().cloned().collect()
     }
 
     pub fn remove_workspaces_for_project(
         &self,
         project_id: &str,
     ) -> std::io::Result<Vec<WorkspaceRecord>> {
-        let mut map = self.workspaces.write().unwrap();
+        let mut map = self.workspaces.write().unwrap_or_else(|e| e.into_inner());
         let mut removed = Vec::new();
         map.retain(|_, ws| {
             if ws.project_id == project_id {

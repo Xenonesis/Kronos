@@ -284,4 +284,33 @@ impl GitEngine {
 
         Ok(worktrees)
     }
+
+    /// Captures the current working tree state into a shadow ref `refs/kronos/checkpoints/<turn_id>`
+    pub async fn create_checkpoint(repo: &Path, turn_id: &str) -> Result<String, String> {
+        let clean_id = turn_id.replace(['/', '\\', ' '], "-");
+        let ref_name = format!("refs/kronos/checkpoints/{}", clean_id);
+        let commit_res = Self::git_exec(
+            repo,
+            &[
+                "stash",
+                "create",
+                &format!("Kronos turn checkpoint {}", clean_id),
+            ],
+        )
+        .await?;
+        let hash = commit_res.trim();
+        if !hash.is_empty() {
+            let _ = Self::git_exec(repo, &["update-ref", &ref_name, hash]).await;
+        }
+        Ok(ref_name)
+    }
+
+    /// Restores the working tree state from the shadow checkpoint
+    pub async fn restore_checkpoint(repo: &Path, turn_id: &str) -> Result<(), String> {
+        let clean_id = turn_id.replace(['/', '\\', ' '], "-");
+        let ref_name = format!("refs/kronos/checkpoints/{}", clean_id);
+        Self::git_exec(repo, &["checkout", &ref_name, "--", "."])
+            .await
+            .map(|_| ())
+    }
 }

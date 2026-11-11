@@ -2062,6 +2062,180 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "metrics": metrics
             })
         }
+        "provider.usage.list.request" => {
+            let now_iso = crate::agent::types::now_iso();
+            let mut providers = Vec::new();
+            let mgr = get_plugin_manager();
+            let metrics = mgr.get_metrics();
+            for m in metrics {
+                if m.input_tokens > 0 || m.output_tokens > 0 {
+                    let display_name = match m.provider_id.as_str() {
+                        "claude" => "Claude Code",
+                        "codex" => "OpenAI Codex",
+                        "copilot" => "GitHub Copilot",
+                        "cursor" => "Cursor",
+                        "grok" => "Grok",
+                        "kimi" => "Kimi",
+                        "minimax" => "MiniMax",
+                        "opencode-go" => "OpenCode Go",
+                        "zai" => "Zai",
+                        "antigravity" => "Antigravity",
+                        _ => "AI Provider",
+                    };
+                    providers.push(serde_json::json!({
+                        "providerId": m.provider_id,
+                        "displayName": display_name,
+                        "status": "available",
+                        "planLabel": "Local Desktop",
+                        "sourceLabel": "Local",
+                        "fetchedAt": now_iso,
+                        "windows": [],
+                        "balances": [],
+                        "details": [
+                            { "id": "inputTokens", "label": "Input Tokens", "value": m.input_tokens.to_string() },
+                            { "id": "outputTokens", "label": "Output Tokens", "value": m.output_tokens.to_string() },
+                            { "id": "totalCost", "label": "Total Cost", "value": format!("${:.4}", m.total_cost_usd) }
+                        ]
+                    }));
+                }
+            }
+            serde_json::json!({
+                "type": "provider.usage.list.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "fetchedAt": now_iso,
+                    "providers": providers
+                }
+            })
+        }
+        "usage.list_reports.request" => {
+            let now_iso = crate::agent::types::now_iso();
+            let mut reports = Vec::new();
+            let mgr = get_plugin_manager();
+            let metrics = mgr.get_metrics();
+
+            let filter_agent_id = msg
+                .get("agentId")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str());
+
+            let filter_report_ids: Option<Vec<String>> = msg
+                .get("reportIds")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("reportIds")))
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                });
+
+            if let Some(aid) = filter_agent_id {
+                if let Some(agent) = get_agent_manager().get_agent(aid) {
+                    let (inp, out, cost) = if let Some(ref usage) = agent.last_usage {
+                        let inp = usage.get("inputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let out = usage.get("outputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let cost = usage.get("totalCostUsd").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        (inp, out, cost)
+                    } else {
+                        (0, 0, 0.0)
+                    };
+                    let provider_id = &agent.provider;
+                    let display_name = match provider_id.as_str() {
+                        "claude" => "Claude Code",
+                        "codex" => "OpenAI Codex",
+                        "copilot" => "GitHub Copilot",
+                        "cursor" => "Cursor",
+                        "grok" => "Grok",
+                        "kimi" => "Kimi",
+                        "minimax" => "MiniMax",
+                        "opencode-go" => "OpenCode Go",
+                        "zai" => "Zai",
+                        "antigravity" => "Antigravity",
+                        _ => "AI Agent",
+                    };
+                    reports.push(serde_json::json!({
+                        "id": format!("{}:{}", provider_id, aid),
+                        "sourceId": provider_id,
+                        "sourceLabel": display_name,
+                        "account": { "label": agent.title.as_deref().unwrap_or("Agent") },
+                        "fetchedAt": now_iso,
+                        "report": {
+                            "status": "available",
+                            "planLabel": "Local Desktop",
+                            "windows": [],
+                            "balances": [],
+                            "details": [
+                                { "id": "inputTokens", "label": "Input Tokens", "value": inp.to_string() },
+                                { "id": "outputTokens", "label": "Output Tokens", "value": out.to_string() },
+                                { "id": "totalCost", "label": "Total Cost", "value": format!("${:.4}", cost) }
+                            ]
+                        }
+                    }));
+                }
+            } else {
+                for m in metrics {
+                    let is_specifically_requested = filter_report_ids
+                        .as_ref()
+                        .map_or(false, |ids| ids.iter().any(|id| id == &m.provider_id));
+
+                    if m.input_tokens > 0 || m.output_tokens > 0 || is_specifically_requested {
+                        let display_name = match m.provider_id.as_str() {
+                            "claude" => "Claude Code",
+                            "codex" => "OpenAI Codex",
+                            "copilot" => "GitHub Copilot",
+                            "cursor" => "Cursor",
+                            "grok" => "Grok",
+                            "kimi" => "Kimi",
+                            "minimax" => "MiniMax",
+                            "opencode-go" => "OpenCode Go",
+                            "zai" => "Zai",
+                            "antigravity" => "Antigravity",
+                            _ => "AI Provider",
+                        };
+                        reports.push(serde_json::json!({
+                            "id": m.provider_id.clone(),
+                            "sourceId": m.provider_id.clone(),
+                            "sourceLabel": display_name,
+                            "account": {},
+                            "fetchedAt": now_iso,
+                            "report": {
+                                "status": "available",
+                                "planLabel": "Local Desktop",
+                                "windows": [],
+                                "balances": [],
+                                "details": [
+                                    { "id": "inputTokens", "label": "Input Tokens", "value": m.input_tokens.to_string() },
+                                    { "id": "outputTokens", "label": "Output Tokens", "value": m.output_tokens.to_string() },
+                                    { "id": "totalCost", "label": "Total Cost", "value": format!("${:.4}", m.total_cost_usd) }
+                                ]
+                            }
+                        }));
+                    }
+                }
+            }
+
+            let push_tx = get_provider_push_tx();
+            for report in &reports {
+                let update_msg = crate::kernel::protocol::wrap_session_outbound(serde_json::json!({
+                    "type": "usage.list_reports.update",
+                    "payload": {
+                        "requestId": request_id,
+                        "report": report
+                    }
+                }));
+                let _ = push_tx.send(update_msg.to_string());
+            }
+
+            serde_json::json!({
+                "type": "usage.list_reports.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "error": null
+                }
+            })
+        }
         "directory_suggestions_request" => {
             let payload = msg.get("payload");
             let query = msg
@@ -4662,54 +4836,85 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             if mode == "file" {
                 let target_rel = path_opt.unwrap_or("");
                 let full_path = cwd.join(target_rel);
-                match std::fs::read(&full_path) {
-                    Ok(bytes) => {
-                        let meta = std::fs::metadata(&full_path).ok();
-                        let size = bytes.len() as u64;
-                        let modified_at = meta
-                            .and_then(|m| m.modified().ok())
-                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map(|d| crate::agent::sessions::format_epoch_millis_iso(d.as_millis() as i64))
-                            .unwrap_or_else(crate::agent::types::now_iso);
-                        let (kind, encoding, content) = match std::str::from_utf8(&bytes) {
-                            Ok(s) => ("text", "utf-8", s.to_string()),
-                            Err(_) => ("binary", "base64", base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)),
-                        };
-                        let mime_type = if kind == "text" { "text/plain" } else { "application/octet-stream" };
-                        serde_json::json!({
-                            "type": "file_explorer_response",
-                            "payload": {
-                                "cwd": cwd_str,
+                let meta = std::fs::metadata(&full_path).ok();
+                let file_size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+                const MAX_EXPLORER_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB limit for explorer preview
+
+                if file_size > MAX_EXPLORER_FILE_SIZE {
+                    let modified_at = meta
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| crate::agent::sessions::format_epoch_millis_iso(d.as_millis() as i64))
+                        .unwrap_or_else(crate::agent::types::now_iso);
+                    serde_json::json!({
+                        "type": "file_explorer_response",
+                        "payload": {
+                            "cwd": cwd_str,
+                            "path": target_rel,
+                            "mode": "file",
+                            "directory": serde_json::Value::Null,
+                            "file": {
                                 "path": target_rel,
-                                "mode": "file",
-                                "directory": serde_json::Value::Null,
-                                "file": {
+                                "kind": "binary",
+                                "encoding": "none",
+                                "content": format!("[File exceeds maximum preview size of 10 MB (size: {} MB)]", file_size / (1024 * 1024)),
+                                "mimeType": "application/octet-stream",
+                                "size": file_size,
+                                "modifiedAt": modified_at
+                            },
+                            "error": serde_json::Value::Null,
+                            "requestId": request_id
+                        }
+                    })
+                } else {
+                    match std::fs::read(&full_path) {
+                        Ok(bytes) => {
+                            let size = bytes.len() as u64;
+                            let modified_at = meta
+                                .and_then(|m| m.modified().ok())
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map(|d| crate::agent::sessions::format_epoch_millis_iso(d.as_millis() as i64))
+                                .unwrap_or_else(crate::agent::types::now_iso);
+                            let (kind, encoding, content) = match std::str::from_utf8(&bytes) {
+                                Ok(s) => ("text", "utf-8", s.to_string()),
+                                Err(_) => ("binary", "base64", base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)),
+                            };
+                            let mime_type = if kind == "text" { "text/plain" } else { "application/octet-stream" };
+                            serde_json::json!({
+                                "type": "file_explorer_response",
+                                "payload": {
+                                    "cwd": cwd_str,
                                     "path": target_rel,
-                                    "kind": kind,
-                                    "encoding": encoding,
-                                    "content": content,
-                                    "mimeType": mime_type,
-                                    "size": size,
-                                    "modifiedAt": modified_at
-                                },
-                                "error": serde_json::Value::Null,
-                                "requestId": request_id
-                            }
-                        })
-                    }
-                    Err(err) => {
-                        serde_json::json!({
-                            "type": "file_explorer_response",
-                            "payload": {
-                                "cwd": cwd_str,
-                                "path": target_rel,
-                                "mode": "file",
-                                "directory": serde_json::Value::Null,
-                                "file": serde_json::Value::Null,
-                                "error": err.to_string(),
-                                "requestId": request_id
-                            }
-                        })
+                                    "mode": "file",
+                                    "directory": serde_json::Value::Null,
+                                    "file": {
+                                        "path": target_rel,
+                                        "kind": kind,
+                                        "encoding": encoding,
+                                        "content": content,
+                                        "mimeType": mime_type,
+                                        "size": size,
+                                        "modifiedAt": modified_at
+                                    },
+                                    "error": serde_json::Value::Null,
+                                    "requestId": request_id
+                                }
+                            })
+                        }
+                        Err(err) => {
+                            serde_json::json!({
+                                "type": "file_explorer_response",
+                                "payload": {
+                                    "cwd": cwd_str,
+                                    "path": target_rel,
+                                    "mode": "file",
+                                    "directory": serde_json::Value::Null,
+                                    "file": serde_json::Value::Null,
+                                    "error": err.to_string(),
+                                    "requestId": request_id
+                                }
+                            })
+                        }
                     }
                 }
             } else {
@@ -5283,8 +5488,20 @@ impl DaemonHandle {
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let (shutdown_tx, _) = broadcast::channel(16);
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        let listener = tokio::net::TcpListener::bind(addr).await?;
+        let listener = match tokio::net::TcpListener::bind(addr).await {
+            Ok(l) => l,
+            Err(e) if is_production || port == 6767 => {
+                eprintln!(
+                    "[kernel] Port {} unavailable ({}), falling back to OS ephemeral port",
+                    port,
+                    e
+                );
+                tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?
+            }
+            Err(e) => return Err(Box::new(e)),
+        };
         let actual_port = listener.local_addr()?.port();
+        crate::daemon::set_active_daemon_port(actual_port);
 
         #[cfg(test)]
         let auth_home = tempfile::tempdir()?;
@@ -5967,6 +6184,17 @@ pub(crate) fn get_provider_snapshot_metadata_entries() -> Vec<serde_json::Value>
             ],
             "models": []
         }),
+        serde_json::json!({
+            "provider": "lmstudio",
+            "status": "ready",
+            "enabled": true,
+            "source": "builtin",
+            "label": "LM Studio",
+            "description": "Local models via LM Studio local inference server",
+            "defaultModeId": null,
+            "modes": [],
+            "models": []
+        }),
     ]
 }
 
@@ -5983,6 +6211,7 @@ pub(crate) async fn get_provider_snapshot_entries(cwd: &str) -> Vec<serde_json::
         claude_models,
         opencode_models,
         ollama_models,
+        lmstudio_models,
         pi_models,
         omp_models,
         copilot_available,
@@ -5991,6 +6220,7 @@ pub(crate) async fn get_provider_snapshot_entries(cwd: &str) -> Vec<serde_json::
         discover_claude_configured_model(),
         discover_opencode_models(cwd),
         discover_ollama_models(),
+        discover_lmstudio_models(),
         discover_pi_models(cwd),
         discover_omp_models(cwd),
         discover_copilot_available()
@@ -6000,6 +6230,7 @@ pub(crate) async fn get_provider_snapshot_entries(cwd: &str) -> Vec<serde_json::
         ("claude", claude_models),
         ("opencode", opencode_models),
         ("ollama", ollama_models),
+        ("lmstudio", lmstudio_models),
         ("pi", pi_models),
         ("omp", omp_models),
     ];
@@ -6624,6 +6855,7 @@ async fn discover_opencode_models(cwd: &str) -> Vec<serde_json::Value> {
 
     // 1. Dynamic discovery via opencode CLI
     if let Some(binary) = crate::agent::registry::resolve_command("opencode") {
+        // Try `models --verbose` first for detailed JSON capabilities
         let mut cmd = tokio::process::Command::new(&binary);
         cmd.args(["models", "--verbose"])
             .current_dir(safe_cwd)
@@ -6637,6 +6869,27 @@ async fn discover_opencode_models(cwd: &str) -> Vec<serde_json::Value> {
             if out.status.success() {
                 let text = String::from_utf8_lossy(&out.stdout);
                 let models = opencode_models_from_cli_output(&text);
+                if !models.is_empty() {
+                    return models;
+                }
+            }
+        }
+
+        // Fallback: newer OpenCode CLI (e.g. v2.2+) lists available models via `opencode models`
+        let mut fallback_cmd = tokio::process::Command::new(&binary);
+        fallback_cmd
+            .args(["models"])
+            .current_dir(safe_cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        #[cfg(windows)]
+        fallback_cmd.creation_flags(0x08000000);
+
+        if let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(5), fallback_cmd.output()).await {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let models = opencode_models_from_plain_cli_output(&text);
                 if !models.is_empty() {
                     return models;
                 }
@@ -6722,7 +6975,12 @@ pub(crate) fn opencode_models_from_cli_output(text: &str) -> Vec<serde_json::Val
         let Some(Ok(details)) = stream.next() else {
             break;
         };
-        remaining = &remaining[start + stream.byte_offset()..];
+        let next_offset = start + stream.byte_offset();
+        if next_offset <= remaining.len() && remaining.is_char_boundary(next_offset) {
+            remaining = &remaining[next_offset..];
+        } else {
+            break;
+        }
         let Some(provider) = details
             .get("providerID")
             .and_then(serde_json::Value::as_str)
@@ -6734,6 +6992,40 @@ pub(crate) fn opencode_models_from_cli_output(text: &str) -> Vec<serde_json::Val
         };
         if let Some(model) = opencode_model_definition(provider, id, &details) {
             if seen.insert(model["id"].as_str().unwrap_or_default().to_owned()) {
+                models.push(model);
+            }
+        }
+    }
+    models
+}
+
+pub(crate) fn opencode_models_from_plain_cli_output(text: &str) -> Vec<serde_json::Value> {
+    let mut models = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("USAGE")
+            || trimmed.starts_with("DESCRIPTION")
+            || trimmed.starts_with("ARGUMENTS")
+            || trimmed.starts_with("FLAGS")
+            || trimmed.starts_with("GLOBAL FLAGS")
+            || trimmed.starts_with("ERROR")
+        {
+            continue;
+        }
+        if trimmed.contains('/') {
+            if seen.insert(trimmed.to_string()) {
+                let label = trimmed.rsplit('/').next().unwrap_or(trimmed);
+                let model = dynamic_model(
+                    "opencode",
+                    trimmed,
+                    Some(label),
+                    None,
+                    false,
+                    None,
+                );
                 models.push(model);
             }
         }
@@ -6805,6 +7097,51 @@ async fn discover_ollama_models() -> Vec<serde_json::Value> {
         Ok(value) => ollama_models_from_response(&value),
         Err(_) => Vec::new(),
     }
+}
+
+async fn discover_lmstudio_models() -> Vec<serde_json::Value> {
+    let endpoint = normalize_http_endpoint(
+        std::env::var("LMSTUDIO_HOST").unwrap_or_else(|_| "http://127.0.0.1:1234".to_owned()),
+    );
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return Vec::new(),
+    };
+    let response = match client.get(format!("{endpoint}/v1/models")).send().await {
+        Ok(response) if response.status().is_success() => response,
+        _ => return Vec::new(),
+    };
+    match response.json::<serde_json::Value>().await {
+        Ok(value) => lmstudio_models_from_response(&value),
+        Err(_) => Vec::new(),
+    }
+}
+
+pub(crate) fn lmstudio_models_from_response(response: &serde_json::Value) -> Vec<serde_json::Value> {
+    let mut seen = std::collections::HashSet::new();
+    response
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|model| {
+            let id = model.get("id")?.as_str()?;
+            if id.trim().is_empty() || !seen.insert(id) {
+                return None;
+            }
+            Some(dynamic_model(
+                "lmstudio",
+                &format!("lmstudio/{id}"),
+                Some(id),
+                Some("Local model served via LM Studio (127.0.0.1:1234)"),
+                false,
+                None,
+            ))
+        })
+        .collect()
 }
 
 pub(crate) fn ollama_models_from_response(response: &serde_json::Value) -> Vec<serde_json::Value> {

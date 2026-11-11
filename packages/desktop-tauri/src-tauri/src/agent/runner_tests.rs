@@ -143,7 +143,7 @@ fn cli_thinking_options_use_native_arguments_and_default_variant_is_omitted() {
     )
     .unwrap();
     assert!(args.iter().any(|arg| arg == "--thinking"));
-    assert!(args.iter().any(|arg| arg == "--pure"));
+    assert!(args.iter().any(|arg| arg == "--format"));
     assert!(!args.iter().any(|arg| arg == "--variant"));
     let low_args = provider_arguments(
         "opencode",

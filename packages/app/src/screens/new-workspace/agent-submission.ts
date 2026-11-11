@@ -145,6 +145,8 @@ export interface CreateChatAgentInput {
   };
 }
 
+export type { PendingWorkspaceDraftSetup };
+
 export function buildWorkspaceDraftSetupFromComposer(input: {
   cwd: string;
   provider: AgentProvider;
@@ -156,7 +158,7 @@ export function buildWorkspaceDraftSetupFromComposer(input: {
     modeId: input.composerState.effectiveModeId || null,
     model: input.composerState.effectiveModelId || null,
     thinkingOptionId: input.composerState.effectiveThinkingOptionId || null,
-    featureValues: input.composerState.featureValues ?? {},
+    providerOptions: input.composerState.providerOptions ?? {},
   };
 }
 
@@ -237,7 +239,6 @@ async function createWorkspaceChatAgent(input: CreateChatAgentInput): Promise<Su
       modeId: composerState.effectiveModeId || undefined,
       model: composerState.effectiveModelId || undefined,
       thinkingOptionId: composerState.effectiveThinkingOptionId || undefined,
-      featureValues: composerState.featureValues,
     },
     initialPrompt: text,
     clientMessageId: `${input.draftId}:initial-message`,
@@ -317,7 +318,6 @@ export function buildComposerConfig(input: {
   return {
     initialServerId: serverId || null,
     initialValues: buildComposerInitialValues({ initialSetup }),
-    initialFeatureValues: initialSetup?.featureValues,
     isVisible: true,
     lockedWorkingDir: workingDir,
   };
@@ -341,7 +341,6 @@ export interface WorkspaceDraftSubmissionConfig {
   modeId: string | null;
   model: string | null;
   thinkingOptionId: string | null;
-  featureValues: Record<string, unknown> | undefined;
   target: WorkspaceTabTarget;
 }
 
@@ -360,7 +359,6 @@ export function resolveWorkspaceDraftSubmissionConfig(input: {
       modeId: initialSetup.modeId,
       model: initialSetup.model,
       thinkingOptionId: initialSetup.thinkingOptionId,
-      featureValues: initialSetup.featureValues,
       target: { kind: "draft", draftId, setup: initialSetup },
     };
   }
@@ -370,7 +368,6 @@ export function resolveWorkspaceDraftSubmissionConfig(input: {
     modeId: composerState.effectiveModeId || null,
     model: composerState.effectiveModelId || null,
     thinkingOptionId: composerState.effectiveThinkingOptionId || null,
-    featureValues: composerState.featureValues,
     target: { kind: "draft", draftId },
   };
 }
@@ -451,7 +448,6 @@ export function submitWorkspaceDraft(input: SubmitDraftInput): SubmitOutcome {
     ...(submission.modeId ? { modeId: submission.modeId } : {}),
     ...(submission.model ? { model: submission.model } : {}),
     ...(submission.thinkingOptionId ? { thinkingOptionId: submission.thinkingOptionId } : {}),
-    ...(submission.featureValues ? { featureValues: submission.featureValues } : {}),
     allowEmptyText: true,
     agentCreation: input.agentCreation,
   });

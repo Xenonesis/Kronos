@@ -13,8 +13,13 @@ export function getHostPickerLabel(
   if (config?.includeAddHost && value === ADD_HOST_OPTION_ID) {
     return "Add host";
   }
-  return (
-    hosts.find((host) => host.serverId === value)?.label ??
-    (config?.includeAllHost ? "All hosts" : "Host")
-  );
+  const host = hosts.find((h) => h.serverId === value);
+  if (host) {
+    const lower = host.label.toLowerCase();
+    if (lower === "localhost" || lower === "127.0.0.1") {
+      return "Local (This Device)";
+    }
+    return host.label;
+  }
+  return config?.includeAllHost ? "All hosts" : "Host";
 }

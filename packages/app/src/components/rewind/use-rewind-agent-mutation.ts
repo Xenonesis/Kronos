@@ -9,6 +9,7 @@ import { useRewindComposerRestore } from "./composer-restore";
 import { useSessionStore } from "@/stores/session-store";
 import { shouldRestoreComposerForRewindMode } from "./rewind-mode";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
+import { restoreTurnCheckpoint } from "@/desktop/native-desktop-bridge";
 
 interface UseRewindAgentMutationInput {
   serverId?: string;
@@ -35,6 +36,13 @@ export function useRewindAgentMutation(input: UseRewindAgentMutationInput): {
         throw new Error(t("common.errors.daemonClientUnavailable"));
       }
       await input.client.rewindAgent(input.agentId, input.messageId, mode);
+      if (mode === "both") {
+        try {
+          await restoreTurnCheckpoint(".", input.messageId);
+        } catch {
+          // Checkpoint restore fallback
+        }
+      }
       if (mode !== "files") {
         const cursor = input.serverId
           ? useSessionStore

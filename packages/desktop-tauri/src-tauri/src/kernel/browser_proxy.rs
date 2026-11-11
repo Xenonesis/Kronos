@@ -295,53 +295,87 @@ pub fn sanitize_proxy_headers(raw_headers: &reqwest::header::HeaderMap) -> Heade
     clean
 }
 
+pub fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let needle_bytes = needle.as_bytes();
+    let haystack_bytes = haystack.as_bytes();
+    if needle_bytes.len() > haystack_bytes.len() {
+        return None;
+    }
+    for i in 0..=(haystack_bytes.len() - needle_bytes.len()) {
+        if haystack.is_char_boundary(i)
+            && haystack_bytes[i..i + needle_bytes.len()].eq_ignore_ascii_case(needle_bytes)
+        {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn strip_x_frame_options_meta(haystack: &str) -> String {
+    let mut out = String::with_capacity(haystack.len());
+    let mut cur = 0;
+
+    while cur < haystack.len() {
+        if !haystack.is_char_boundary(cur) {
+            cur += 1;
+            continue;
+        }
+
+        let slice = &haystack[cur..];
+        if let Some(pos) = find_ascii_case_insensitive(slice, "<meta") {
+            let tag_start = cur + pos;
+            if let Some(gt_rel) = haystack[tag_start..].find('>') {
+                let tag_end = tag_start + gt_rel + 1;
+                let tag_content = &haystack[tag_start..tag_end];
+                let is_x_frame_options = tag_content
+                    .as_bytes()
+                    .windows("x-frame-options".len())
+                    .any(|w| w.eq_ignore_ascii_case(b"x-frame-options"));
+
+                if is_x_frame_options {
+                    out.push_str(&haystack[cur..tag_start]);
+                    cur = tag_end;
+                    continue;
+                }
+            }
+
+            let next_cur = (tag_start + 5).min(haystack.len());
+            let mut safe_next = next_cur;
+            while safe_next < haystack.len() && !haystack.is_char_boundary(safe_next) {
+                safe_next += 1;
+            }
+            out.push_str(&haystack[cur..safe_next]);
+            cur = safe_next;
+        } else {
+            out.push_str(&haystack[cur..]);
+            break;
+        }
+    }
+
+    out
+}
+
 pub fn inject_base_tag_into_html(html: &str, target_url: &str) -> String {
     let base_tag = format!("\n<base href=\"{target_url}\">");
+    let re_meta = strip_x_frame_options_meta(html);
 
-    // Strip meta frame-busting tags
-    let re_meta = regex_lite_case_insensitive_replace(
-        html,
-        "<meta[^>]+http-equiv=[\"']X-Frame-Options[\"'][^>]*>",
-        "",
-    );
-
-    // Inject <base href="..."> into <head>
-    if let Some(pos) = re_meta.to_lowercase().find("<head") {
+    if let Some(pos) = find_ascii_case_insensitive(&re_meta, "<head") {
         if let Some(close_pos) = re_meta[pos..].find('>') {
             let insert_idx = pos + close_pos + 1;
-            let mut res = String::with_capacity(re_meta.len() + base_tag.len() + 1);
-            res.push_str(&re_meta[..insert_idx]);
-            res.push_str(&base_tag);
-            res.push_str(&re_meta[insert_idx..]);
-            return res;
+            if re_meta.is_char_boundary(insert_idx) {
+                let mut res = String::with_capacity(re_meta.len() + base_tag.len() + 1);
+                res.push_str(&re_meta[..insert_idx]);
+                res.push_str(&base_tag);
+                res.push_str(&re_meta[insert_idx..]);
+                return res;
+            }
         }
     }
 
     format!("{base_tag}\n{re_meta}")
-}
-
-fn regex_lite_case_insensitive_replace(haystack: &str, _pat_desc: &str, _rep: &str) -> String {
-    // Basic meta tag frame-busting stripper
-    let lower = haystack.to_lowercase();
-    let mut out = String::with_capacity(haystack.len());
-    let mut cur = 0;
-
-    while let Some(pos) = lower[cur..].find("<meta") {
-        let tag_start = cur + pos;
-        if let Some(tag_end_offset) = lower[tag_start..].find('>') {
-            let tag_end = tag_start + tag_end_offset + 1;
-            let tag_slice = &lower[tag_start..tag_end];
-            if tag_slice.contains("x-frame-options") {
-                out.push_str(&haystack[cur..tag_start]);
-                cur = tag_end;
-                continue;
-            }
-        }
-        out.push_str(&haystack[cur..=tag_start]);
-        cur = tag_start + 1;
-    }
-    out.push_str(&haystack[cur..]);
-    out
 }
 
 #[derive(Deserialize)]
@@ -539,7 +573,7 @@ mod tests {
     fn navigation_capability_cannot_authorize_another_url() {
         let issued = issue_navigation_url("https://example.test/page").unwrap();
         assert!(has_navigation_ticket(&issued.parse().unwrap()));
-        let changed = issued.replace("example.test", "attacker.test");
+        let changed = issued.replace("example", "attacker");
         assert!(!has_navigation_ticket(&changed.parse().unwrap()));
         assert!(!has_navigation_ticket(
             &"/api/browser-proxy?url=https%3A%2F%2Fexample.test%2Fpage"
@@ -565,6 +599,18 @@ mod tests {
         let target = "https://example.com/";
         let injected = inject_base_tag_into_html(html, target);
         assert!(injected.contains("<base href=\"https://example.com/\">"));
+    }
+
+    #[test]
+    fn test_inject_base_tag_multibyte_unicode_safety() {
+        // Multi-byte characters (Hindi, emojis, Greek, Cyrillic) combined with meta frame-busting tags
+        let html = "<html><head><meta http-equiv=\"X-Frame-Options\" content=\"DENY\"><title>नमस्ते 🚀 Welt Straße</title></head><body>परीक्षण 🌟</body></html>";
+        let target = "https://example.com/unicode";
+        let injected = inject_base_tag_into_html(html, target);
+        assert!(injected.contains("<base href=\"https://example.com/unicode\">"));
+        assert!(!injected.to_lowercase().contains("x-frame-options"));
+        assert!(injected.contains("नमस्ते"));
+        assert!(injected.contains("परीक्षण 🌟"));
     }
 
     #[test]

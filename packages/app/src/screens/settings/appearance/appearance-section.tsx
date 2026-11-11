@@ -22,7 +22,7 @@ import { isNative } from "@/constants/platform";
 import { settingsStyles } from "@/styles/settings";
 import { AppearancePreview } from "./appearance-preview";
 import type { PluginThemeOption } from "@/plugins/themes";
-import type { SyntaxThemeId } from "@getpaseo/highlight";
+import type { SyntaxThemeId } from "@getpaseo/highlight/themes";
 import { ThemeRow, type BuiltInThemePreference } from "./theme-row";
 import { FontFamilyRow, FontSizeRow } from "./typography-rows";
 import { ContentWidthRow } from "./content-width-row";

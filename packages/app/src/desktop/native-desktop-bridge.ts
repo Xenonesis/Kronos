@@ -52,3 +52,94 @@ export async function onQuickToggle(
 ): Promise<DesktopEventUnlisten> {
   return listenToDesktopEvent<QuickTogglePayload>("kronos://quick-toggle", callback);
 }
+
+export interface WorkspaceSearchResult {
+  path: string;
+  score: number;
+}
+
+/**
+ * Searches files in workspace using Tantivy in-memory lexical search engine.
+ */
+export async function searchWorkspaceFiles(
+  query: string,
+  root?: string,
+  limit: number = 20,
+): Promise<WorkspaceSearchResult[]> {
+  const host = getDesktopHost();
+  if (!host?.invoke) {
+    return [];
+  }
+  try {
+    return await invokeDesktopCommand<WorkspaceSearchResult[]>("workspace_search", {
+      query,
+      root: root ?? ".",
+      limit,
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Applies or discards a specific diff hunk to a file on disk.
+ */
+export async function applyDiffHunk(
+  filePath: string,
+  hunk: unknown,
+  reverse: boolean = false,
+): Promise<string | null> {
+  const host = getDesktopHost();
+  if (!host?.invoke) {
+    return null;
+  }
+  try {
+    return await invokeDesktopCommand<string>("apply_diff_hunk", {
+      filePath,
+      hunk,
+      reverse,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Creates a shadow git checkpoint before agent turns modify files.
+ */
+export async function createTurnCheckpoint(
+  repoPath: string,
+  turnId: string,
+): Promise<string | null> {
+  const host = getDesktopHost();
+  if (!host?.invoke) {
+    return null;
+  }
+  try {
+    return await invokeDesktopCommand<string>("create_turn_checkpoint", {
+      repoPath,
+      turnId,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Restores workspace state to a prior turn checkpoint.
+ */
+export async function restoreTurnCheckpoint(repoPath: string, turnId: string): Promise<boolean> {
+  const host = getDesktopHost();
+  if (!host?.invoke) {
+    return false;
+  }
+  try {
+    await invokeDesktopCommand("restore_turn_checkpoint", {
+      repoPath,
+      turnId,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}

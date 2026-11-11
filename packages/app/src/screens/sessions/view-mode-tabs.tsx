@@ -25,7 +25,7 @@ export function SessionViewModeTabs({
     <View style={styles.viewModeTabs}>
       <Button
         variant={activeViewMode === "indexed" ? "secondary" : "ghost"}
-        size="xs"
+        size="sm"
         leftIcon={Sparkles}
         onPress={handleSelectIndexed}
       >
@@ -33,7 +33,7 @@ export function SessionViewModeTabs({
       </Button>
       <Button
         variant={activeViewMode === "kronos" ? "secondary" : "ghost"}
-        size="xs"
+        size="sm"
         leftIcon={Layers}
         onPress={handleSelectKronos}
       >
@@ -41,7 +41,7 @@ export function SessionViewModeTabs({
       </Button>
       <Button
         variant={activeViewMode === "omp" ? "secondary" : "ghost"}
-        size="xs"
+        size="sm"
         leftIcon={Bot}
         onPress={handleSelectOmp}
       >

@@ -93,6 +93,28 @@ impl ProviderRegistry {
             },
         );
 
+        // 8. Ollama
+        map.insert(
+            "ollama".to_string(),
+            ProviderDescriptor {
+                id: "ollama".to_string(),
+                label: "Ollama (Local)".to_string(),
+                description: "Local open-weights LLMs via Ollama daemon (127.0.0.1:11434)".to_string(),
+                is_installed: is_command_available("ollama"),
+            },
+        );
+
+        // 9. LM Studio
+        map.insert(
+            "lmstudio".to_string(),
+            ProviderDescriptor {
+                id: "lmstudio".to_string(),
+                label: "LM Studio (Local)".to_string(),
+                description: "Local GGUF models via LM Studio local inference server (127.0.0.1:1234)".to_string(),
+                is_installed: true,
+            },
+        );
+
         Self {
             providers: Arc::new(RwLock::new(map)),
         }
@@ -172,7 +194,11 @@ pub fn is_command_available(cmd: &str) -> bool {
 
 pub fn resolve_provider_for_model(model: &str) -> Option<&'static str> {
     let lower = model.to_lowercase();
-    if lower.starts_with("opencode/") || lower.starts_with("omniroute/") {
+    if lower.starts_with("ollama/") {
+        Some("ollama")
+    } else if lower.starts_with("lmstudio/") {
+        Some("lmstudio")
+    } else if lower.starts_with("opencode/") || lower.starts_with("omniroute/") {
         Some("opencode")
     } else if lower.starts_with("gpt-") || lower.starts_with("codex") {
         Some("codex")

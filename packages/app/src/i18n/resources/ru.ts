@@ -2867,6 +2867,7 @@ export const ru: TranslationResources = {
         unsupported: "Обновите этот хост, чтобы управлять навыками оркестрации",
         updateAvailable: "Доступно обновление",
         updateTitle: "Обновить навыки Paseo?",
+        updateFallback: "Синхронизировать встроенные навыки с этим хостом.",
         uninstallTitle: "Удалить навыки Paseo?",
         uninstallMessage:
           "Удаляет все навыки оркестрации Paseo из ~/.agents, ~/.claude и ~/.codex на этом хосте.",

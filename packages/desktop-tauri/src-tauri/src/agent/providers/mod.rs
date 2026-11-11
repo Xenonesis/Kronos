@@ -5,3 +5,5 @@ pub mod pi;
 pub mod omp;
 pub mod plugins;
 pub mod claude;
+pub mod ollama;
+pub mod lmstudio;

@@ -252,3 +252,35 @@ function insertNonConflicting(list: TerminalParsedLink[], newItems: TerminalPars
   }
   list.sort((left, right) => left.path.index - right.path.index);
 }
+
+const LOCAL_DEV_SERVER_PORT_REGEX =
+  /(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|\[::1\]):(?<port>\d{2,5})(?<pathname>\/[^\s'")>]*)?/gi;
+
+export interface DetectedDevServer {
+  url: string;
+  port: number;
+}
+
+/**
+ * Scans terminal lines for localhost dev servers (e.g. Vite, Next.js, Express, Metro, Webpack).
+ */
+export function detectDevServerUrls(text: string): DetectedDevServer[] {
+  const matches: DetectedDevServer[] = [];
+  const regex = new RegExp(LOCAL_DEV_SERVER_PORT_REGEX);
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    const rawPort = match.groups?.port;
+    if (!rawPort) continue;
+    const port = parseInt(rawPort, 10);
+    if (port > 0 && port <= 65535) {
+      const pathname = match.groups?.pathname ?? "";
+      const rawMatch = match[0];
+      const protocol = rawMatch.startsWith("https://") ? "https://" : "http://";
+      matches.push({
+        url: `${protocol}localhost:${port}${pathname}`,
+        port,
+      });
+    }
+  }
+  return matches;
+}

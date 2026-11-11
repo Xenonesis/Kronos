@@ -929,10 +929,7 @@ export const useSessionStore = create<SessionStore>()(
 
       updateSessionServerInfo: (serverId, info) => {
         set((prev) => {
-          const session = prev.sessions[serverId];
-          if (!session) {
-            return prev;
-          }
+          const session = prev.sessions[serverId] ?? createInitialSessionState(serverId, null, 0);
 
           const nextHostname = info.hostname?.trim() || null;
           const nextVersion = info.version?.trim() || null;
@@ -941,6 +938,7 @@ export const useSessionStore = create<SessionStore>()(
           const nextFeatures = info.features;
 
           if (
+            prev.sessions[serverId] &&
             isSessionServerInfoUnchanged({
               currentServerInfo: session.serverInfo,
               nextHostname,

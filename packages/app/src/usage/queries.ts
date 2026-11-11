@@ -120,8 +120,18 @@ async function getReport(
   );
 }
 
-function supportsUsage(session: SessionState | undefined): boolean {
-  return supportsUsageReports(session?.serverInfo?.features);
+function supportsUsage(session: SessionState | undefined, serverId?: string): boolean {
+  if (supportsUsageReports(session?.serverInfo?.features)) {
+    return true;
+  }
+  if (serverId) {
+    const client = getHostRuntimeStore().getClient(serverId);
+    const features = client?.getLastServerInfoMessage()?.features;
+    if (supportsUsageReports(features)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function refreshReports(queryClient: QueryClient, serverId: string): Promise<void> {
@@ -145,7 +155,7 @@ export function useHostUsage(serverId: string): { view: UsageView; refresh: () =
   const setting = useUsageSetting(serverId);
   const queryClient = useQueryClient();
   const isConnected = useHostRuntimeIsConnected(serverId);
-  const isSupported = useSessionStore((state) => supportsUsage(state.sessions[serverId]));
+  const isSupported = useSessionStore((state) => supportsUsage(state.sessions[serverId], serverId));
   const query = useFetchQuery({
     queryKey: usageReportsQueryKey(serverId),
     queryFn: () => listReports(queryClient, serverId),
@@ -229,7 +239,7 @@ export function useAgentUsage(serverId: string, agentId: string): AgentUsageView
 /** Whether a host is connected and reports usage, read without fetching anything. */
 export function useHostReportsUsage(serverId: string): boolean {
   const isConnected = useHostRuntimeIsConnected(serverId);
-  const isSupported = useSessionStore((state) => supportsUsage(state.sessions[serverId]));
+  const isSupported = useSessionStore((state) => supportsUsage(state.sessions[serverId], serverId));
   const setting = useUsageSetting(serverId);
   return isConnected && isSupported && setting.enabled;
 }
@@ -240,7 +250,9 @@ export function useUsageHosts(): UsageHost[] {
   const serverIds = useMemo(() => hosts.map((host) => host.serverId), [hosts]);
   const connectionStatuses = useHostRuntimeConnectionStatuses(serverIds);
   const supportedServerIds = useSessionStore(
-    useShallow((state) => serverIds.filter((serverId) => supportsUsage(state.sessions[serverId]))),
+    useShallow((state) =>
+      serverIds.filter((serverId) => supportsUsage(state.sessions[serverId], serverId)),
+    ),
   );
   return useMemo(
     () =>

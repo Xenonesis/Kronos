@@ -2,7 +2,9 @@ use crate::agent::manager::ReservedTurn;
 use crate::agent::registry::resolve_command;
 #[cfg(test)]
 use crate::agent::types::AgentStatus;
-use crate::kernel::server::{agent_record_to_snapshot, get_agent_manager, get_provider_push_tx};
+use crate::kernel::server::{
+    agent_record_to_snapshot, get_agent_manager, get_plugin_manager, get_provider_push_tx,
+};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -448,12 +450,10 @@ fn provider_arguments(
         "omp" | "pi" => vec!["--mode".into(), "json".into(), "-p".into()],
         "opencode" => vec![
             "run".into(),
-            "--pure".into(),
+            "--auto".into(),
             "--format".into(),
             "json".into(),
             "--thinking".into(),
-            "--dir".into(),
-            cwd.to_string_lossy().into_owned(),
         ],
         "codex" if handle.is_some() => vec!["exec".into(), "resume".into(), "--json".into()],
         "codex" => vec![
@@ -587,10 +587,24 @@ fn observed_provider_handle<'a>(provider: &str, event: &'a Value) -> Option<&'a 
         "opencode"
             if matches!(
                 kind,
-                "step_start" | "step_finish" | "text" | "reasoning" | "tool_use" | "error"
+                "session"
+                    | "session_start"
+                    | "message"
+                    | "step_start"
+                    | "step_finish"
+                    | "text"
+                    | "reasoning"
+                    | "tool_use"
+                    | "error"
             ) =>
         {
-            event["sessionID"].as_str()
+            event["sessionID"]
+                .as_str()
+                .or_else(|| event["sessionId"].as_str())
+                .or_else(|| event["session_id"].as_str())
+                .or_else(|| event["id"].as_str())
+                .or_else(|| event["part"]["sessionID"].as_str())
+                .or_else(|| event["part"]["sessionId"].as_str())
         }
         _ => None,
     }?;
@@ -606,9 +620,10 @@ fn ingest_provider_event(
 ) -> Result<(), String> {
     if let Some(observed) = observed_provider_handle(provider, event) {
         if handle.as_deref().is_some_and(|saved| saved != observed) {
-            return Err("Provider returned a different session identity during resume".into());
-        }
-        if handle.is_none() {
+            eprintln!("[Runner] Provider {provider} session handle updated: was {:?}, now {}", handle.as_deref(), observed);
+            let _ = turn.persist_provider_handle(observed);
+            *handle = Some(observed.to_owned());
+        } else if handle.is_none() {
             turn.persist_provider_handle(observed)?;
             *handle = Some(observed.to_owned());
         }
@@ -720,6 +735,10 @@ async fn run_reserved_turn(mut turn: ReservedTurn, command: Option<Command>) {
             agent.last_usage = Some(usage.clone());
             let _ = manager.storage().save_record(agent);
         }
+        let inp = usage.get("inputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let out = usage.get("outputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let cost = usage.get("totalCostUsd").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        get_plugin_manager().record_tokens(&provider, inp, out, cost);
     }
 
     let terminal_event = if turn.is_cancelled() && cleanup_confirmed {
@@ -920,11 +939,12 @@ async fn execute_provider_turn(
             },
             status = child.wait(), if exited.is_none() => {
                 match status {
-                    Ok(status) => exited = Some(status),
+                    Ok(status) => {
+                        exited = Some(status);
+                        break;
+                    }
                     Err(error) => { output.error = Some(format!("Failed waiting for {provider}: {error}")); break; }
                 }
-                // Leader exit must terminate descendants even if they still hold stdout/stderr.
-                break;
             }
             _ = session_poll.tick(), if handle.is_none() && matches!(provider, "omp" | "pi") => {
                 match isolated_session_file(&session_dir) {
@@ -946,7 +966,7 @@ async fn execute_provider_turn(
     }
     // Drain bytes already buffered before cancellation, but never wait on inherited pipe handles.
     if !stdout_closed {
-        let drain = tokio::time::timeout(Duration::from_millis(500), async {
+        let drain = tokio::time::timeout(Duration::from_millis(1500), async {
             while let Ok(Some(line)) = reader.next_line().await {
                 if let Ok(event) = serde_json::from_str::<Value>(&line) {
                     if let Err(error) =
@@ -959,7 +979,7 @@ async fn execute_provider_turn(
             }
         })
         .await;
-        if drain.is_err() && output.error.is_none() && !turn.is_cancelled() {
+        if drain.is_err() && output.error.is_none() && !turn.is_cancelled() && output.rows.is_empty() {
             output.error = Some("Provider stdout did not close after process-tree cleanup".into());
         }
     }

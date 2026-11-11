@@ -23,7 +23,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TrailingActionScrim } from "@/components/ui/trailing-action-scrim";
 import { useFilePanelOpenWithMenu } from "@/file-panels";
-import { buttonControlHeight } from "@/components/ui/control-geometry";
+import { TOOLBAR_CONTROL_HEIGHT } from "@/components/ui/control-geometry";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { isNative, isWeb } from "@/constants/platform";
 import type { DraggableListDragHandleProps } from "@/components/draggable-list.types";
@@ -606,7 +606,7 @@ export function WorkspaceDesktopTabPresentationCommit({
 
 const styles = StyleSheet.create((theme) => ({
   tab: {
-    height: buttonControlHeight.xs,
+    height: TOOLBAR_CONTROL_HEIGHT,
     paddingHorizontal: TAB_CHIP_HORIZONTAL_PADDING,
     borderRadius: theme.borderRadius.md,
     flexDirection: "row",

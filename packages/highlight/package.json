@@ -16,6 +16,21 @@
       "types": "./dist/index.d.ts",
       "source": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./colors": {
+      "types": "./dist/colors.d.ts",
+      "source": "./src/colors.ts",
+      "default": "./dist/colors.js"
+    },
+    "./themes": {
+      "types": "./dist/themes.d.ts",
+      "source": "./src/themes.ts",
+      "default": "./dist/themes.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "source": "./src/types.ts",
+      "default": "./dist/types.js"
     }
   },
   "publishConfig": {

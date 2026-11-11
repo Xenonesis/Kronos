@@ -139,7 +139,10 @@ pub fn build_server_info_payload() -> Value {
             "kernelIoRing": true,
             "kernelShm": true,
             "kernelSpeech": true,
-            "agentHistorySearch": true
+            "agentHistorySearch": true,
+            "providerUsageList": true,
+            "usageSources": true,
+            "usageSetting": true
         }
     })
 }

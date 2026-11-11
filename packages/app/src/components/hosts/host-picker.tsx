@@ -44,12 +44,21 @@ function formatConnectionEndpoint(endpoint: string): string {
 }
 
 // Socket/pipe transports have no host:port — their endpoint is a filesystem
-// path, so they read as "Local". TCP and relay show the address being used.
+// path, so they read as "Local (This Device)". Local loopback also reads as
+// "Local (This Device)". Remote TCP and relay show the address being used.
 function formatActiveConnectionLabel(connection: ActiveConnection): string {
   if (connection.type === "directSocket" || connection.type === "directPipe") {
-    return "Local";
+    return "Local (This Device)";
   }
-  return formatConnectionEndpoint(connection.endpoint);
+  const endpoint = formatConnectionEndpoint(connection.endpoint);
+  if (
+    endpoint.startsWith("127.0.0.1") ||
+    endpoint.startsWith("localhost") ||
+    endpoint === "[::1]"
+  ) {
+    return "Local (This Device)";
+  }
+  return endpoint;
 }
 
 export interface HostPickerOptionProps {
@@ -107,10 +116,16 @@ export function HostPickerOption({
     theme.iconSize.sm,
   ]);
 
+  const lower = label.toLowerCase();
+  const displayLabel =
+    lower === "localhost" || lower === "127.0.0.1" ? "Local (This Device)" : label;
+  const showDescription =
+    connectionLabel && connectionLabel.toLowerCase() !== displayLabel.toLowerCase();
+
   return (
     <ComboboxItem
-      label={label}
-      description={connectionLabel}
+      label={displayLabel}
+      description={showDescription ? connectionLabel : undefined}
       leadingSlot={leadingSlot}
       trailingSlot={trailingSlot}
       selected={selected}

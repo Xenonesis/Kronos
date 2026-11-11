@@ -29,18 +29,33 @@ fn get_or_init_runtime() -> &'static tokio::runtime::Runtime {
     &RUNTIME
 }
 
+static ACTIVE_DAEMON_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(6767);
+
+pub fn set_active_daemon_port(port: u16) {
+    ACTIVE_DAEMON_PORT.store(port, Ordering::SeqCst);
+}
+
+pub fn get_active_daemon_port() -> u16 {
+    ACTIVE_DAEMON_PORT.load(Ordering::SeqCst)
+}
+
 pub fn wait_for_daemon_health(max_attempts: usize) -> bool {
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::time::Duration;
 
+    let port = get_active_daemon_port();
+    let addr_str = format!("127.0.0.1:{}", port);
+
     for _ in 0..max_attempts {
-        if let Ok(mut stream) = TcpStream::connect("127.0.0.1:6767") {
+        if let Ok(mut stream) = TcpStream::connect(&addr_str) {
             let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
             let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
-            let req =
-                b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:6767\r\nConnection: close\r\n\r\n";
-            if stream.write_all(req).is_ok() {
+            let req = format!(
+                "GET /api/health HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                addr_str
+            );
+            if stream.write_all(req.as_bytes()).is_ok() {
                 let mut response = Vec::new();
                 if stream.take(64 * 1024).read_to_end(&mut response).is_ok()
                     && (response.starts_with(b"HTTP/1.1 200")
