@@ -28,6 +28,7 @@ pub mod relay_crypto;
 pub mod watchdog;
 pub mod repo_map;
 pub mod tunnel;
+pub mod workspace_tools;
 
 #[cfg(test)]
 mod protocol_test;

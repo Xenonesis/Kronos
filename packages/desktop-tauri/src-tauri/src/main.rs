@@ -482,6 +482,101 @@ async fn restore_turn_checkpoint(repo_path: String, turn_id: String) -> Result<(
 }
 
 #[tauri::command]
+async fn list_turn_checkpoints(
+    repo_path: String,
+) -> Result<Vec<crate::kernel::git::CheckpointInfo>, String> {
+    crate::kernel::git::GitEngine::list_checkpoints(std::path::Path::new(&repo_path)).await
+}
+
+#[tauri::command]
+async fn get_workspace_git_diff_files(
+    repo_path: String,
+) -> Result<Vec<crate::kernel::git::WorkspaceDiffFile>, String> {
+    crate::kernel::git::GitEngine::list_diff_files(std::path::Path::new(&repo_path)).await
+}
+
+#[tauri::command]
+async fn revert_workspace_files(repo_path: String, paths: Vec<String>) -> Result<usize, String> {
+    crate::kernel::git::GitEngine::revert_files(std::path::Path::new(&repo_path), &paths).await
+}
+
+#[tauri::command]
+async fn suggest_semantic_commit(
+    repo_path: String,
+) -> Result<crate::kernel::git::SemanticCommitSuggestion, String> {
+    crate::kernel::git::GitEngine::suggest_semantic_commit(std::path::Path::new(&repo_path)).await
+}
+
+#[tauri::command]
+async fn execute_semantic_commit(repo_path: String, message: String) -> Result<String, String> {
+    let repo = std::path::Path::new(&repo_path);
+    let _ = crate::kernel::git::GitEngine::git_exec(repo, &["add", "-A"]).await?;
+    crate::kernel::git::GitEngine::commit(repo, message.trim()).await
+}
+
+#[tauri::command]
+async fn mcp_list_tools() -> Result<Vec<crate::kernel::mcp::McpToolDefinition>, String> {
+    Ok(crate::kernel::server::get_mcp_hub().list_tools())
+}
+
+#[tauri::command]
+async fn mcp_call_tool(tool_name: String, args: serde_json::Value) -> Result<String, String> {
+    crate::kernel::server::get_mcp_hub().call_tool(&tool_name, args)
+}
+
+#[tauri::command]
+async fn scan_kronos_workspace_docs(
+    cwd: String,
+) -> Result<Vec<crate::kernel::workspace_tools::KronosWorkspaceDoc>, String> {
+    Ok(crate::kernel::workspace_tools::scan_kronos_docs(
+        std::path::Path::new(&cwd),
+    ))
+}
+
+#[tauri::command]
+async fn save_kronos_workspace_doc(
+    cwd: String,
+    relative_path: String,
+    content: String,
+) -> Result<String, String> {
+    crate::kernel::workspace_tools::save_kronos_doc(
+        std::path::Path::new(&cwd),
+        &relative_path,
+        &content,
+    )
+}
+
+#[tauri::command]
+async fn get_dependency_graph(
+    cwd: String,
+) -> Result<crate::kernel::repo_map::DependencyGraphResult, String> {
+    crate::kernel::repo_map::generate_dependency_graph(std::path::Path::new(&cwd))
+        .ok_or_else(|| "No source dependencies found in workspace".to_string())
+}
+
+#[tauri::command]
+async fn discover_workspace_databases(cwd: String) -> Result<Vec<String>, String> {
+    Ok(crate::kernel::workspace_tools::discover_databases(
+        std::path::Path::new(&cwd),
+    ))
+}
+
+#[tauri::command]
+async fn execute_sqlite_query(
+    cwd: String,
+    db_path: String,
+    sql: String,
+    read_only: bool,
+) -> Result<crate::kernel::workspace_tools::DatabaseQueryResult, String> {
+    let resolved = if std::path::Path::new(&db_path).is_absolute() {
+        std::path::PathBuf::from(&db_path)
+    } else {
+        std::path::Path::new(&cwd).join(&db_path)
+    };
+    crate::kernel::workspace_tools::run_sqlite_query(&resolved, &sql, read_only).await
+}
+
+#[tauri::command]
 async fn watch_directory(path: String, ignore: Option<Vec<String>>) -> Result<String, String> {
     let engine = crate::kernel::server::get_watcher_engine();
     let ignore_patterns = ignore.unwrap_or_default();
@@ -2256,7 +2351,19 @@ try {{
             discover_local_ai_providers,
             web_search_query,
             web_scrape_url,
-            get_repo_map
+            get_repo_map,
+            list_turn_checkpoints,
+            get_workspace_git_diff_files,
+            revert_workspace_files,
+            suggest_semantic_commit,
+            execute_semantic_commit,
+            mcp_list_tools,
+            mcp_call_tool,
+            scan_kronos_workspace_docs,
+            save_kronos_workspace_doc,
+            get_dependency_graph,
+            discover_workspace_databases,
+            execute_sqlite_query
         ])
         .setup(move |app| {
             crate::kernel::watchdog::start_watchdog(app.handle().clone());

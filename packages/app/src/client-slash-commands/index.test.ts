@@ -76,6 +76,17 @@ describe("resolveClientSlashCommand", () => {
       ["yolo", ["danger", "auto-approve", "permissions"], "immediate"],
       ["voice", ["dictate", "speak", "mic"], "immediate"],
       ["swarm", ["subagent", "delegate", "spawn-agent"], "immediate"],
+      ["review", ["diff-review", "review-all"], "immediate"],
+      ["rewind", ["checkpoint", "rollback", "undo-turn"], "immediate"],
+      ["commit", ["git-commit", "conventional-commit"], "immediate"],
+      ["cost", ["budget", "usage", "tokens"], "immediate"],
+      ["mcp", ["mcp-tools", "tools"], "immediate"],
+      ["notepad", ["notes", "scratchpad"], "immediate"],
+      ["playbook", ["playbooks", "lessons"], "immediate"],
+      ["workflows", ["custom-commands", "prompts"], "immediate"],
+      ["diagram", ["arch", "dependencies", "dep-graph"], "immediate"],
+      ["db", ["sql", "sqlite", "database"], "immediate"],
+      ["compare", ["arena", "ab-test"], "immediate"],
     ]);
   });
 

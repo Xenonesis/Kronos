@@ -20,7 +20,18 @@ export type ClientSlashCommandKind =
   | "agent-mode"
   | "yolo-mode"
   | "voice-dictation"
-  | "agent-swarm";
+  | "agent-swarm"
+  | "batch-diff-review"
+  | "turn-rewind"
+  | "semantic-commit"
+  | "cost-budget"
+  | "mcp-hub"
+  | "workspace-notepad"
+  | "workspace-playbook"
+  | "custom-workflows"
+  | "dependency-diagram"
+  | "database-studio"
+  | "model-arena";
 export type ClientSlashCommandExecution = "immediate" | "insert";
 
 export interface ClientSlashCommand {
@@ -207,6 +218,107 @@ export const CLIENT_SLASH_COMMANDS: readonly ClientSlashCommand[] = [
     descriptionKey: "composer.clientCommands.archiveAgent",
     argumentHint: "<brief>",
     kind: "agent-swarm",
+    execution: "immediate",
+  },
+  {
+    name: "review",
+    aliases: ["diff-review", "review-all"],
+    description:
+      "Review all workspace file diffs in a multi-file modal with Accept All / Reject All controls",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "batch-diff-review",
+    execution: "immediate",
+  },
+  {
+    name: "rewind",
+    aliases: ["checkpoint", "rollback", "undo-turn"],
+    description:
+      "Open the Timeline Checkpoint scrubber to capture snapshots or roll back workspace changes",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "turn-rewind",
+    execution: "immediate",
+  },
+  {
+    name: "commit",
+    aliases: ["git-commit", "conventional-commit"],
+    description: "Generate and create an AI conventional git commit from current workspace changes",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "semantic-commit",
+    execution: "immediate",
+  },
+  {
+    name: "cost",
+    aliases: ["budget", "usage", "tokens"],
+    description: "Inspect live token usage, session USD spend, and configurable budget caps",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "cost-budget",
+    execution: "immediate",
+  },
+  {
+    name: "mcp",
+    aliases: ["mcp-tools", "tools"],
+    description: "Open the Model Context Protocol (MCP) Hub to inspect and invoke registered tools",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "mcp-hub",
+    execution: "immediate",
+  },
+  {
+    name: "notepad",
+    aliases: ["notes", "scratchpad"],
+    description: "Create and inject persistent workspace context notepads from .kronos/notepads",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "workspace-notepad",
+    execution: "immediate",
+  },
+  {
+    name: "playbook",
+    aliases: ["playbooks", "lessons"],
+    description: "Edit and apply repository-specific playbooks in .kronos/playbooks.md",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "workspace-playbook",
+    execution: "immediate",
+  },
+  {
+    name: "workflows",
+    aliases: ["custom-commands", "prompts"],
+    description: "Manage user-defined .kronos/commands/*.md custom slash workflows",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "custom-workflows",
+    execution: "immediate",
+  },
+  {
+    name: "diagram",
+    aliases: ["arch", "dependencies", "dep-graph"],
+    description: "Generate live Mermaid workspace module dependency & architecture graph",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "dependency-diagram",
+    execution: "immediate",
+  },
+  {
+    name: "db",
+    aliases: ["sql", "sqlite", "database"],
+    description: "Open the embedded SQLite Database Studio & read-only safe SQL console",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "database-studio",
+    execution: "immediate",
+  },
+  {
+    name: "compare",
+    aliases: ["arena", "ab-test"],
+    description: "Benchmark and dispatch prompts across two frontier models side-by-side",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "model-arena",
     execution: "immediate",
   },
 ];

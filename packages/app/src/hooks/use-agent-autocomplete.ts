@@ -184,6 +184,17 @@ const CLIENT_COMMAND_ICONS = {
   "yolo-mode": "command",
   "voice-dictation": "command",
   "agent-swarm": "command",
+  "batch-diff-review": "command",
+  "turn-rewind": "command",
+  "semantic-commit": "command",
+  "cost-budget": "command",
+  "mcp-hub": "command",
+  "workspace-notepad": "command",
+  "workspace-playbook": "command",
+  "custom-workflows": "command",
+  "dependency-diagram": "command",
+  "database-studio": "command",
+  "model-arena": "command",
 } as const satisfies Record<ClientSlashCommand["kind"], AutocompleteOption["icon"]>;
 
 interface CommandOptionContext {

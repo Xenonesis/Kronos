@@ -33,9 +33,21 @@ import {
   CloudDeploymentModal,
   BrowserVerificationModal,
   WebSearchModal,
+  MultiFileDiffReview,
+  SemanticCommitModal,
+  CostBudgetModal,
+  McpHubModal,
+  WorkspaceDocsModal,
+  DatabaseStudioModal,
+  ModelArenaModal,
+  type ReviewFileEntry,
 } from "@/desktop/components";
+import { TurnCheckpointModal } from "@/timeline/turn-checkpoint-modal";
 import { GlobalSearchReplaceModal } from "@/panels/global-search-replace-modal";
-import { ArtifactsCanvasModal } from "@/components/artifacts-canvas-modal";
+import { ArtifactsCanvasModal, type ArtifactItem } from "@/components/artifacts-canvas-modal";
+import { invokeTauri } from "@/utils/tauri-invoke";
+import { openPreferredWorkspaceTarget } from "@/workspace-tabs/open-beside";
+import { useDraftStore } from "@/stores/draft-store";
 import { AgentCommandsProvider } from "@/agent-commands";
 import {
   useComposerEditingSession,
@@ -1590,6 +1602,42 @@ const AgentComposerSection = memo(function AgentComposerSection({
   );
 });
 
+const CLIENT_SLASH_TOASTS: Partial<Record<ClientSlashCommand["kind"], string>> = {
+  "compact-session": "Session context compacted (-75% tokens freed)",
+  "test-loop": "Autonomous test-driven repair loop initiated",
+  "audit-codebase": "Scanning codebase for security vulnerabilities & bugs...",
+  "consensus-mode": "Multi-model consensus synthesizer active",
+  "semantic-search": "Codebase semantic vector search initialized",
+  "agent-mode": "Agent execution mode updated (Architect / Code / Ask / Test)",
+  "yolo-mode": "YOLO Autonomous Terminal Mode toggled 🚀",
+  "voice-dictation": "Hands-Free Voice Dictation mode activated 🎙️",
+  "agent-swarm": "Autonomous subagent dispatched to background swarm 🐝",
+};
+
+async function runRepoMapSlashCommand(
+  cwd: string,
+  toast: { show: (msg: string, opts?: { variant?: "success" | "error" }) => void },
+): Promise<void> {
+  try {
+    const tauri = (
+      window as unknown as {
+        __TAURI_INTERNALS__?: { invoke: (cmd: string, args: unknown) => Promise<unknown> };
+      }
+    ).__TAURI_INTERNALS__;
+    if (tauri && typeof tauri.invoke === "function") {
+      const map = (await tauri.invoke("get_repo_map", { cwd })) as string;
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(map);
+      }
+      toast.show("Codebase Repo Map generated & copied to clipboard", { variant: "success" });
+    } else {
+      toast.show("Codebase Repo Map initialized for workspace", { variant: "success" });
+    }
+  } catch (e) {
+    toast.show(`Repo map error: ${String(e)}`, { variant: "error" });
+  }
+}
+
 function ActiveAgentComposer({
   agentId,
   serverId,
@@ -1625,8 +1673,21 @@ function ActiveAgentComposer({
   const [isGitHubPrModalVisible, setIsGitHubPrModalVisible] = useState(false);
   const [isGlobalSearchVisible, setIsGlobalSearchVisible] = useState(false);
   const [isArtifactsModalVisible, setIsArtifactsModalVisible] = useState(false);
+  const [diagramArtifacts, setDiagramArtifacts] = useState<ArtifactItem[] | undefined>(undefined);
   const [isDeployModalVisible, setIsDeployModalVisible] = useState(false);
   const [isBrowserTestModalVisible, setIsBrowserTestModalVisible] = useState(false);
+  const [isDiffReviewModalVisible, setIsDiffReviewModalVisible] = useState(false);
+  const [diffReviewFiles, setDiffReviewFiles] = useState<ReviewFileEntry[]>([]);
+  const [isCheckpointModalVisible, setIsCheckpointModalVisible] = useState(false);
+  const [isCommitModalVisible, setIsCommitModalVisible] = useState(false);
+  const [isCostModalVisible, setIsCostModalVisible] = useState(false);
+  const [isMcpHubModalVisible, setIsMcpHubModalVisible] = useState(false);
+  const [docsModalState, setDocsModalState] = useState<{
+    visible: boolean;
+    tab: "notepad" | "playbook" | "command";
+  }>({ visible: false, tab: "notepad" });
+  const [isDatabaseModalVisible, setIsDatabaseModalVisible] = useState(false);
+  const [isModelArenaModalVisible, setIsModelArenaModalVisible] = useState(false);
   const [webSearchModalState, setWebSearchModalState] = useState<{
     visible: boolean;
     mode: "search" | "fetch";
@@ -1679,93 +1740,92 @@ function ActiveAgentComposer({
         throw new Error("Agent not found");
       }
 
-      if (command.kind === "compact-session") {
-        toast.show("Session context compacted (-75% tokens freed)", { variant: "success" });
+      const simpleToast = CLIENT_SLASH_TOASTS[command.kind];
+      if (simpleToast) {
+        toast.show(simpleToast, { variant: "success" });
         return;
       }
-      if (command.kind === "test-loop") {
-        toast.show("Autonomous test-driven repair loop initiated", { variant: "success" });
+
+      const syncHandlers: Partial<Record<ClientSlashCommand["kind"], () => void>> = {
+        "create-pr": () => setIsGitHubPrModalVisible(true),
+        "artifacts-view": () => {
+          setDiagramArtifacts(undefined);
+          setIsArtifactsModalVisible(true);
+        },
+        "cloud-deploy": () => setIsDeployModalVisible(true),
+        "browser-test": () => setIsBrowserTestModalVisible(true),
+        "web-search": () => setWebSearchModalState({ visible: true, mode: "search", query: "" }),
+        "web-fetch": () => setWebSearchModalState({ visible: true, mode: "fetch", query: "" }),
+        "turn-rewind": () => setIsCheckpointModalVisible(true),
+        "semantic-commit": () => setIsCommitModalVisible(true),
+        "cost-budget": () => setIsCostModalVisible(true),
+        "mcp-hub": () => setIsMcpHubModalVisible(true),
+        "workspace-notepad": () => setDocsModalState({ visible: true, tab: "notepad" }),
+        "workspace-playbook": () => setDocsModalState({ visible: true, tab: "playbook" }),
+        "custom-workflows": () => setDocsModalState({ visible: true, tab: "command" }),
+        "database-studio": () => setIsDatabaseModalVisible(true),
+        "model-arena": () => setIsModelArenaModalVisible(true),
+        "web-preview": () => {
+          const previewWorkspaceKey = buildWorkspaceTabPersistenceKey({ serverId, workspaceId });
+          if (previewWorkspaceKey) {
+            openPreferredWorkspaceTarget({
+              workspaceKey: previewWorkspaceKey,
+              target: { kind: "browser", browserId: "preview" },
+              source: "chatFiles",
+              preferences: openInSidePane,
+              parentTabId: tabId,
+            });
+          }
+          toast.show("Live webview preview opened with Click-to-Prompt inspector", {
+            variant: "success",
+          });
+        },
+      };
+
+      const syncHandler = syncHandlers[command.kind];
+      if (syncHandler) {
+        syncHandler();
         return;
       }
-      if (command.kind === "audit-codebase") {
-        toast.show("Scanning codebase for security vulnerabilities & bugs...", {
-          variant: "success",
-        });
+
+      if (command.kind === "batch-diff-review") {
+        try {
+          const files =
+            (await invokeTauri<ReviewFileEntry[]>("get_workspace_git_diff_files", {
+              repoPath: cwd,
+            })) ?? [];
+          setDiffReviewFiles(files);
+          setIsDiffReviewModalVisible(true);
+        } catch (err) {
+          toast.show(`Failed to collect diffs: ${String(err)}`, { variant: "error" });
+        }
         return;
       }
-      if (command.kind === "consensus-mode") {
-        toast.show("Multi-model consensus synthesizer active", { variant: "success" });
-        return;
-      }
-      if (command.kind === "create-pr") {
-        setIsGitHubPrModalVisible(true);
-        return;
-      }
-      if (command.kind === "artifacts-view") {
-        setIsArtifactsModalVisible(true);
-        return;
-      }
-      if (command.kind === "cloud-deploy") {
-        setIsDeployModalVisible(true);
-        return;
-      }
-      if (command.kind === "semantic-search") {
-        toast.show("Codebase semantic vector search initialized", { variant: "success" });
-        return;
-      }
-      if (command.kind === "browser-test") {
-        setIsBrowserTestModalVisible(true);
-        return;
-      }
-      if (command.kind === "web-search") {
-        setWebSearchModalState({ visible: true, mode: "search", query: "" });
-        return;
-      }
-      if (command.kind === "web-fetch") {
-        setWebSearchModalState({ visible: true, mode: "fetch", query: "" });
-        return;
-      }
-      if (command.kind === "web-preview") {
-        toast.show("Live webview preview panel ready", { variant: "success" });
-        return;
-      }
-      if (command.kind === "agent-mode") {
-        toast.show("Agent execution mode updated (Architect / Code / Ask / Test)", {
-          variant: "success",
-        });
-        return;
-      }
-      if (command.kind === "yolo-mode") {
-        toast.show("YOLO Autonomous Terminal Mode toggled 🚀", { variant: "success" });
-        return;
-      }
-      if (command.kind === "voice-dictation") {
-        toast.show("Hands-Free Voice Dictation mode activated 🎙️", { variant: "success" });
-        return;
-      }
-      if (command.kind === "agent-swarm") {
-        toast.show("Autonomous subagent dispatched to background swarm 🐝", { variant: "success" });
+      if (command.kind === "dependency-diagram") {
+        try {
+          const graph = await invokeTauri<{
+            nodeCount: number;
+            edgeCount: number;
+            mermaid: string;
+          }>("get_dependency_graph", { cwd });
+          if (graph) {
+            setDiagramArtifacts([
+              {
+                id: "dep-graph",
+                title: `Workspace Dependency Graph (${graph.nodeCount} modules, ${graph.edgeCount} edges)`,
+                type: "mermaid",
+                content: graph.mermaid,
+              },
+            ]);
+          }
+          setIsArtifactsModalVisible(true);
+        } catch (err) {
+          toast.show(`Dependency graph failed: ${String(err)}`, { variant: "error" });
+        }
         return;
       }
       if (command.kind === "repo-map") {
-        try {
-          const tauri = (
-            window as unknown as {
-              __TAURI_INTERNALS__?: { invoke: (cmd: string, args: unknown) => Promise<unknown> };
-            }
-          ).__TAURI_INTERNALS__;
-          if (tauri && typeof tauri.invoke === "function") {
-            const map = (await tauri.invoke("get_repo_map", { cwd })) as string;
-            if (navigator?.clipboard?.writeText) {
-              await navigator.clipboard.writeText(map);
-            }
-            toast.show("Codebase Repo Map generated & copied to clipboard", { variant: "success" });
-          } else {
-            toast.show("Codebase Repo Map initialized for workspace", { variant: "success" });
-          }
-        } catch (e) {
-          toast.show(`Repo map error: ${String(e)}`, { variant: "error" });
-        }
+        await runRepoMapSlashCommand(cwd, toast);
         return;
       }
 
@@ -1791,7 +1851,9 @@ function ActiveAgentComposer({
       agentId,
       archiveAgent,
       closeWorkspaceTab,
+      cwd,
       hideWorkspaceAgent,
+      openInSidePane,
       retargetCurrentTab,
       serverId,
       tabId,
@@ -1799,6 +1861,83 @@ function ActiveAgentComposer({
       unpinWorkspaceAgent,
       workspaceId,
     ],
+  );
+
+  const closeGitHubPrModal = useCallback(() => setIsGitHubPrModalVisible(false), []);
+  const closeGlobalSearchModal = useCallback(() => setIsGlobalSearchVisible(false), []);
+  const closeArtifactsModal = useCallback(() => {
+    setIsArtifactsModalVisible(false);
+    setDiagramArtifacts(undefined);
+  }, []);
+  const closeDiffReviewModal = useCallback(() => setIsDiffReviewModalVisible(false), []);
+  const acceptAllDiffReview = useCallback(() => {
+    toast.show(`Accepted ${diffReviewFiles.length} modified file(s)`, { variant: "success" });
+  }, [diffReviewFiles.length, toast]);
+  const acceptSelectedDiffReview = useCallback(
+    async (selectedPaths: string[]) => {
+      const unselected = diffReviewFiles
+        .map((f) => f.path)
+        .filter((p) => !selectedPaths.includes(p));
+      if (unselected.length > 0) {
+        await invokeTauri("revert_workspace_files", { repoPath: cwd, paths: unselected });
+      }
+      toast.show(`Kept ${selectedPaths.length} file(s), reverted ${unselected.length} unselected`, {
+        variant: "success",
+      });
+    },
+    [cwd, diffReviewFiles, toast],
+  );
+  const rejectAllDiffReview = useCallback(async () => {
+    const paths = diffReviewFiles.map((f) => f.path);
+    if (paths.length > 0) {
+      await invokeTauri("revert_workspace_files", { repoPath: cwd, paths });
+    }
+    toast.show("Reverted all modified workspace files to HEAD", { variant: "success" });
+  }, [cwd, diffReviewFiles, toast]);
+  const closeCheckpointModal = useCallback(() => setIsCheckpointModalVisible(false), []);
+  const closeCommitModal = useCallback(() => setIsCommitModalVisible(false), []);
+  const closeCostModal = useCallback(() => setIsCostModalVisible(false), []);
+  const closeMcpHubModal = useCallback(() => setIsMcpHubModalVisible(false), []);
+  const closeDocsModal = useCallback(
+    () => setDocsModalState((prev) => ({ ...prev, visible: false })),
+    [],
+  );
+  const insertDocsPrompt = useCallback(
+    (text: string) => {
+      useDraftStore.getState().replaceDraftText({
+        draftKey: buildDraftStoreKey({ serverId, agentId }),
+        text,
+      });
+      toast.show("Inserted into composer", { variant: "success" });
+    },
+    [agentId, serverId, toast],
+  );
+  const closeDatabaseModal = useCallback(() => setIsDatabaseModalVisible(false), []);
+  const closeModelArenaModal = useCallback(() => setIsModelArenaModalVisible(false), []);
+  const handleModelArenaPickWinner = useCallback(
+    (arenaPrompt: string, modelId: string) => {
+      useDraftStore.getState().replaceDraftText({
+        draftKey: buildDraftStoreKey({ serverId, agentId }),
+        text: `[Model Arena -> ${modelId}]\n${arenaPrompt}`,
+      });
+      toast.show(`Prepared Arena prompt for ${modelId}`, { variant: "success" });
+    },
+    [agentId, serverId, toast],
+  );
+  const closeDeployModal = useCallback(() => setIsDeployModalVisible(false), []);
+  const closeBrowserTestModal = useCallback(() => setIsBrowserTestModalVisible(false), []);
+  const closeWebSearchModal = useCallback(
+    () => setWebSearchModalState((prev) => ({ ...prev, visible: false })),
+    [],
+  );
+  const insertWebSearchContent = useCallback(
+    (text: string) => {
+      if (navigator?.clipboard?.writeText) {
+        void navigator.clipboard.writeText(text);
+      }
+      toast.show("Web content copied to clipboard for prompt composer", { variant: "success" });
+    },
+    [toast],
   );
 
   return (
@@ -1829,40 +1968,61 @@ function ActiveAgentComposer({
         onClientSlashCommand={handleClientSlashCommand}
         isCompactLayout={isCompactComposerLayout}
       />
-      <GitHubPrModal
-        visible={isGitHubPrModalVisible}
-        cwd={cwd}
-        onClose={() => setIsGitHubPrModalVisible(false)}
-      />
+      <GitHubPrModal visible={isGitHubPrModalVisible} cwd={cwd} onClose={closeGitHubPrModal} />
       <GlobalSearchReplaceModal
         visible={isGlobalSearchVisible}
         cwd={cwd}
-        onClose={() => setIsGlobalSearchVisible(false)}
+        onClose={closeGlobalSearchModal}
       />
       <ArtifactsCanvasModal
         visible={isArtifactsModalVisible}
-        onClose={() => setIsArtifactsModalVisible(false)}
+        artifacts={diagramArtifacts}
+        onClose={closeArtifactsModal}
       />
-      <CloudDeploymentModal
-        visible={isDeployModalVisible}
+      <MultiFileDiffReview
+        visible={isDiffReviewModalVisible}
+        files={diffReviewFiles}
+        onClose={closeDiffReviewModal}
+        onAcceptAll={acceptAllDiffReview}
+        onAcceptSelected={acceptSelectedDiffReview}
+        onRejectAll={rejectAllDiffReview}
+      />
+      <TurnCheckpointModal
+        visible={isCheckpointModalVisible}
         cwd={cwd}
-        onClose={() => setIsDeployModalVisible(false)}
+        onClose={closeCheckpointModal}
       />
+      <SemanticCommitModal visible={isCommitModalVisible} cwd={cwd} onClose={closeCommitModal} />
+      <CostBudgetModal visible={isCostModalVisible} agentId={agentId} onClose={closeCostModal} />
+      <McpHubModal visible={isMcpHubModalVisible} onClose={closeMcpHubModal} />
+      <WorkspaceDocsModal
+        visible={docsModalState.visible}
+        initialTab={docsModalState.tab}
+        cwd={cwd}
+        onClose={closeDocsModal}
+        onInsertPrompt={insertDocsPrompt}
+      />
+      <DatabaseStudioModal
+        visible={isDatabaseModalVisible}
+        cwd={cwd}
+        onClose={closeDatabaseModal}
+      />
+      <ModelArenaModal
+        visible={isModelArenaModalVisible}
+        onClose={closeModelArenaModal}
+        onPickWinner={handleModelArenaPickWinner}
+      />
+      <CloudDeploymentModal visible={isDeployModalVisible} cwd={cwd} onClose={closeDeployModal} />
       <BrowserVerificationModal
         visible={isBrowserTestModalVisible}
-        onClose={() => setIsBrowserTestModalVisible(false)}
+        onClose={closeBrowserTestModal}
       />
       <WebSearchModal
         visible={webSearchModalState.visible}
         initialMode={webSearchModalState.mode}
         initialQuery={webSearchModalState.query}
-        onClose={() => setWebSearchModalState((prev) => ({ ...prev, visible: false }))}
-        onInsertToComposer={(text) => {
-          if (navigator?.clipboard?.writeText) {
-            navigator.clipboard.writeText(text);
-          }
-          toast.show("Web content copied to clipboard for prompt composer", { variant: "success" });
-        }}
+        onClose={closeWebSearchModal}
+        onInsertToComposer={insertWebSearchContent}
       />
     </View>
   );

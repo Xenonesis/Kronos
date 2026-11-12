@@ -1,30 +1,43 @@
 # Kronos Missing Competitor Features & Parity Roadmap
 
-This document tracks all 17 features identified from the comprehensive competitor audit (Cursor, Windsurf, Devin, Claude Code, Cline / Roo Code, Bolt.new, Lovable, Zed AI, and DeepMind Antigravity) that have been methodically implemented and verified in Kronos.
+This document tracks all 30 features identified from the comprehensive competitor audit (Cursor, Windsurf, Devin, Claude Code, Cline / Roo Code, Bolt.new, Lovable, Zed AI, and DeepMind Antigravity) that have been methodically implemented and verified in Kronos.
 
 ---
 
 ## Roadmap Overview & Status Matrix
 
-| ID          | Feature                                                             | Competitor Target              | Priority |         Status          |
-| :---------- | :------------------------------------------------------------------ | :----------------------------- | :------: | :---------------------: |
-| **FEAT-1**  | **Background Shadow Linter & Diagnostics Loop**                     | Cursor                         |    P0    | ✅ Completed & Verified |
-| **FEAT-2**  | **Editor Inline `Ctrl+K` Prompt & In-Place Diff Generator**         | Cursor / Windsurf              |    P0    | ✅ Completed & Verified |
-| **FEAT-3**  | **1-Click GitHub Pull Request (PR) Generator with AI Summary**      | Cursor / Devin / Claude Code   |    P0    | ✅ Completed & Verified |
-| **FEAT-4**  | **Global Workspace Search & Replace (Ripgrep + Diff Preview)**      | VS Code / Zed                  |    P1    | ✅ Completed & Verified |
-| **FEAT-5**  | **Visual Artifacts Canvas & Mermaid Architecture Renderer**         | Claude Artifacts / Antigravity |    P1    | ✅ Completed & Verified |
-| **FEAT-6**  | **1-Click Cloud Deployment Engine (Vercel / Netlify / Cloudflare)** | Bolt.new / Lovable             |    P1    | ✅ Completed & Verified |
-| **FEAT-7**  | **Codebase Semantic Vector Search & Hybrid RAG Indexer**            | Cursor Codebase Indexing       |    P2    | ✅ Completed & Verified |
-| **FEAT-8**  | **Autonomous Browser Testing & Screenshot Verification Loop**       | Cline / Roo Code / Devin       |    P2    | ✅ Completed & Verified |
-| **FEAT-9**  | **Native Web Search & Web Scraping Engine for Any Model**           | Claude Code / Devin / OpenCode |    P0    | ✅ Completed & Verified |
-| **FEAT-10** | **Inline Predictive Ghost-Text Autocomplete ("Cursor Tab")**        | Cursor Copilot++               |    P0    | ✅ Completed & Verified |
-| **FEAT-11** | **Global Codebase Symbol Repo Map Engine**                          | Aider Repo Map                 |    P1    | ✅ Completed & Verified |
-| **FEAT-12** | **Active Tab & Cursor Flow Context Auto-Tracking**                  | Windsurf Cascade Flow          |    P1    | ✅ Completed & Verified |
-| **FEAT-13** | **Live Side-by-Side Webview Preview Panel with Hot-Reload**         | Bolt.new / Lovable / v0        |    P1    | ✅ Completed & Verified |
-| **FEAT-14** | **Specialized Agent Execution Modes (Architect/Code/Ask/Test)**     | Roo Code / Cline               |    P1    | ✅ Completed & Verified |
-| **FEAT-15** | **Terminal YOLO & Command Auto-Approval Permission Selector**       | Claude Code                    |    P2    | ✅ Completed & Verified |
-| **FEAT-16** | **Hands-Free Voice Dictation Mode (Web Speech / Whisper)**          | Cursor Voice                   |    P2    | ✅ Completed & Verified |
-| **FEAT-17** | **Autonomous Multi-Agent Swarm & Subagent Coordinator**             | Antigravity / Devin            |    P2    | ✅ Completed & Verified |
+| ID          | Feature                                                                | Competitor Target              |     Priority      |         Status          |
+| :---------- | :--------------------------------------------------------------------- | :----------------------------- | :---------------: | :---------------------: | ----------------------- |
+| **FEAT-1**  | **Background Shadow Linter & Diagnostics Loop**                        | Cursor                         |        P0         | ✅ Completed & Verified |
+| **FEAT-2**  | **Editor Inline `Ctrl+K` Prompt & In-Place Diff Generator**            | Cursor / Windsurf              |        P0         | ✅ Completed & Verified |
+| **FEAT-3**  | **1-Click GitHub Pull Request (PR) Generator with AI Summary**         | Cursor / Devin / Claude Code   |        P0         | ✅ Completed & Verified |
+| **FEAT-4**  | **Global Workspace Search & Replace (Ripgrep + Diff Preview)**         | VS Code / Zed                  |        P1         | ✅ Completed & Verified |
+| **FEAT-5**  | **Visual Artifacts Canvas & Mermaid Architecture Renderer**            | Claude Artifacts / Antigravity |        P1         | ✅ Completed & Verified |
+| **FEAT-6**  | **1-Click Cloud Deployment Engine (Vercel / Netlify / Cloudflare)**    | Bolt.new / Lovable             |        P1         | ✅ Completed & Verified |
+| **FEAT-7**  | **Codebase Semantic Vector Search & Hybrid RAG Indexer**               | Cursor Codebase Indexing       |        P2         | ✅ Completed & Verified |
+| **FEAT-8**  | **Autonomous Browser Testing & Screenshot Verification Loop**          | Cline / Roo Code / Devin       |        P2         | ✅ Completed & Verified |
+| **FEAT-9**  | **Native Web Search & Web Scraping Engine for Any Model**              | Claude Code / Devin / OpenCode |        P0         | ✅ Completed & Verified |
+| **FEAT-10** | **Inline Predictive Ghost-Text Autocomplete ("Cursor Tab")**           | Cursor Copilot++               |        P0         | ✅ Completed & Verified |
+| **FEAT-11** | **Global Codebase Symbol Repo Map Engine**                             | Aider Repo Map                 |        P1         | ✅ Completed & Verified |
+| **FEAT-12** | **Active Tab & Cursor Flow Context Auto-Tracking**                     | Windsurf Cascade Flow          |        P1         | ✅ Completed & Verified |
+| **FEAT-13** | **Live Side-by-Side Webview Preview Panel with Hot-Reload**            | Bolt.new / Lovable / v0        |        P1         | ✅ Completed & Verified |
+| **FEAT-14** | **Specialized Agent Execution Modes (Architect/Code/Ask/Test)**        | Roo Code / Cline               |        P1         | ✅ Completed & Verified |
+| **FEAT-15** | **Terminal YOLO & Command Auto-Approval Permission Selector**          | Claude Code                    |        P2         | ✅ Completed & Verified |
+| **FEAT-16** | **Hands-Free Voice Dictation Mode (Web Speech / Whisper)**             | Cursor Voice                   |        P2         | ✅ Completed & Verified |
+| **FEAT-17** | **Autonomous Multi-Agent Swarm & Subagent Coordinator**                | Antigravity / Devin            |        P2         | ✅ Completed & Verified |
+| **FEAT-18** | **Multi-File Batch Diff Reviewer ("Review All Changes")**              | Cursor Composer                |        P0         | ✅ Completed & Verified |
+| **FEAT-19** | **Timeline Checkpoints & Instant Rollback (`/rewind`, `/checkpoint`)** | Windsurf Cascade / Cursor      |        P0         | ✅ Completed & Verified |
+| **FEAT-20** | **AI Semantic Git Commit Generator (`/commit`)**                       | Cursor / Claude Code           |        P0         | ✅ Completed & Verified |
+| **FEAT-21** | **Terminal Error Auto-Fix Listener ("Debug with Kronos")**             | Windsurf                       |        P1         | ✅ Completed & Verified |
+| **FEAT-22** | **Live Token Usage & USD Cost Budget Tracker HUD (`/cost`)**           | Claude Code                    |        P1         | ✅ Completed & Verified |
+| **FEAT-23** | **Visual Model Context Protocol (MCP) Server Hub (`/mcp`)**            | Cline / Roo Code               |        P1         | ✅ Completed & Verified |
+| **FEAT-24** | **Visual Element Picker for Live Preview ("Click-to-Prompt")**         | Bolt.new / Lovable             |        P1         | ✅ Completed & Verified |
+| **FEAT-25** | **Context Notepads & Persistent Scratchpads (`@notepad`, `/notepad`)** | Cursor                         |        P2         | ✅ Completed & Verified |
+| **FEAT-26** | **Self-Evolving Repository Playbooks (`/playbook`)**                   | Devin                          |        P2         | ✅ Completed & Verified |
+| **FEAT-27** | **Visual Workspace Dependency & Architecture Graph (`/diagram`)**      | Devin / Antigravity            |        P2         | ✅ Completed & Verified |
+| **FEAT-28** | \*\*User-Defined Custom Slash Commands (`.kronos/commands              | prompts`)\*\*                  | Roo Code / Zed AI |           P2            | ✅ Completed & Verified |
+| **FEAT-29** | **Embedded Database Studio & SQL Console (`/db`)**                     | Bolt.new                       |        P2         | ✅ Completed & Verified |
+| **FEAT-30** | **Side-by-Side Multi-Model Arena (`/compare`)**                        | Zed AI                         |        P2         | ✅ Completed & Verified |
 
 ---
 
@@ -174,10 +187,90 @@ This document tracks all 17 features identified from the comprehensive competito
   - Full subagent hierarchy management in `AgentTracks` and `useSubagentsForParent`.
   - `/swarm` (aliases: `subagent`, `delegate`, `spawn-agent`) client slash command in composer.
 
+### 18. FEAT-18: Multi-File Batch Diff Reviewer ("Review All Changes") (Cursor Composer Parity)
+
+- **Status**: ✅ Completed & Verified.
+- **Backend**: `desktop-tauri/src-tauri/src/kernel/git.rs` & `main.rs`:
+  - `get_workspace_git_diff_files` collects modified/added/deleted workspace files with line stats and old/new content.
+  - `revert_workspace_files` selectively reverts rejected or unchecked files to `HEAD`.
+- **Frontend**:
+  - `packages/app/src/desktop/components/multi-file-diff-review.tsx` wired into `agent-panel.tsx`.
+  - `/review` (aliases: `diff-review`, `review-all`) client slash command.
+
+### 19. FEAT-19: Timeline Checkpoints & Instant Rollback (Windsurf Cascade / Cursor Parity)
+
+- **Status**: ✅ Completed & Verified.
+- **Backend**: `kernel/git.rs` & `main.rs` (`create_turn_checkpoint`, `restore_turn_checkpoint`, `list_turn_checkpoints`).
+- **Frontend**:
+  - `packages/app/src/composer/submit.ts`: Automatically snapshots a shadow git checkpoint before every agent turn.
+  - `packages/app/src/timeline/turn-checkpoint-modal.tsx`: Modal & interactive `TurnCheckpointScrubber` timeline rewind UI.
+  - `/rewind` (aliases: `checkpoint`, `rollback`, `undo-turn`) client slash command.
+
+### 20. FEAT-20: AI Semantic Git Commit Generator (Cursor / Claude Code Parity)
+
+- **Status**: ✅ Completed & Verified.
+- **Backend**: `kernel/git.rs` & `main.rs` (`suggest_semantic_commit`, `execute_semantic_commit`).
+- **Frontend**:
+  - `packages/app/src/desktop/components/semantic-commit-modal.tsx`: Generates editable Conventional Commits (`feat`, `fix`, `test`, `docs`, `refactor`) with automatic scope & file staging.
+  - `/commit` (aliases: `git-commit`, `conventional-commit`) client slash command.
+
+### 21. FEAT-21: Terminal Error Auto-Fix Listener ("Debug with Kronos") (Windsurf Parity)
+
+- **Status**: ✅ Completed & Verified.
+- **Frontend**:
+  - `packages/app/src/terminal/terminal-error-detector.ts`: ANSI-stripping PTY stream ring buffer matching TS/Rust/Python/Node errors and non-zero exit codes.
+  - `packages/app/src/components/terminal-pane.tsx`: Auto-surfaces `[Debug with Kronos]` banner when a terminal command fails and injects diagnostics directly into the active agent composer.
+
+### 22. FEAT-22: Live Token Usage & USD Cost Budget Tracker HUD (Claude Code Parity)
+
+- **Status**: ✅ Completed & Verified.
+- **Frontend**:
+  - `packages/app/src/stores/cost-budget-store.ts`: Model pricing matrix (Claude, Codex/GPT, Gemini, DeepSeek, free Ollama) and configurable USD session budget cap.
+  - `packages/app/src/components/cost-budget-pill.tsx`: Live ambient token + USD spend pill in `AgentTracks`.
+  - `packages/app/src/desktop/components/cost-budget-modal.tsx` & `/cost` (aliases: `budget`, `usage`, `tokens`) client slash command.
+
+### 23. FEAT-23: Visual Model Context Protocol (MCP) Server Hub (Cline / Roo Code Parity)
+
+- **Status**: ✅ Completed & Verified.
+- **Backend**: `main.rs` (`mcp_list_tools`, `mcp_call_tool`) exposing live `McpHub` tools & schemas.
+- **Frontend**:
+  - `packages/app/src/desktop/components/mcp-hub-modal.tsx`: Dual-tab live tool inspector, JSON argument tester, and `McpServersCard` server registry.
+  - `/mcp` (aliases: `mcp-tools`, `tools`) client slash command.
+
+### 24. FEAT-24: Visual Element Picker for Live Preview ("Click-to-Prompt") (Bolt.new / Lovable Parity)
+
+- **Status**: ✅ Completed & Verified.
+- **Frontend**:
+  - `packages/app/src/desktop/browser/pane/interactive-inspect-overlay.tsx` & `packages/app/src/file-panels/html-preview.web.tsx`: Click-to-Prompt DOM + React Fiber extractor sending element specs to the agent composer.
+  - `/preview` (aliases: `live`, `web-preview`, `split-preview`) wired in `agent-panel.tsx` to open the side-by-side browser preview pane cleanly.
+
+### 25–28. FEAT-25 to FEAT-28: Context Notepads, Repo Playbooks, Dependency Graph & Custom Slash Workflows (Cursor / Devin / Antigravity / Roo Code Parity)
+
+- **Status**: ✅ Completed & Verified.
+- **Backend**:
+  - `desktop-tauri/src-tauri/src/kernel/workspace_tools.rs`: Safe `.kronos/` scanner & writer (`scan_kronos_workspace_docs`, `save_kronos_workspace_doc`).
+  - `desktop-tauri/src-tauri/src/kernel/repo_map.rs`: `generate_dependency_graph` / `get_dependency_graph` generating live Mermaid module graphs across TS/JS/Rust files.
+- **Frontend**:
+  - `packages/app/src/desktop/components/workspace-docs-modal.tsx` & `custom-workflow-loader.ts` (`$ACTIVE_FILE`, `$SELECTION`, `$DIFF`, `$CLIPBOARD`).
+  - Slash commands: `/notepad`, `/playbook`, `/workflows`, and `/diagram` (opening live Mermaid output in `ArtifactsCanvasModal`).
+
+### 29. FEAT-29: Embedded Database Studio & SQL Console (Bolt.new Parity)
+
+- **Status**: ✅ Completed & Verified.
+- **Backend**: `kernel/workspace_tools.rs` & `main.rs` (`discover_workspace_databases`, `execute_sqlite_query` with read-only SQL mutation guard).
+- **Frontend**:
+  - `packages/app/src/desktop/components/database-studio-modal.tsx` & `/db` (aliases: `sql`, `sqlite`, `database`) client slash command.
+
+### 30. FEAT-30: Side-by-Side Multi-Model Arena (Zed AI Parity)
+
+- **Status**: ✅ Completed & Verified.
+- **Frontend**:
+  - `packages/app/src/desktop/components/model-arena-modal.tsx` & `/compare` (aliases: `arena`, `ab-test`) client slash command for side-by-side model latency/cost comparison and prompt dispatch.
+
 ---
 
 ## Verification & Test Results
 
-- **Rust Backend**: All unit test suites passed (`web_search`, `repo_map`, `personas`, `self_healing`, `github_ops`, `ripgrep_search`, `cloud_deploy`, `semantic_index`, `browser_runner`).
+- **Rust Backend**: All **343 Rust unit tests** passed (`cargo test --manifest-path packages/desktop-tauri/src-tauri/Cargo.toml --bin paseo-desktop`: 343 passed, 0 failed), including `kernel::git`, `kernel::repo_map`, `kernel::workspace_tools`, `kernel::mcp`, `web_search`, `self_healing`, `github_ops`, `ripgrep_search`, `cloud_deploy`, `semantic_index`, and `browser_runner`.
 - **Frontend Workspaces**: 100% typecheck pass across all 12 monorepo workspaces via `npm run typecheck`.
-- **Vitest Suites**: 100% pass across all 26 tests in slash commands, ghost-text autocomplete, cascade-flow store, and submission pipelines.
+- **Vitest Suites**: 100% pass across all **8 test files / 37 tests** covering client slash commands, terminal error detection, cost budget tracking, custom workflow loading, ghost-text autocomplete, cascade-flow store, shadow-linter store, and composer submit pipelines.

@@ -5,6 +5,7 @@ import {
   type ResolveMentionsOptions,
 } from "@/composer/at-mentions/mention-resolver";
 import { useCascadeFlowStore } from "@/stores/cascade-flow-store";
+import { invokeTauri } from "@/utils/tauri-invoke";
 
 export type AgentInputSubmitResult = "noop" | "queued" | "submitted" | "failed";
 
@@ -30,14 +31,38 @@ export interface AgentInputSubmitActionInput<TAttachment> {
   failedToSendMessage?: string;
 }
 
+function applyCascadeFlowContext(resolvedMessage: string): string {
+  const flowContext = useCascadeFlowStore.getState().getFlowContextString();
+  if (flowContext && !resolvedMessage.includes("[Cascade Flow")) {
+    return `${resolvedMessage}\n\n${flowContext}`;
+  }
+  return resolvedMessage;
+}
+
+function isEmptySubmission<TAttachment>(
+  trimmedMessage: string,
+  input: AgentInputSubmitActionInput<TAttachment>,
+): boolean {
+  return (
+    !trimmedMessage &&
+    input.attachments.length === 0 &&
+    !input.hasExternalContent &&
+    !input.allowEmptySubmit
+  );
+}
+
 export async function submitAgentInput<TAttachment>(
   input: AgentInputSubmitActionInput<TAttachment>,
 ): Promise<AgentInputSubmitResult> {
   const trimmedMessage = input.message.trim();
+  if (isEmptySubmission(trimmedMessage, input) || !input.canSubmit) {
+    return "noop";
+  }
+
   const needsAsync = Boolean(
-    (trimmedMessage.includes("@file:") || trimmedMessage.includes("@folder:")) &&
     input.client &&
-    input.cwd,
+    input.cwd &&
+    (trimmedMessage.includes("@file:") || trimmedMessage.includes("@folder:")),
   );
   const resolvedMessage = needsAsync
     ? await resolvePromptMentionsAsync(trimmedMessage, {
@@ -45,28 +70,9 @@ export async function submitAgentInput<TAttachment>(
         client: input.client,
       })
     : resolvePromptMentions(trimmedMessage);
-
-  const flowContext = useCascadeFlowStore.getState().getFlowContextString();
-  const effectiveMessage =
-    flowContext && !resolvedMessage.includes("[Cascade Flow")
-      ? `${resolvedMessage}\n\n${flowContext}`
-      : resolvedMessage;
-
+  const effectiveMessage = applyCascadeFlowContext(resolvedMessage);
   const attachments = input.attachments;
   const shouldClearOnSubmit = input.submitBehavior !== "preserve-and-lock";
-
-  if (
-    !trimmedMessage &&
-    attachments.length === 0 &&
-    !input.hasExternalContent &&
-    !input.allowEmptySubmit
-  ) {
-    return "noop";
-  }
-
-  if (!input.canSubmit) {
-    return "noop";
-  }
 
   if (input.isAgentRunning && !input.forceSend) {
     input.queueMessage({ message: effectiveMessage, attachments });
@@ -86,6 +92,13 @@ export async function submitAgentInput<TAttachment>(
   input.setIsProcessing(true);
 
   try {
+    if (input.cwd) {
+      // Non-blocking shadow git checkpoint before agent modifies files (FEAT-19)
+      void invokeTauri("create_turn_checkpoint", {
+        repoPath: input.cwd,
+        turnId: `turn-${Date.now()}`,
+      }).catch(() => undefined);
+    }
     await input.submitMessage({ message: effectiveMessage, attachments });
     input.clearDraft("sent");
     input.setIsProcessing(false);

@@ -21,6 +21,37 @@ pub struct WorktreeEntry {
     pub is_bare: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceDiffFile {
+    pub path: String,
+    pub status: String,
+    pub additions: usize,
+    pub deletions: usize,
+    pub old_text: String,
+    pub new_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointInfo {
+    pub turn_id: String,
+    pub ref_name: String,
+    pub timestamp: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticCommitSuggestion {
+    pub commit_type: String,
+    pub scope: Option<String>,
+    pub subject: String,
+    pub body: String,
+    pub full_message: String,
+    pub files_changed: Vec<String>,
+}
+
 pub enum RepoRef<'a> {
     Path(Cow<'a, Path>),
     Repo(&'a gix::Repository),
@@ -432,5 +463,279 @@ impl GitEngine {
     /// Merges an agent worktree branch into the active branch.
     pub async fn merge_agent_branch(repo: &Path, branch_name: &str) -> Result<String, String> {
         Self::git_exec(repo, &["merge", "--no-ff", "-m", &format!("merge: agent branch {branch_name}"), branch_name]).await
+    }
+
+    /// Lists modified, added, and untracked workspace files with old/new text snapshots for multi-file review.
+    pub async fn list_diff_files(repo: &Path) -> Result<Vec<WorkspaceDiffFile>, String> {
+        let porcelain = Self::git_exec(repo, &["status", "--porcelain"]).await?;
+        let mut results = Vec::new();
+        for line in porcelain.lines() {
+            if line.len() < 4 {
+                continue;
+            }
+            let code = &line[..2];
+            let rel = line[3..].trim().trim_matches('"').to_string();
+            let status = if code.contains('?') || code.contains('A') {
+                "added"
+            } else if code.contains('D') {
+                "deleted"
+            } else {
+                "modified"
+            };
+            let old_text = if status == "added" {
+                String::new()
+            } else {
+                Self::git_exec(repo, &["show", &format!("HEAD:{rel}")])
+                    .await
+                    .unwrap_or_default()
+            };
+            let new_text = if status == "deleted" {
+                String::new()
+            } else {
+                tokio::fs::read_to_string(repo.join(&rel))
+                    .await
+                    .unwrap_or_default()
+            };
+            let (additions, deletions) = count_diff_stats(&old_text, &new_text);
+            results.push(WorkspaceDiffFile {
+                path: rel,
+                status: status.to_string(),
+                additions,
+                deletions,
+                old_text,
+                new_text,
+            });
+            if results.len() >= 100 {
+                break;
+            }
+        }
+        Ok(results)
+    }
+
+    /// Reverts selected workspace files back to HEAD (or removes untracked files).
+    pub async fn revert_files(repo: &Path, paths: &[String]) -> Result<usize, String> {
+        let mut reverted = 0usize;
+        for rel in paths {
+            let trimmed = rel.trim();
+            if trimmed.is_empty() || trimmed.contains("..") {
+                continue;
+            }
+            let tracked = Self::git_exec(repo, &["ls-files", "--error-unmatch", trimmed]).await.is_ok();
+            if tracked {
+                Self::git_exec(repo, &["checkout", "HEAD", "--", trimmed]).await?;
+                reverted += 1;
+            } else {
+                let target = repo.join(trimmed);
+                if target.is_file() {
+                    tokio::fs::remove_file(&target)
+                        .await
+                        .map_err(|e| format!("Failed to remove untracked '{trimmed}': {e}"))?;
+                    reverted += 1;
+                }
+            }
+        }
+        Ok(reverted)
+    }
+
+    /// Lists captured shadow turn checkpoints under `refs/kronos/checkpoints/`.
+    pub async fn list_checkpoints(repo: &Path) -> Result<Vec<CheckpointInfo>, String> {
+        let out = Self::git_exec(
+            repo,
+            &[
+                "for-each-ref",
+                "--sort=-committerdate",
+                "--format=%(refname)|%(committerdate:iso-strict)|%(subject)",
+                "refs/kronos/checkpoints/",
+            ],
+        )
+        .await
+        .unwrap_or_default();
+
+        let mut list = Vec::new();
+        for line in out.lines() {
+            let mut parts = line.splitn(3, '|');
+            let ref_name = parts.next().unwrap_or("").trim();
+            if ref_name.is_empty() {
+                continue;
+            }
+            let timestamp = parts.next().unwrap_or("").trim().to_string();
+            let summary = parts.next().unwrap_or("Checkpoint").trim().to_string();
+            let turn_id = ref_name
+                .strip_prefix("refs/kronos/checkpoints/")
+                .unwrap_or(ref_name)
+                .to_string();
+            list.push(CheckpointInfo {
+                turn_id,
+                ref_name: ref_name.to_string(),
+                timestamp,
+                summary,
+            });
+        }
+        Ok(list)
+    }
+
+    /// Analyzes dirty/staged changes to synthesize a Conventional Commit suggestion.
+    pub async fn suggest_semantic_commit(repo: &Path) -> Result<SemanticCommitSuggestion, String> {
+        let porcelain = Self::git_exec(repo, &["status", "--porcelain"]).await?;
+        let mut files = Vec::new();
+        let mut adds = 0usize;
+        let mut dels = 0usize;
+        let mut mods = 0usize;
+        for line in porcelain.lines() {
+            if line.len() < 4 {
+                continue;
+            }
+            let code = &line[..2];
+            let file = line[3..].trim().trim_matches('"').to_string();
+            if code.contains('?') || code.contains('A') {
+                adds += 1;
+            } else if code.contains('D') {
+                dels += 1;
+            } else {
+                mods += 1;
+            }
+            files.push(file);
+        }
+
+        if files.is_empty() {
+            return Err("Working tree is clean; nothing to commit".to_string());
+        }
+
+        let diff_sample = Self::git_exec(repo, &["diff", "--stat"]).await.unwrap_or_default();
+        let suggestion = build_semantic_commit_suggestion(&files, adds, dels, mods, &diff_sample);
+        Ok(suggestion)
+    }
+}
+
+fn count_diff_stats(old_text: &str, new_text: &str) -> (usize, usize) {
+    let diff = similar::TextDiff::from_lines(old_text, new_text);
+    let mut additions = 0usize;
+    let mut deletions = 0usize;
+    for change in diff.iter_all_changes() {
+        match change.tag() {
+            similar::ChangeTag::Insert => additions += 1,
+            similar::ChangeTag::Delete => deletions += 1,
+            similar::ChangeTag::Equal => {}
+        }
+    }
+    (additions, deletions)
+}
+
+pub fn build_semantic_commit_suggestion(
+    files: &[String],
+    adds: usize,
+    _dels: usize,
+    mods: usize,
+    _diff_stat: &str,
+) -> SemanticCommitSuggestion {
+    let all_tests = !files.is_empty()
+        && files
+            .iter()
+            .all(|f| f.contains(".test.") || f.contains("_test.") || f.contains("/tests/"));
+    let all_docs = !files.is_empty()
+        && files
+            .iter()
+            .all(|f| f.ends_with(".md") || f.to_lowercase().contains("readme"));
+
+    let commit_type = if all_tests {
+        "test"
+    } else if all_docs {
+        "docs"
+    } else if adds > 0 {
+        "feat"
+    } else if mods > 0 {
+        "refactor"
+    } else {
+        "chore"
+    }
+    .to_string();
+
+    // Infer common package/directory scope
+    let scope = files
+        .first()
+        .and_then(|f| {
+            let parts: Vec<&str> = f.split(['/', '\\']).collect();
+            if parts.len() >= 2 && (parts[0] == "packages" || parts[0] == "src") {
+                Some(parts[1].to_string())
+            } else if parts.len() >= 2 {
+                Some(parts[0].to_string())
+            } else {
+                None
+            }
+        });
+
+    let file_names: Vec<String> = files
+        .iter()
+        .take(3)
+        .filter_map(|f| f.split(['/', '\\']).next_back().map(String::from))
+        .collect();
+    let suffix = if files.len() > 3 {
+        format!(" and {} more", files.len() - 3)
+    } else {
+        String::new()
+    };
+    let subject = format!(
+        "update {}{}",
+        file_names.join(", "),
+        suffix
+    );
+    let body = files
+        .iter()
+        .take(15)
+        .map(|f| format!("- {f}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let header = match &scope {
+        Some(s) => format!("{commit_type}({s}): {subject}"),
+        None => format!("{commit_type}: {subject}"),
+    };
+    let full_message = format!("{header}\n\n{body}");
+
+    SemanticCommitSuggestion {
+        commit_type,
+        scope,
+        subject,
+        body,
+        full_message,
+        files_changed: files.to_vec(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn semantic_commit_classifier_detects_test_and_docs_and_feat() {
+        let test_res = build_semantic_commit_suggestion(
+            &["packages/app/src/foo.test.ts".to_string()],
+            1,
+            0,
+            0,
+            "",
+        );
+        assert_eq!(test_res.commit_type, "test");
+        assert_eq!(test_res.scope.as_deref(), Some("app"));
+
+        let docs_res = build_semantic_commit_suggestion(&["missingfeatures.md".to_string()], 0, 0, 1, "");
+        assert_eq!(docs_res.commit_type, "docs");
+
+        let feat_res = build_semantic_commit_suggestion(
+            &["packages/desktop-tauri/src-tauri/src/main.rs".to_string()],
+            1,
+            0,
+            0,
+            "",
+        );
+        assert_eq!(feat_res.commit_type, "feat");
+        assert_eq!(feat_res.scope.as_deref(), Some("desktop-tauri"));
+    }
+
+    #[test]
+    fn diff_stats_counts_insertions_and_deletions() {
+        let (add, del) = count_diff_stats("a\nb\nc\n", "a\nx\ny\nc\n");
+        assert_eq!(add, 2);
+        assert_eq!(del, 1);
     }
 }

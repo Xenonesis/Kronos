@@ -54,3 +54,9 @@ export {
   type SearchResultItem,
   type WebFetchItem,
 } from "./web-search-modal";
+export { SemanticCommitModal, type SemanticCommitModalProps } from "./semantic-commit-modal";
+export { CostBudgetModal, type CostBudgetModalProps } from "./cost-budget-modal";
+export { McpHubModal, type McpHubModalProps } from "./mcp-hub-modal";
+export { WorkspaceDocsModal, type WorkspaceDocsModalProps } from "./workspace-docs-modal";
+export { DatabaseStudioModal, type DatabaseStudioModalProps } from "./database-studio-modal";
+export { ModelArenaModal, type ModelArenaModalProps } from "./model-arena-modal";

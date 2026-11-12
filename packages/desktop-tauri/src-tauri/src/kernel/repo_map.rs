@@ -1,5 +1,16 @@
 use crate::kernel::ast::{AstEngine, AstSymbol, AstSymbolKind};
+use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DependencyGraphResult {
+    pub node_count: usize,
+    pub edge_count: usize,
+    pub modules: Vec<String>,
+    pub mermaid: String,
+}
 
 const MAX_REPO_MAP_CHARS: usize = 6_000; // ~1,500 tokens
 const MAX_FILES_TO_SCAN: usize = 80;
@@ -221,6 +232,138 @@ fn extract_symbols_heuristic(source: &str, ext: &str) -> Vec<String> {
     out
 }
 
+/// Generates a module-level Mermaid `flowchart LR` dependency graph across workspace source files.
+pub fn generate_dependency_graph(cwd: &Path) -> Option<DependencyGraphResult> {
+    if !cwd.is_dir() {
+        return None;
+    }
+
+    let mut source_files = Vec::new();
+    collect_source_files(cwd, cwd, &mut source_files, 0, 8);
+    if source_files.is_empty() {
+        return None;
+    }
+    source_files.sort();
+
+    let mut module_edges: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut modules: BTreeSet<String> = BTreeSet::new();
+
+    for rel_path in source_files.iter().take(MAX_FILES_TO_SCAN) {
+        let src_module = module_bucket(rel_path);
+        modules.insert(src_module.clone());
+        let Ok(content) = std::fs::read_to_string(cwd.join(rel_path)) else {
+            continue;
+        };
+        for target in extract_import_targets(&content) {
+            let dst_module = normalize_import_bucket(&target, rel_path);
+            if let Some(dst) = dst_module {
+                if dst != src_module {
+                    modules.insert(dst.clone());
+                    module_edges.insert((src_module.clone(), dst));
+                }
+            }
+        }
+    }
+
+    let module_list: Vec<String> = modules.into_iter().take(28).collect();
+    let mut id_map: BTreeMap<String, String> = BTreeMap::new();
+    for (idx, m) in module_list.iter().enumerate() {
+        id_map.insert(m.clone(), format!("M{idx}"));
+    }
+
+    let mut mermaid = String::from("flowchart LR\n");
+    for m in &module_list {
+        if let Some(id) = id_map.get(m) {
+            mermaid.push_str(&format!("  {id}[\"{m}\"]\n"));
+        }
+    }
+
+    let mut rendered_edges = 0usize;
+    for (src, dst) in &module_edges {
+        if let (Some(src_id), Some(dst_id)) = (id_map.get(src), id_map.get(dst)) {
+            mermaid.push_str(&format!("  {src_id} --> {dst_id}\n"));
+            rendered_edges += 1;
+            if rendered_edges >= 48 {
+                break;
+            }
+        }
+    }
+
+    Some(DependencyGraphResult {
+        node_count: module_list.len(),
+        edge_count: rendered_edges,
+        modules: module_list,
+        mermaid,
+    })
+}
+
+fn module_bucket(rel_path: &str) -> String {
+    let parts: Vec<&str> = rel_path.split('/').collect();
+    if parts.len() >= 3 && (parts[0] == "packages" || parts[0] == "crates") {
+        format!("{}/{}", parts[0], parts[1])
+    } else if parts.len() >= 2 && (parts[0] == "src" || parts[0] == "app") {
+        format!("{}/{}", parts[0], parts[1])
+    } else {
+        parts.first().copied().unwrap_or(rel_path).to_string()
+    }
+}
+
+fn extract_import_targets(source: &str) -> Vec<String> {
+    let mut targets = Vec::new();
+    for line in source.lines().take(120) {
+        let trimmed = line.trim();
+        // JS/TS: import ... from "x"
+        if let Some(idx) = trimmed.find(" from ") {
+            let rest = trimmed[idx + 6..].trim();
+            if let Some(quoted) = extract_quoted(rest) {
+                targets.push(quoted);
+                continue;
+            }
+        }
+        // Rust: use crate::foo::...
+        if let Some(rest) = trimmed.strip_prefix("use crate::") {
+            if let Some(seg) = rest.split("::").next() {
+                let clean = seg.trim_end_matches(';').trim();
+                if !clean.is_empty() {
+                    targets.push(format!("crate::{clean}"));
+                }
+            }
+        }
+    }
+    targets
+}
+
+fn extract_quoted(s: &str) -> Option<String> {
+    let quote = s.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let rest = &s[1..];
+    let end = rest.find(quote)?;
+    Some(rest[..end].to_string())
+}
+
+fn normalize_import_bucket(target: &str, source_rel_path: &str) -> Option<String> {
+    if let Some(mod_name) = target.strip_prefix("crate::") {
+        return Some(format!("src/{mod_name}"));
+    }
+    if let Some(alias) = target.strip_prefix("@/") {
+        let seg = alias.split('/').next()?;
+        return Some(format!("src/{seg}"));
+    }
+    if target.starts_with("@getpaseo/") {
+        let pkg = target.strip_prefix("@getpaseo/")?.split('/').next()?;
+        return Some(format!("packages/{pkg}"));
+    }
+    if target.starts_with("./") || target.starts_with("../") {
+        let parent = Path::new(source_rel_path).parent()?.to_str()?.replace('\\', "/");
+        if !parent.is_empty() {
+            return Some(module_bucket(&parent));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +401,22 @@ mod tests {
         assert!(map.contains("service.ts:"));
         assert!(map.contains("main.rs:"));
         assert!(map.contains("pub struct Config"));
+    }
+
+    #[test]
+    fn test_generate_dependency_graph() {
+        let dir = tempdir().unwrap();
+        let src_a = dir.path().join("src").join("alpha");
+        let src_b = dir.path().join("src").join("beta");
+        std::fs::create_dir_all(&src_a).unwrap();
+        std::fs::create_dir_all(&src_b).unwrap();
+        std::fs::write(src_a.join("index.ts"), "import { x } from \"@/beta/util\";\nexport const a = 1;").unwrap();
+        std::fs::write(src_b.join("util.ts"), "export const x = 2;").unwrap();
+
+        let graph = generate_dependency_graph(dir.path()).expect("Should build dependency graph");
+        assert!(graph.node_count >= 2);
+        assert!(graph.edge_count >= 1);
+        assert!(graph.mermaid.contains("flowchart LR"));
+        assert!(graph.mermaid.contains("-->"));
     }
 }

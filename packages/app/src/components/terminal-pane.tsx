@@ -109,6 +109,7 @@ import {
   type WorkspaceFileOpenRequest,
 } from "@/workspace/file-open";
 import { TerminalAiCommandBar } from "@/terminal/terminal-ai-command-bar";
+import { TerminalOutputErrorBuffer } from "@/terminal/terminal-error-detector";
 
 const ThemedSparkles = withUnistyles(Sparkles);
 
@@ -240,19 +241,24 @@ interface KeyboardToggleButtonProps {
 
 interface TerminalErrorDebugBarProps {
   streamError: string | null;
+  detectedCommandError: string | null;
   serverId: string;
+  onDismissCommandError?: () => void;
 }
 
 const TerminalErrorDebugBar = memo(function TerminalErrorDebugBar({
   streamError,
+  detectedCommandError,
   serverId,
+  onDismissCommandError,
 }: TerminalErrorDebugBarProps) {
   const focusedAgentId = useSessionStore(
     (state) => state.sessions[serverId]?.focusedAgentId ?? null,
   );
   const toast = useToast();
+  const activeError = streamError ?? detectedCommandError;
   const handleDebugWithAi = useCallback(() => {
-    if (!streamError) {
+    if (!activeError) {
       return;
     }
     const session = useSessionStore.getState().sessions[serverId];
@@ -263,20 +269,26 @@ const TerminalErrorDebugBar = memo(function TerminalErrorDebugBar({
       return;
     }
     const draftKey = `agent:${serverId}:${agentId}`;
-    const debugPrompt = `### ⚡ Terminal Debug Request\nThe terminal execution failed with the following diagnostic output:\n\`\`\`\n${streamError}\n\`\`\`\nPlease analyze the root cause, identify affected files, and apply a fix.`;
+    const debugPrompt = `### ⚡ Terminal Debug Request\nThe terminal execution failed with the following diagnostic output:\n\`\`\`\n${activeError}\n\`\`\`\nPlease analyze the root cause, identify affected files, and apply a fix.`;
     useDraftStore.getState().replaceDraftText({ draftKey, text: debugPrompt });
     toast.show("Error sent to agent composer", { variant: "success" });
-  }, [streamError, serverId, focusedAgentId, toast]);
+    onDismissCommandError?.();
+  }, [activeError, serverId, focusedAgentId, toast, onDismissCommandError]);
 
-  if (!streamError) {
+  if (!activeError) {
     return null;
   }
 
   return (
     <View style={styles.errorRow}>
       <Text style={styles.statusError} numberOfLines={2}>
-        {streamError}
+        {activeError}
       </Text>
+      {!streamError && onDismissCommandError ? (
+        <Button size="sm" variant="outline" onPress={onDismissCommandError}>
+          <Text style={styles.dismissErrorText}>Dismiss</Text>
+        </Button>
+      ) : null}
       <Button
         size="sm"
         variant="destructive"
@@ -284,9 +296,7 @@ const TerminalErrorDebugBar = memo(function TerminalErrorDebugBar({
         testID="terminal-debug-with-ai"
       >
         <Sparkles size={12} color="#ffffff" />
-        <Text style={{ color: "#ffffff", fontWeight: "600", fontSize: 12, marginLeft: 4 }}>
-          Debug with Kronos
-        </Text>
+        <Text style={styles.debugAiButtonText}>Debug with Kronos</Text>
       </Button>
     </View>
   );
@@ -482,6 +492,14 @@ export function TerminalPane({
   const streamControllerRef = useRef<TerminalStreamController | null>(null);
   const [isAttaching, setIsAttaching] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [detectedCommandError, setDetectedCommandError] = useState<string | null>(null);
+  const [outputErrorBuffer] = useState(() => new TerminalOutputErrorBuffer());
+  const outputErrorBufferRef = useRef(outputErrorBuffer);
+  outputErrorBufferRef.current = outputErrorBuffer;
+  const handleDismissCommandError = useCallback(() => {
+    outputErrorBufferRef.current.clear();
+    setDetectedCommandError(null);
+  }, []);
   const [rendererReadyStreamKey, setRendererReadyStreamKey] = useState<string | null>(null);
   const [modifiers, setModifiers] = useState<ModifierState>(EMPTY_MODIFIERS);
   const [hasSelection, setHasSelection] = useState(false);
@@ -755,6 +773,10 @@ export function TerminalPane({
         return;
       }
       emulatorRef.current?.writeOutput(data);
+      const hit = outputErrorBufferRef.current?.pushBytes(data);
+      if (hit) {
+        setDetectedCommandError(hit);
+      }
     },
   );
 
@@ -1420,7 +1442,12 @@ export function TerminalPane({
         ) : null}
       </FileDropZone>
 
-      <TerminalErrorDebugBar streamError={streamError} serverId={serverId} />
+      <TerminalErrorDebugBar
+        streamError={streamError}
+        detectedCommandError={detectedCommandError}
+        serverId={serverId}
+        onDismissCommandError={handleDismissCommandError}
+      />
 
       <TerminalVirtualKeyBar
         visible={showVirtualKeyBar}
@@ -1523,6 +1550,16 @@ const styles = StyleSheet.create((theme) => ({
     color: "#ffffff",
     fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.semibold,
+  },
+  dismissErrorText: {
+    fontSize: 11,
+    color: theme.colors.foreground,
+  },
+  debugAiButtonText: {
+    color: "#ffffff",
+    fontWeight: theme.fontWeight.semibold,
+    fontSize: 12,
+    marginLeft: 4,
   },
   keyboardContainer: {
     borderTopWidth: 1,

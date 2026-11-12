@@ -4,6 +4,7 @@ import { BackgroundWorkTrack, createHostBackgroundWorkModel } from "@/background
 import { WorkspaceDiffStatPill } from "@/composer/diff-stat-pill";
 import { ShadowLinterPill } from "@/components/shadow-linter-pill";
 import { CascadeFlowPill } from "@/components/cascade-flow-pill";
+import { CostBudgetPill } from "@/components/cost-budget-pill";
 import { AgentTaskList } from "@/composer/task-list";
 import { ComposerTrackBar } from "@/composer/tracks";
 import { useIsCompactFormFactor } from "@/constants/layout";
@@ -145,6 +146,7 @@ export const AgentTracks = memo(function AgentTracks({
       />
       <ShadowLinterPill serverId={serverId} agentId={agentId} />
       <CascadeFlowPill />
+      <CostBudgetPill agentId={agentId} serverId={serverId} />
       <WorkspaceDiffStatPill
         serverId={serverId}
         workspaceId={workspaceId}
