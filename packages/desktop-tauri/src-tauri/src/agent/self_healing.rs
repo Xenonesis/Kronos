@@ -132,6 +132,51 @@ pub fn run_workspace_diagnostic_probe(workspace_root: &Path) -> Option<Diagnosti
         }
     }
 
+    // 3. Python project check (pyproject.toml, requirements.txt)
+    if workspace_root.join("pyproject.toml").exists() || workspace_root.join("requirements.txt").exists() {
+        let probe = Command::new("ruff")
+            .arg("check")
+            .arg(".")
+            .current_dir(workspace_root)
+            .output();
+
+        if let Ok(output) = probe {
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let full = format!("{}\n{}", stdout, stderr);
+                let count = full.lines().filter(|l| l.contains(":")).count().max(1);
+                let snippet = if full.len() > 3000 {
+                    format!("{}...\n[truncated]", &full[..3000])
+                } else {
+                    full
+                };
+                return Some(DiagnosticErrorSummary::new("ruff check", snippet, count));
+            }
+        }
+    }
+
+    // 4. Go project check (go.mod)
+    if workspace_root.join("go.mod").exists() {
+        if let Ok(output) = Command::new("go")
+            .arg("vet")
+            .arg("./...")
+            .current_dir(workspace_root)
+            .output()
+        {
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let count = stderr.lines().count().max(1);
+                let snippet = if stderr.len() > 3000 {
+                    format!("{}...\n[truncated]", &stderr[..3000])
+                } else {
+                    stderr.to_string()
+                };
+                return Some(DiagnosticErrorSummary::new("go vet", snippet, count));
+            }
+        }
+    }
+
     None
 }
 

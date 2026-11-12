@@ -13,4 +13,9 @@ pub mod memories;
 pub mod browser_tool;
 pub mod architect;
 pub mod bug_hunter;
+pub mod github_ops;
+pub mod ripgrep_search;
+pub mod cloud_deploy;
+pub mod semantic_index;
+pub mod browser_runner;
 

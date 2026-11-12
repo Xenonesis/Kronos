@@ -45,6 +45,7 @@ import {
 } from "@/utils/agent-initialization";
 import { derivePendingPermissionKey } from "@/utils/agent-snapshots";
 import { useToast } from "@/contexts/toast-context";
+import { useShadowLinterStore, type ShadowLintDiagnostic } from "@/stores/shadow-linter-store";
 import { toErrorMessage } from "@/utils/error-messages";
 import { showProviderNoticeToast } from "@/utils/provider-notice-toast";
 import { applyCheckoutStatusUpdateFromEvent } from "@/git/checkout-status-cache";
@@ -366,6 +367,11 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         event.type === "turn_canceled"
       ) {
         voiceRuntime?.onTurnEvent(serverId, agentId, event.type);
+      }
+      if ((event as { type: string }).type === "shadow_lint_diagnostic") {
+        useShadowLinterStore
+          .getState()
+          .setDiagnostic(agentId, event as unknown as ShadowLintDiagnostic);
       }
       sync.applyStreamEvent(agentId, { event, seq, epoch, timestamp: new Date(timestamp) });
 

@@ -774,7 +774,7 @@ async fn run_reserved_turn(mut turn: ReservedTurn, command: Option<Command>) {
 
     let terminal_event = if turn.is_cancelled() && cleanup_confirmed {
         json!({"type": "turn_canceled", "provider": provider, "turnId": turn_id, "reason": "Cancellation requested"})
-    } else if let Some(error) = error {
+    } else if let Some(ref error) = error {
         json!({"type": "turn_failed", "provider": provider, "turnId": turn_id, "error": error})
     } else {
         let mut event = json!({"type": "turn_completed", "provider": provider, "turnId": turn_id});
@@ -790,6 +790,36 @@ async fn run_reserved_turn(mut turn: ReservedTurn, command: Option<Command>) {
     }).to_string());
     broadcast_agent_status(&manager, &agent_id);
     broadcast_timeline_replacement(&agent_id);
+
+    // FEAT-1: Background Shadow Linter & Diagnostics Loop (Cursor Parity)
+    // Non-destructively probe workspace compiler/type errors after successful turn completion.
+    if error.is_none() && !turn.is_cancelled() && !turn.agent.cwd.is_empty() {
+        let cwd_path = std::path::PathBuf::from(&turn.agent.cwd);
+        let push_tx = get_provider_push_tx().clone();
+        let target_agent_id = agent_id.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Some(diag) = crate::agent::self_healing::run_workspace_diagnostic_probe(&cwd_path) {
+                let _ = push_tx.send(serde_json::json!({
+                    "type": "session",
+                    "message": {
+                        "type": "agent_stream",
+                        "payload": {
+                            "agentId": target_agent_id,
+                            "timestamp": crate::agent::types::now_iso(),
+                            "event": {
+                                "type": "shadow_lint_diagnostic",
+                                "system": diag.system,
+                                "errorCount": diag.error_count,
+                                "primaryFile": diag.primary_file,
+                                "rawOutput": diag.raw_output,
+                                "repairPrompt": diag.to_repair_prompt(),
+                            }
+                        }
+                    }
+                }).to_string());
+            }
+        });
+    }
 }
 
 async fn cleanup_failed_provider_start(

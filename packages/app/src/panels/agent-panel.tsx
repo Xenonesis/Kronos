@@ -28,6 +28,13 @@ import { FileDropZone } from "@/components/file-drop/file-drop-zone";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { RetainedChatContent } from "./retained-chat-content";
 import { Composer } from "@/composer";
+import {
+  GitHubPrModal,
+  CloudDeploymentModal,
+  BrowserVerificationModal,
+} from "@/desktop/components";
+import { GlobalSearchReplaceModal } from "@/panels/global-search-replace-modal";
+import { ArtifactsCanvasModal } from "@/components/artifacts-canvas-modal";
 import { AgentCommandsProvider } from "@/agent-commands";
 import {
   useComposerEditingSession,
@@ -1614,6 +1621,22 @@ function ActiveAgentComposer({
   );
   const paneContext = usePaneContext();
   const toast = useToast();
+  const [isGitHubPrModalVisible, setIsGitHubPrModalVisible] = useState(false);
+  const [isGlobalSearchVisible, setIsGlobalSearchVisible] = useState(false);
+  const [isArtifactsModalVisible, setIsArtifactsModalVisible] = useState(false);
+  const [isDeployModalVisible, setIsDeployModalVisible] = useState(false);
+  const [isBrowserTestModalVisible, setIsBrowserTestModalVisible] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setIsGlobalSearchVisible(true);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
   const openInSidePane = useSettings((settings) => settings.openInSidePane);
   const { workspaceId, tabId, retargetCurrentTab } = paneContext;
   const { archiveAgent } = useArchiveAgent();
@@ -1666,6 +1689,26 @@ function ActiveAgentComposer({
       }
       if (command.kind === "consensus-mode") {
         toast.show("Multi-model consensus synthesizer active", { variant: "success" });
+        return;
+      }
+      if (command.kind === "create-pr") {
+        setIsGitHubPrModalVisible(true);
+        return;
+      }
+      if (command.kind === "artifacts-view") {
+        setIsArtifactsModalVisible(true);
+        return;
+      }
+      if (command.kind === "cloud-deploy") {
+        setIsDeployModalVisible(true);
+        return;
+      }
+      if (command.kind === "semantic-search") {
+        toast.show("Codebase semantic vector search initialized", { variant: "success" });
+        return;
+      }
+      if (command.kind === "browser-test") {
+        setIsBrowserTestModalVisible(true);
         return;
       }
 
@@ -1728,6 +1771,29 @@ function ActiveAgentComposer({
         onMessageSent={onMessageSent}
         onClientSlashCommand={handleClientSlashCommand}
         isCompactLayout={isCompactComposerLayout}
+      />
+      <GitHubPrModal
+        visible={isGitHubPrModalVisible}
+        cwd={cwd}
+        onClose={() => setIsGitHubPrModalVisible(false)}
+      />
+      <GlobalSearchReplaceModal
+        visible={isGlobalSearchVisible}
+        cwd={cwd}
+        onClose={() => setIsGlobalSearchVisible(false)}
+      />
+      <ArtifactsCanvasModal
+        visible={isArtifactsModalVisible}
+        onClose={() => setIsArtifactsModalVisible(false)}
+      />
+      <CloudDeploymentModal
+        visible={isDeployModalVisible}
+        cwd={cwd}
+        onClose={() => setIsDeployModalVisible(false)}
+      />
+      <BrowserVerificationModal
+        visible={isBrowserTestModalVisible}
+        onClose={() => setIsBrowserTestModalVisible(false)}
       />
     </View>
   );

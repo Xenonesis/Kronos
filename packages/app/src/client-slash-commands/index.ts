@@ -7,7 +7,12 @@ export type ClientSlashCommandKind =
   | "compact-session"
   | "test-loop"
   | "audit-codebase"
-  | "consensus-mode";
+  | "consensus-mode"
+  | "create-pr"
+  | "artifacts-view"
+  | "cloud-deploy"
+  | "semantic-search"
+  | "browser-test";
 export type ClientSlashCommandExecution = "immediate" | "insert";
 
 export interface ClientSlashCommand {
@@ -74,6 +79,51 @@ export const CLIENT_SLASH_COMMANDS: readonly ClientSlashCommand[] = [
     descriptionKey: "composer.clientCommands.archiveAgent",
     argumentHint: "<prompt>",
     kind: "consensus-mode",
+    execution: "immediate",
+  },
+  {
+    name: "pr",
+    aliases: ["pull-request", "create-pr"],
+    description: "Generate and publish an AI-summarized GitHub Pull Request for current branch",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "create-pr",
+    execution: "immediate",
+  },
+  {
+    name: "artifacts",
+    aliases: ["canvas", "diagrams"],
+    description: "Open the Visual Artifacts Canvas for architecture diagrams and sandboxes",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "artifacts-view",
+    execution: "immediate",
+  },
+  {
+    name: "deploy",
+    aliases: ["publish", "ship"],
+    description: "Deploy project to Vercel, Netlify, or Cloudflare Pages in 1 click",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "cloud-deploy",
+    execution: "immediate",
+  },
+  {
+    name: "search-code",
+    aliases: ["semantic", "rag"],
+    description: "Search codebase using natural language semantic vector retrieval",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "<query>",
+    kind: "semantic-search",
+    execution: "immediate",
+  },
+  {
+    name: "browse-test",
+    aliases: ["test-ui", "verify-ui"],
+    description: "Verify localhost web UI rendering, DOM structure, and catch runtime errors",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "<url>",
+    kind: "browser-test",
     execution: "immediate",
   },
 ];

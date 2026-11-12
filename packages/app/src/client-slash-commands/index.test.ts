@@ -63,6 +63,11 @@ describe("resolveClientSlashCommand", () => {
       ["test-loop", ["testloop", "tl"], "immediate"],
       ["audit", ["bug-hunt", "scan"], "immediate"],
       ["consensus", ["debate", "multi-model"], "immediate"],
+      ["pr", ["pull-request", "create-pr"], "immediate"],
+      ["artifacts", ["canvas", "diagrams"], "immediate"],
+      ["deploy", ["publish", "ship"], "immediate"],
+      ["search-code", ["semantic", "rag"], "immediate"],
+      ["browse-test", ["test-ui", "verify-ui"], "immediate"],
     ]);
   });
 
@@ -121,6 +126,51 @@ describe("buildDraftAgentSetup", () => {
         "web-search": true,
         effort: "high",
       },
+    });
+  });
+
+  it("resolves /pr slash command correctly", () => {
+    const resolved = resolveClientSlashCommand({ text: "/pr", hasAttachments: false });
+    expect(resolved).toMatchObject({
+      name: "pr",
+      kind: "create-pr",
+      execution: "immediate",
+    });
+  });
+
+  it("resolves /artifacts slash command correctly", () => {
+    const resolved = resolveClientSlashCommand({ text: "/artifacts", hasAttachments: false });
+    expect(resolved).toMatchObject({
+      name: "artifacts",
+      kind: "artifacts-view",
+      execution: "immediate",
+    });
+  });
+
+  it("resolves /deploy slash command correctly", () => {
+    const resolved = resolveClientSlashCommand({ text: "/deploy", hasAttachments: false });
+    expect(resolved).toMatchObject({
+      name: "deploy",
+      kind: "cloud-deploy",
+      execution: "immediate",
+    });
+  });
+
+  it("resolves /search-code slash command correctly", () => {
+    const resolved = resolveClientSlashCommand({ text: "/search-code", hasAttachments: false });
+    expect(resolved).toMatchObject({
+      name: "search-code",
+      kind: "semantic-search",
+      execution: "immediate",
+    });
+  });
+
+  it("resolves /browse-test slash command correctly", () => {
+    const resolved = resolveClientSlashCommand({ text: "/browse-test", hasAttachments: false });
+    expect(resolved).toMatchObject({
+      name: "browse-test",
+      kind: "browser-test",
+      execution: "immediate",
     });
   });
 

@@ -42,3 +42,9 @@ export {
   type PromptCachingAnalyticsHudProps,
   type PromptCachingMetrics,
 } from "@/components/prompt-caching-analytics-hud";
+export { GitHubPrModal, type GitHubPrModalProps } from "./github-pr-modal";
+export { CloudDeploymentModal, type CloudDeploymentModalProps } from "./cloud-deployment-modal";
+export {
+  BrowserVerificationModal,
+  type BrowserVerificationModalProps,
+} from "./browser-verification-modal";

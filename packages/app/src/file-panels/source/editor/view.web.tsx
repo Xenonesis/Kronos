@@ -8,6 +8,7 @@ import type { WorkspaceFileLocation } from "@/workspace/file-open";
 import type { FileEditorModel } from "./model";
 import { editorBaseExtensions, editorTheme, type EditorVisualTheme } from "./extensions.web";
 import { InlineCodeLensToolbar } from "./inline-codelens-toolbar";
+import { InlineCtrlKPrompt } from "./inline-ctrl-k-prompt";
 
 interface FileEditorViewProps {
   model: FileEditorModel;
@@ -52,6 +53,7 @@ export function FileEditorView({
     null,
   );
   const [isCodeLensVisible, setIsCodeLensVisible] = useState(false);
+  const [isCtrlKVisible, setIsCtrlKVisible] = useState(false);
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const snapshot = useSyncExternalStore(model.subscribe, model.getSnapshot, model.getSnapshot);
@@ -185,6 +187,48 @@ export function FileEditorView({
     return () => cm.off("vim-mode-change", handleModeChange);
   }, [onVimModeChange, vimEnabled]);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        const view = viewRef.current;
+        if (!view) return;
+        const main = view.state.selection.main;
+        const from = main.empty ? view.state.doc.lineAt(main.head).from : main.from;
+        const to = main.empty ? view.state.doc.lineAt(main.head).to : main.to;
+        const text = view.state.doc.sliceString(from, to);
+        setSelectedText(text);
+        const coords = view.coordsAtPos(from);
+        if (coords && hostRef.current) {
+          const hostRect = hostRef.current.getBoundingClientRect();
+          setSelectionCoords({
+            top: coords.top - hostRect.top,
+            left: coords.left - hostRect.left,
+          });
+        }
+        setIsCtrlKVisible(true);
+        setIsCodeLensVisible(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const handleCtrlKAccept = (newCode: string) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const main = view.state.selection.main;
+    const from = main.empty ? view.state.doc.lineAt(main.head).from : main.from;
+    const to = main.empty ? view.state.doc.lineAt(main.head).to : main.to;
+    view.dispatch({
+      changes: { from, to, insert: newCode },
+      selection: { anchor: from + newCode.length },
+    });
+    const { lineSeparator } = model.getSnapshot();
+    model.edit(view.state.doc.sliceString(0, undefined, lineSeparator));
+    setIsCtrlKVisible(false);
+  };
+
   return (
     <div style={FRAME_STYLE}>
       <div
@@ -201,6 +245,14 @@ export function FileEditorView({
         selectedText={selectedText}
         selectionCoords={selectionCoords}
         onClose={() => setIsCodeLensVisible(false)}
+      />
+      <InlineCtrlKPrompt
+        visible={isCtrlKVisible}
+        filename={filename}
+        selectedText={selectedText}
+        selectionCoords={selectionCoords}
+        onAccept={handleCtrlKAccept}
+        onClose={() => setIsCtrlKVisible(false)}
       />
     </div>
   );

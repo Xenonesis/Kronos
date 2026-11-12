@@ -171,6 +171,11 @@ const CLIENT_COMMAND_ICONS = {
   "test-loop": "command",
   "audit-codebase": "command",
   "consensus-mode": "command",
+  "create-pr": "command",
+  "artifacts-view": "command",
+  "cloud-deploy": "command",
+  "semantic-search": "command",
+  "browser-test": "command",
 } as const satisfies Record<ClientSlashCommand["kind"], AutocompleteOption["icon"]>;
 
 interface CommandOptionContext {
