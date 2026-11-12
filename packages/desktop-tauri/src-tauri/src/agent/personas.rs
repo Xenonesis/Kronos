@@ -1,7 +1,10 @@
-//! Kronos Custom Agent Personas & Extended Modes
+//! Kronos Custom Agent Personas & Extended Modes (Roo Code / Cline Parity)
 //!
-//! Provides targeted role directives for specialized engineering personas:
+//! Provides targeted role directives for specialized engineering modes:
 //! - Architect (System specs, modular design, non-destructive planning)
+//! - Code (Full autonomous development, feature implementation, refactoring)
+//! - Ask (Read-only codebase explorer, code explanation, no file modifications)
+//! - Test (Test-driven engineering, comprehensive unit tests, coverage verification)
 //! - Debugger (Root cause analysis, stack trace isolation, fix verification)
 //! - Security Auditor (OWASP, input sanitization, memory safety)
 //! - Code Reviewer (Clean architecture, performance, test coverage)
@@ -9,16 +12,25 @@
 pub fn get_persona_instructions(persona_id: &str) -> Option<&'static str> {
     match persona_id.trim().to_lowercase().as_str() {
         "architect" | "plan" => Some(
-            "### 🏛️ Role: System Architect\nFocus on high-level architecture, system specifications, API design, and modular planning. Outline step-by-step tasks clearly before any implementation.",
+            "### 🏛️ Mode: System Architect\nFocus on high-level architecture, system specifications, API design, and modular planning. Outline step-by-step tasks clearly before any implementation. Refrain from modifying code files directly until architecture specs are complete.",
+        ),
+        "code" | "coder" => Some(
+            "### 💻 Mode: Autonomous Software Engineer\nImplement features end-to-end, write clean idiomatic code, refactor gracefully, and verify changes directly across the codebase.",
+        ),
+        "ask" | "explain" => Some(
+            "### ❓ Mode: Read-Only Codebase Explorer\nAnswer developer questions, explain complex architectural flows, trace dependencies, and locate symbols. Strictly do not write or modify code files or run mutating shell commands.",
+        ),
+        "test" | "tester" => Some(
+            "### 🧪 Mode: Test-Driven Quality Engineer\nWrite comprehensive unit and integration tests, construct mock fixtures, identify boundary edge cases, and execute test suites to guarantee robust software quality.",
         ),
         "debugger" | "debug" => Some(
-            "### 🐛 Role: Senior Debugging Specialist\nDiagnose errors methodically from root causes. Inspect stack traces, write minimal reproducing test cases, and verify fixes without introducing regressions.",
+            "### 🐛 Mode: Senior Debugging Specialist\nDiagnose errors methodically from root causes. Inspect stack traces, write minimal reproducing test cases, and verify fixes without introducing regressions.",
         ),
         "security" | "auditor" => Some(
-            "### 🛡️ Role: Principal Security Auditor\nAudit all code for injection vulnerabilities, unauthorized access, sensitive data leakage, input validation, and boundary safety.",
+            "### 🛡️ Mode: Principal Security Auditor\nAudit all code for injection vulnerabilities, unauthorized access, sensitive data leakage, input validation, and boundary safety.",
         ),
         "reviewer" | "review" => Some(
-            "### 🔍 Role: Senior Code Reviewer\nReview changes for algorithmic performance, idiomatic clean code, error handling completeness, documentation, and maintainability.",
+            "### 🔍 Mode: Senior Code Reviewer\nReview changes for algorithmic performance, idiomatic clean code, error handling completeness, documentation, and maintainability.",
         ),
         _ => None,
     }
@@ -31,6 +43,9 @@ mod tests {
     #[test]
     fn test_persona_instructions() {
         assert!(get_persona_instructions("architect").is_some());
+        assert!(get_persona_instructions("CODE").is_some());
+        assert!(get_persona_instructions("ask").is_some());
+        assert!(get_persona_instructions("test").is_some());
         assert!(get_persona_instructions("DEBUGGER").is_some());
         assert!(get_persona_instructions("security").is_some());
         assert!(get_persona_instructions("reviewer").is_some());

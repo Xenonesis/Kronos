@@ -736,9 +736,13 @@ async fn run_reserved_turn(mut turn: ReservedTurn, command: Option<Command>) {
         }
         Err(error) => (Some(error), true, None),
     };
-    if let Some(error) = &error {
-        if let Err(persist) = manager.append_error_notice(&agent_id, error) {
-            eprintln!("[Runner] Failed to persist turn error: {persist}");
+    if let Some(ref err_msg) = error {
+        let is_cancelled_prompt = err_msg.contains("Cancelled a request for input")
+            || err_msg.contains("this run cannot answer");
+        if !is_cancelled_prompt {
+            if let Err(persist) = manager.append_error_notice(&agent_id, err_msg) {
+                eprintln!("[Runner] Failed to persist turn error: {persist}");
+            }
         }
     }
     if cleanup_confirmed {

@@ -48,3 +48,9 @@ export {
   BrowserVerificationModal,
   type BrowserVerificationModalProps,
 } from "./browser-verification-modal";
+export {
+  WebSearchModal,
+  type WebSearchModalProps,
+  type SearchResultItem,
+  type WebFetchItem,
+} from "./web-search-modal";

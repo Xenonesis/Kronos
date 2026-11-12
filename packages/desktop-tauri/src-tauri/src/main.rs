@@ -448,6 +448,30 @@ async fn workspace_search(
 }
 
 #[tauri::command]
+async fn web_search_query(
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<crate::agent::web_search::SearchResult>, String> {
+    crate::agent::web_search::search_web(&query, limit.unwrap_or(8)).await
+}
+
+#[tauri::command]
+async fn web_scrape_url(
+    url: String,
+    max_chars: Option<usize>,
+) -> Result<crate::agent::web_search::WebFetchResult, String> {
+    crate::agent::web_search::fetch_url(&url, max_chars).await
+}
+
+#[tauri::command]
+async fn get_repo_map(cwd: Option<String>) -> Result<String, String> {
+    let target_dir = cwd.unwrap_or_else(|| ".".to_string());
+    let path = std::path::PathBuf::from(target_dir);
+    crate::kernel::repo_map::generate_repo_map(&path)
+        .ok_or_else(|| "No eligible source symbols found in workspace".to_string())
+}
+
+#[tauri::command]
 async fn create_turn_checkpoint(repo_path: String, turn_id: String) -> Result<String, String> {
     crate::kernel::git::GitEngine::create_checkpoint(std::path::Path::new(&repo_path), &turn_id).await
 }
@@ -1947,7 +1971,7 @@ try {{
         }}
         return null;
       }}
-      if (command === 'mark_first_paint' || command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast' || command === 'crdt_doc_action' || command === 'get_ioring_status' || command === 'transcribe_audio_chunk' || command === 'get_speech_engine_status' || command === 'get_shm_status' || command === 'push_shm_chunk') {{
+      if (command === 'mark_first_paint' || command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast' || command === 'crdt_doc_action' || command === 'get_ioring_status' || command === 'transcribe_audio_chunk' || command === 'get_speech_engine_status' || command === 'get_shm_status' || command === 'push_shm_chunk' || command === 'web_search_query' || command === 'web_scrape_url' || command === 'get_repo_map') {{
         try {{
           if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
             return await window.__TAURI_INTERNALS__.invoke(command, args || {{}});
@@ -2229,7 +2253,10 @@ try {{
             trim_memory,
             set_window_progress,
             ping_watchdog,
-            discover_local_ai_providers
+            discover_local_ai_providers,
+            web_search_query,
+            web_scrape_url,
+            get_repo_map
         ])
         .setup(move |app| {
             crate::kernel::watchdog::start_watchdog(app.handle().clone());

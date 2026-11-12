@@ -18,4 +18,5 @@ pub mod ripgrep_search;
 pub mod cloud_deploy;
 pub mod semantic_index;
 pub mod browser_runner;
+pub mod web_search;
 

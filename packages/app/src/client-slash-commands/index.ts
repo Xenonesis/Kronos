@@ -12,7 +12,15 @@ export type ClientSlashCommandKind =
   | "artifacts-view"
   | "cloud-deploy"
   | "semantic-search"
-  | "browser-test";
+  | "browser-test"
+  | "web-search"
+  | "web-fetch"
+  | "repo-map"
+  | "web-preview"
+  | "agent-mode"
+  | "yolo-mode"
+  | "voice-dictation"
+  | "agent-swarm";
 export type ClientSlashCommandExecution = "immediate" | "insert";
 
 export interface ClientSlashCommand {
@@ -124,6 +132,81 @@ export const CLIENT_SLASH_COMMANDS: readonly ClientSlashCommand[] = [
     descriptionKey: "composer.clientCommands.archiveAgent",
     argumentHint: "<url>",
     kind: "browser-test",
+    execution: "immediate",
+  },
+  {
+    name: "web",
+    aliases: ["search-web", "google"],
+    description: "Search the live web for real-time documentation, APIs, and news",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "<query>",
+    kind: "web-search",
+    execution: "immediate",
+  },
+  {
+    name: "fetch",
+    aliases: ["scrape", "read-url"],
+    description: "Fetch any web page or documentation link and convert to clean Markdown",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "<url>",
+    kind: "web-fetch",
+    execution: "immediate",
+  },
+  {
+    name: "repomap",
+    aliases: ["map", "symbols"],
+    description:
+      "Generate a high-altitude compact symbol outline map of the workspace (Aider style)",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "repo-map",
+    execution: "immediate",
+  },
+  {
+    name: "preview",
+    aliases: ["live", "web-preview", "split-preview"],
+    description:
+      "Open live side-by-side webview preview panel with hot reload (Bolt.new / Lovable style)",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "[url]",
+    kind: "web-preview",
+    execution: "immediate",
+  },
+  {
+    name: "mode",
+    aliases: ["switch-mode", "persona"],
+    description: "Switch agent execution mode (Architect / Code / Ask / Test) (Roo Code style)",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "<architect|code|ask|test>",
+    kind: "agent-mode",
+    execution: "immediate",
+  },
+  {
+    name: "yolo",
+    aliases: ["danger", "auto-approve", "permissions"],
+    description: "Toggle Terminal YOLO mode & command auto-approval (Claude Code style)",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "[on|off]",
+    kind: "yolo-mode",
+    execution: "immediate",
+  },
+  {
+    name: "voice",
+    aliases: ["dictate", "speak", "mic"],
+    description: "Activate hands-free voice dictation mode (Cursor Voice style)",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "voice-dictation",
+    execution: "immediate",
+  },
+  {
+    name: "swarm",
+    aliases: ["subagent", "delegate", "spawn-agent"],
+    description:
+      "Dispatch an autonomous background child subagent to perform work in parallel (Antigravity / Devin style)",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "<brief>",
+    kind: "agent-swarm",
     execution: "immediate",
   },
 ];

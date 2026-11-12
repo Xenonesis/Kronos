@@ -3,6 +3,7 @@ import { memo, useCallback, useMemo, type ReactElement } from "react";
 import { BackgroundWorkTrack, createHostBackgroundWorkModel } from "@/background-work";
 import { WorkspaceDiffStatPill } from "@/composer/diff-stat-pill";
 import { ShadowLinterPill } from "@/components/shadow-linter-pill";
+import { CascadeFlowPill } from "@/components/cascade-flow-pill";
 import { AgentTaskList } from "@/composer/task-list";
 import { ComposerTrackBar } from "@/composer/tracks";
 import { useIsCompactFormFactor } from "@/constants/layout";
@@ -143,6 +144,7 @@ export const AgentTracks = memo(function AgentTracks({
         compact={isCompact}
       />
       <ShadowLinterPill serverId={serverId} agentId={agentId} />
+      <CascadeFlowPill />
       <WorkspaceDiffStatPill
         serverId={serverId}
         workspaceId={workspaceId}

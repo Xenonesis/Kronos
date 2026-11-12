@@ -176,6 +176,14 @@ const CLIENT_COMMAND_ICONS = {
   "cloud-deploy": "command",
   "semantic-search": "command",
   "browser-test": "command",
+  "web-search": "command",
+  "web-fetch": "command",
+  "repo-map": "command",
+  "web-preview": "command",
+  "agent-mode": "command",
+  "yolo-mode": "command",
+  "voice-dictation": "command",
+  "agent-swarm": "command",
 } as const satisfies Record<ClientSlashCommand["kind"], AutocompleteOption["icon"]>;
 
 interface CommandOptionContext {

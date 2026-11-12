@@ -4,6 +4,7 @@ import {
   resolvePromptMentionsAsync,
   type ResolveMentionsOptions,
 } from "@/composer/at-mentions/mention-resolver";
+import { useCascadeFlowStore } from "@/stores/cascade-flow-store";
 
 export type AgentInputSubmitResult = "noop" | "queued" | "submitted" | "failed";
 
@@ -44,6 +45,13 @@ export async function submitAgentInput<TAttachment>(
         client: input.client,
       })
     : resolvePromptMentions(trimmedMessage);
+
+  const flowContext = useCascadeFlowStore.getState().getFlowContextString();
+  const effectiveMessage =
+    flowContext && !resolvedMessage.includes("[Cascade Flow")
+      ? `${resolvedMessage}\n\n${flowContext}`
+      : resolvedMessage;
+
   const attachments = input.attachments;
   const shouldClearOnSubmit = input.submitBehavior !== "preserve-and-lock";
 
@@ -61,7 +69,7 @@ export async function submitAgentInput<TAttachment>(
   }
 
   if (input.isAgentRunning && !input.forceSend) {
-    input.queueMessage({ message: resolvedMessage, attachments });
+    input.queueMessage({ message: effectiveMessage, attachments });
     if (shouldClearOnSubmit) {
       input.setUserInput("");
       input.setAttachments([]);
@@ -78,7 +86,7 @@ export async function submitAgentInput<TAttachment>(
   input.setIsProcessing(true);
 
   try {
-    await input.submitMessage({ message: resolvedMessage, attachments });
+    await input.submitMessage({ message: effectiveMessage, attachments });
     input.clearDraft("sent");
     input.setIsProcessing(false);
     return "submitted";

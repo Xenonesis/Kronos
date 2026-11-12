@@ -9,6 +9,8 @@ import type { FileEditorModel } from "./model";
 import { editorBaseExtensions, editorTheme, type EditorVisualTheme } from "./extensions.web";
 import { InlineCodeLensToolbar } from "./inline-codelens-toolbar";
 import { InlineCtrlKPrompt } from "./inline-ctrl-k-prompt";
+import { createGhostTextExtension } from "./ghost-text-autocomplete";
+import { useCascadeFlowStore } from "@/stores/cascade-flow-store";
 
 interface FileEditorViewProps {
   model: FileEditorModel;
@@ -82,6 +84,7 @@ export function FileEditorView({
           languageCompartment.of(getLanguageForFile(values.filename)?.extension ?? []),
           wrappingCompartment.of(wrappingForFile(values.filename)),
           themeCompartment.of(editorTheme(values.theme)),
+          createGhostTextExtension(values.filename),
           EditorView.updateListener.of((update) => {
             if (
               update.docChanged &&
@@ -93,7 +96,9 @@ export function FileEditorView({
             if (update.selectionSet || update.docChanged) {
               const head = update.state.selection.main.head;
               const line = update.state.doc.lineAt(head);
-              onCursorChangeRef.current({ line: line.number, column: head - line.from + 1 });
+              const col = head - line.from + 1;
+              onCursorChangeRef.current({ line: line.number, column: col });
+              useCascadeFlowStore.getState().setActiveFile(filename, line.number, col);
 
               if (!update.state.selection.main.empty) {
                 const from = update.state.selection.main.from;

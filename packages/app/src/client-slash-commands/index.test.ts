@@ -68,6 +68,14 @@ describe("resolveClientSlashCommand", () => {
       ["deploy", ["publish", "ship"], "immediate"],
       ["search-code", ["semantic", "rag"], "immediate"],
       ["browse-test", ["test-ui", "verify-ui"], "immediate"],
+      ["web", ["search-web", "google"], "immediate"],
+      ["fetch", ["scrape", "read-url"], "immediate"],
+      ["repomap", ["map", "symbols"], "immediate"],
+      ["preview", ["live", "web-preview", "split-preview"], "immediate"],
+      ["mode", ["switch-mode", "persona"], "immediate"],
+      ["yolo", ["danger", "auto-approve", "permissions"], "immediate"],
+      ["voice", ["dictate", "speak", "mic"], "immediate"],
+      ["swarm", ["subagent", "delegate", "spawn-agent"], "immediate"],
     ]);
   });
 
@@ -170,6 +178,71 @@ describe("buildDraftAgentSetup", () => {
     expect(resolved).toMatchObject({
       name: "browse-test",
       kind: "browser-test",
+      execution: "immediate",
+    });
+  });
+
+  it("resolves /web and /fetch slash commands correctly", () => {
+    const resolvedWeb = resolveClientSlashCommand({ text: "/web", hasAttachments: false });
+    expect(resolvedWeb).toMatchObject({
+      name: "web",
+      kind: "web-search",
+      execution: "immediate",
+    });
+
+    const resolvedGoogle = resolveClientSlashCommand({ text: "/google", hasAttachments: false });
+    expect(resolvedGoogle).toMatchObject({
+      name: "web",
+      kind: "web-search",
+      execution: "immediate",
+    });
+
+    const resolvedFetch = resolveClientSlashCommand({ text: "/fetch", hasAttachments: false });
+    expect(resolvedFetch).toMatchObject({
+      name: "fetch",
+      kind: "web-fetch",
+      execution: "immediate",
+    });
+
+    const resolvedRepoMap = resolveClientSlashCommand({ text: "/repomap", hasAttachments: false });
+    expect(resolvedRepoMap).toMatchObject({
+      name: "repomap",
+      kind: "repo-map",
+      execution: "immediate",
+    });
+
+    const resolvedPreview = resolveClientSlashCommand({ text: "/preview", hasAttachments: false });
+    expect(resolvedPreview).toMatchObject({
+      name: "preview",
+      kind: "web-preview",
+      execution: "immediate",
+    });
+
+    const resolvedMode = resolveClientSlashCommand({ text: "/mode", hasAttachments: false });
+    expect(resolvedMode).toMatchObject({
+      name: "mode",
+      kind: "agent-mode",
+      execution: "immediate",
+    });
+
+    const resolvedYolo = resolveClientSlashCommand({ text: "/yolo", hasAttachments: false });
+    expect(resolvedYolo).toMatchObject({
+      name: "yolo",
+      kind: "yolo-mode",
+      execution: "immediate",
+    });
+
+    const resolvedVoice = resolveClientSlashCommand({ text: "/voice", hasAttachments: false });
+    expect(resolvedVoice).toMatchObject({
+      name: "voice",
+      kind: "voice-dictation",
+      execution: "immediate",
+    });
+
+    const resolvedSwarm = resolveClientSlashCommand({ text: "/swarm", hasAttachments: false });
+    expect(resolvedSwarm).toMatchObject({
+      name: "swarm",
+      kind: "agent-swarm",
       execution: "immediate",
     });
   });
