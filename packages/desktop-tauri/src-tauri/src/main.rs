@@ -105,7 +105,12 @@ mod tray;
 use notifications::{notify_task_complete, setup_notification_listeners, show_notification};
 use tray::{setup_tray, update_active_agents};
 mod attachments;
+mod browser_automation;
 mod dialogs;
+use browser_automation::{
+    browser_automation_execute, browser_clear_profile, browser_focus_tab,
+    browser_register_attached, browser_unregister_tab,
+};
 use attachments::{
     copy_attachment_file, delete_attachment_file, garbage_collect_attachment_files,
     read_file_base64, write_attachment_base64, write_attachment_bytes,
@@ -116,7 +121,7 @@ use native_pty::{
 };
 
 use daemon::{start_daemon, stop_daemon, wait_for_daemon_health, DaemonState};
-use dialogs::{pick_file, pick_folder};
+use dialogs::{ask_confirmation_dialog, pick_file, pick_folder};
 use editor::open_in_editor;
 use std::fs;
 use std::path::PathBuf;
@@ -577,6 +582,807 @@ async fn execute_sqlite_query(
 }
 
 #[tauri::command]
+async fn workspace_text_search(
+    req: crate::agent::ripgrep_search::WorkspaceSearchQuery,
+) -> Result<Vec<crate::agent::ripgrep_search::FileMatchesGroup>, String> {
+    tokio::task::spawn_blocking(move || crate::agent::ripgrep_search::search_workspace(&req))
+        .await
+        .map_err(|e| format!("Search task panicked: {e}"))?
+}
+
+#[tauri::command]
+async fn workspace_batch_replace(
+    req: crate::agent::ripgrep_search::WorkspaceBatchReplaceRequest,
+) -> Result<crate::agent::ripgrep_search::WorkspaceBatchReplaceResult, String> {
+    tokio::task::spawn_blocking(move || crate::agent::ripgrep_search::batch_replace_workspace(&req))
+        .await
+        .map_err(|e| format!("Replace task panicked: {e}"))?
+}
+
+#[tauri::command]
+async fn get_github_pr_draft(cwd: String) -> Result<crate::agent::github_ops::PrDraftInfo, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::agent::github_ops::get_github_pr_draft(std::path::Path::new(&cwd))
+    })
+    .await
+    .map_err(|e| format!("PR draft task panicked: {e}"))?
+}
+
+#[tauri::command]
+async fn create_github_pr(
+    req: crate::agent::github_ops::CreatePrRequest,
+) -> Result<crate::agent::github_ops::CreatePrResult, String> {
+    tokio::task::spawn_blocking(move || crate::agent::github_ops::execute_create_pr(&req))
+        .await
+        .map_err(|e| format!("PR creation task panicked: {e}"))?
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CloudProjectDetection {
+    framework: String,
+    output_dir: String,
+}
+
+#[tauri::command]
+async fn detect_cloud_project(cwd: String) -> Result<CloudProjectDetection, String> {
+    let path = std::path::PathBuf::from(cwd);
+    let (framework, output_dir) = crate::agent::cloud_deploy::detect_framework_output(&path);
+    Ok(CloudProjectDetection {
+        framework: framework.to_string(),
+        output_dir: output_dir.to_string(),
+    })
+}
+
+#[tauri::command]
+async fn deploy_cloud_project(
+    req: crate::agent::cloud_deploy::CloudDeployRequest,
+) -> Result<crate::agent::cloud_deploy::CloudDeployResult, String> {
+    tokio::task::spawn_blocking(move || crate::agent::cloud_deploy::deploy_to_cloud(&req))
+        .await
+        .map_err(|e| format!("Cloud deploy task panicked: {e}"))?
+}
+
+#[tauri::command]
+async fn semantic_search_codebase(
+    req: crate::agent::semantic_index::SemanticSearchRequest,
+) -> Result<Vec<crate::agent::semantic_index::SemanticCodeChunk>, String> {
+    crate::agent::semantic_index::search_codebase_semantic_hybrid(req).await
+}
+
+#[tauri::command]
+async fn verify_web_ui_url(
+    url: String,
+) -> Result<crate::agent::browser_runner::BrowserVerificationReport, String> {
+    crate::agent::browser_runner::verify_web_ui(&url).await
+}
+
+#[tauri::command]
+async fn run_codebase_bug_audit(
+    cwd: String,
+) -> Result<crate::agent::bug_hunter::BugAuditReport, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::agent::bug_hunter::BugHunter::scan_workspace(std::path::Path::new(&cwd))
+    })
+    .await
+    .map_err(|e| format!("Bug audit task panicked: {e}"))?
+}
+
+#[tauri::command]
+async fn detect_workspace_preview_url(cwd: String) -> String {
+    tokio::task::spawn_blocking(move || {
+        crate::kernel::workspace_tools::detect_workspace_preview_url(std::path::Path::new(&cwd))
+    })
+    .await
+    .unwrap_or_else(|_| "http://localhost:5173".to_string())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceEnvPayload {
+    file_name: String,
+    variables: Vec<crate::kernel::workspace_tools::EnvVarEntry>,
+}
+
+#[tauri::command]
+async fn load_workspace_env_vars(cwd: String) -> Result<WorkspaceEnvPayload, String> {
+    let (file_name, variables) =
+        crate::kernel::workspace_tools::load_workspace_env_vars(std::path::Path::new(&cwd))?;
+    Ok(WorkspaceEnvPayload {
+        file_name,
+        variables,
+    })
+}
+
+#[tauri::command]
+async fn save_workspace_env_vars(
+    cwd: String,
+    vars: Vec<crate::kernel::workspace_tools::EnvVarEntry>,
+) -> Result<String, String> {
+    crate::kernel::workspace_tools::save_workspace_env_vars(std::path::Path::new(&cwd), &vars)
+}
+
+#[tauri::command]
+async fn set_permission_policy(
+    policy: crate::agent::guardrails::PermissionPolicy,
+) -> Result<(), String> {
+    crate::agent::guardrails::set_permission_policy(policy);
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_permission_policy() -> Result<crate::agent::guardrails::PermissionPolicy, String> {
+    Ok(crate::agent::guardrails::get_permission_policy())
+}
+
+#[tauri::command]
+async fn set_budget_policy(policy: crate::agent::guardrails::BudgetPolicy) -> Result<(), String> {
+    crate::agent::guardrails::set_budget_policy(policy);
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_budget_policy() -> Result<crate::agent::guardrails::BudgetPolicy, String> {
+    Ok(crate::agent::guardrails::get_budget_policy())
+}
+
+#[tauri::command]
+async fn reset_agent_budget_usage(agent_id: String) -> Result<(), String> {
+    crate::agent::guardrails::reset_agent_usage(&agent_id);
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_desktop_settings(
+) -> Result<crate::kernel::config_store::DesktopSettingsConfig, String> {
+    Ok(crate::kernel::config_store::get_config_store().get_desktop_settings())
+}
+
+#[tauri::command]
+async fn patch_desktop_settings(
+    patch: Option<serde_json::Value>,
+) -> Result<crate::kernel::config_store::DesktopSettingsConfig, String> {
+    crate::kernel::config_store::get_config_store()
+        .patch_desktop_settings(patch.unwrap_or_else(|| serde_json::json!({})))
+        .map_err(|e| format!("Failed persisting desktop settings: {e}"))
+}
+
+fn kronos_cli_bin_dir() -> PathBuf {
+    get_data_dir().join("bin")
+}
+
+fn cli_shim_paths() -> (PathBuf, PathBuf) {
+    let dir = kronos_cli_bin_dir();
+    if cfg!(windows) {
+        (dir.join("kronos.cmd"), dir.join("paseo.cmd"))
+    } else {
+        (dir.join("kronos"), dir.join("paseo"))
+    }
+}
+
+fn cli_is_installed_on_system() -> bool {
+    let (k_shim, p_shim) = cli_shim_paths();
+    k_shim.is_file()
+        || p_shim.is_file()
+        || crate::agent::registry::resolve_command("paseo").is_some()
+        || crate::agent::registry::resolve_command("kronos").is_some()
+}
+
+#[tauri::command]
+async fn get_cli_install_status() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({ "installed": cli_is_installed_on_system() }))
+}
+
+#[tauri::command]
+async fn install_cli() -> Result<serde_json::Value, String> {
+    let dir = kronos_cli_bin_dir();
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed creating CLI bin directory: {e}"))?;
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Failed resolving executable path: {e}"))?;
+    let exe_str = exe_path.to_string_lossy();
+    let (k_shim, p_shim) = cli_shim_paths();
+
+    #[cfg(windows)]
+    let script = format!("@echo off\r\n\"{exe_str}\" --cli %*\r\n");
+    #[cfg(not(windows))]
+    let script = format!("#!/bin/sh\nexec \"{exe_str}\" --cli \"$@\"\n");
+
+    for path in [&k_shim, &p_shim] {
+        fs::write(path, script.as_bytes())
+            .map_err(|e| format!("Failed writing CLI shim {}: {e}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(path)
+                .map_err(|e| format!("Failed reading permissions: {e}"))?
+                .permissions();
+            perms.set_mode(0o755);
+            let _ = fs::set_permissions(path, perms);
+        }
+    }
+
+    Ok(serde_json::json!({ "installed": true, "binDir": dir.to_string_lossy() }))
+}
+
+#[tauri::command]
+async fn uninstall_cli() -> Result<serde_json::Value, String> {
+    let (k_shim, p_shim) = cli_shim_paths();
+    for path in [&k_shim, &p_shim] {
+        if path.is_file() {
+            let _ = fs::remove_file(path);
+        }
+    }
+    let still_on_path = crate::agent::registry::resolve_command("paseo").is_some()
+        || crate::agent::registry::resolve_command("kronos").is_some();
+    Ok(serde_json::json!({ "installed": still_on_path }))
+}
+
+fn read_diagnostic_file_entry(path: PathBuf) -> serde_json::Value {
+    let exists = path.is_file();
+    let modified_at = if exists {
+        fs::metadata(&path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
+    } else {
+        None
+    };
+    let (contents, error) = if exists {
+        match fs::read_to_string(&path) {
+            Ok(c) => (c, serde_json::Value::Null),
+            Err(e) => (String::new(), serde_json::Value::String(e.to_string())),
+        }
+    } else {
+        (String::new(), serde_json::Value::Null)
+    };
+    serde_json::json!({
+        "path": path.to_string_lossy(),
+        "exists": exists,
+        "modifiedAt": modified_at,
+        "contents": contents,
+        "error": error
+    })
+}
+
+#[tauri::command]
+async fn desktop_update_diagnostics(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, UpdateState>,
+) -> Result<serde_json::Value, String> {
+    let data_dir = get_data_dir();
+    let logs_dir = data_dir.join("logs");
+    let configured = updater_configured(&app);
+    let pending = state.0.lock().await;
+    let target_version = pending.as_ref().map(|u| u.version.clone());
+    let target_error = if !configured {
+        Some("Automatic updates unavailable in unsigned local build (no updater pubkey configured).".to_string())
+    } else {
+        None
+    };
+
+    Ok(serde_json::json!({
+        "platform": if cfg!(windows) { "win32" } else if cfg!(target_os = "macos") { "darwin" } else { "linux" },
+        "currentVersion": env!("CARGO_PKG_VERSION"),
+        "targetVersion": target_version,
+        "targetVersionError": target_error,
+        "shipItDirectory": data_dir.to_string_lossy(),
+        "state": read_diagnostic_file_entry(data_dir.join("updater-state.json")),
+        "stdout": read_diagnostic_file_entry(logs_dir.join("updater.log")),
+        "stderr": read_diagnostic_file_entry(logs_dir.join("updater-error.log"))
+    }))
+}
+
+#[tauri::command]
+async fn desktop_sandbox_diagnostics() -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    {
+        match crate::process_job::JobSupervisor::new() {
+            Ok(_job) => Ok(serde_json::json!({
+                "enabled": true,
+                "reason": "Windows Job Object process-tree isolation active (JobSupervisor kill-on-close)."
+            })),
+            Err(e) => Ok(serde_json::json!({
+                "enabled": false,
+                "reason": format!("Windows Job Object allocation failed: {e}")
+            })),
+        }
+    }
+    #[cfg(unix)]
+    {
+        Ok(serde_json::json!({
+            "enabled": true,
+            "reason": "POSIX process-group isolation active for spawned agent turns."
+        }))
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        Ok(serde_json::json!({
+            "enabled": false,
+            "reason": "No OS process sandbox backend available on this platform."
+        }))
+    }
+}
+
+#[tauri::command]
+async fn mcp_list_servers() -> Result<Vec<crate::kernel::mcp::ExternalMcpServerConfig>, String> {
+    Ok(crate::kernel::mcp::McpHub::load_external_servers())
+}
+
+#[tauri::command]
+async fn mcp_save_servers(
+    servers: Vec<crate::kernel::mcp::ExternalMcpServerConfig>,
+) -> Result<(), String> {
+    crate::kernel::mcp::McpHub::save_external_servers(&servers)
+}
+
+#[tauri::command]
+async fn mcp_probe_server(
+    server: crate::kernel::mcp::ExternalMcpServerConfig,
+) -> Result<crate::kernel::mcp::ExternalMcpServerStatus, String> {
+    tokio::task::spawn_blocking(move || {
+        Ok(crate::kernel::server::get_mcp_hub().probe_and_sync_external_server(&server))
+    })
+    .await
+    .map_err(|e| format!("MCP probe panicked: {e}"))?
+}
+
+#[tauri::command]
+async fn mcp_sync_all_servers() -> Result<Vec<crate::kernel::mcp::ExternalMcpServerStatus>, String> {
+    tokio::task::spawn_blocking(move || {
+        let servers = crate::kernel::mcp::McpHub::load_external_servers();
+        let hub = crate::kernel::server::get_mcp_hub();
+        Ok(servers
+            .iter()
+            .map(|srv| hub.probe_and_sync_external_server(srv))
+            .collect())
+    })
+    .await
+    .map_err(|e| format!("MCP sync panicked: {e}"))?
+}
+
+#[tauri::command]
+async fn list_available_ai_models() -> Vec<crate::agent::quick_llm::AvailableModelOption> {
+    crate::agent::quick_llm::list_available_models().await
+}
+
+#[tauri::command]
+async fn run_inline_code_edit(
+    filename: String,
+    selected_code: String,
+    instruction: String,
+    cwd: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+) -> Result<crate::agent::quick_llm::QuickLlmResponse, String> {
+    crate::agent::quick_llm::run_inline_code_edit(
+        &filename,
+        &selected_code,
+        &instruction,
+        cwd.as_deref().map(std::path::Path::new),
+        provider.as_deref(),
+        model.as_deref(),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn synthesize_terminal_command(
+    prompt: String,
+    cwd: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+) -> Result<crate::agent::quick_llm::TerminalCommandSynthesis, String> {
+    crate::agent::quick_llm::synthesize_terminal_command(
+        &prompt,
+        cwd.as_deref().map(std::path::Path::new),
+        provider.as_deref(),
+        model.as_deref(),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn run_inline_completion(
+    filename: String,
+    prefix: String,
+    provider: Option<String>,
+    model: Option<String>,
+) -> Result<String, String> {
+    crate::agent::quick_llm::run_inline_completion(
+        &filename,
+        &prefix,
+        provider.as_deref(),
+        model.as_deref(),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn generate_ai_semantic_commit(
+    cwd: String,
+    provider: Option<String>,
+    model: Option<String>,
+) -> Result<String, String> {
+    crate::agent::quick_llm::generate_ai_semantic_commit(
+        std::path::Path::new(&cwd),
+        provider.as_deref(),
+        model.as_deref(),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn run_model_arena_comparison(
+    prompt: String,
+    cwd: Option<String>,
+    candidates: Vec<crate::agent::quick_llm::ArenaCandidateInput>,
+) -> Vec<crate::agent::quick_llm::ArenaCandidateResult> {
+    crate::agent::quick_llm::run_model_arena_comparison(
+        &prompt,
+        cwd.as_deref().map(std::path::Path::new),
+        candidates,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn synthesize_consensus_patch(
+    task_prompt: String,
+    proposals: Vec<crate::agent::quick_llm::ConsensusProposalInput>,
+    cwd: Option<String>,
+) -> Result<crate::agent::quick_llm::QuickLlmResponse, String> {
+    crate::agent::quick_llm::synthesize_consensus_patch(
+        &task_prompt,
+        &proposals,
+        cwd.as_deref().map(std::path::Path::new),
+    )
+    .await
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpeechStatusPayload {
+    loaded: bool,
+    backend: String,
+}
+
+#[tauri::command]
+async fn get_speech_status() -> SpeechStatusPayload {
+    let lock = crate::kernel::server::get_speech_engine();
+    let engine = lock.read().await;
+    let loaded = engine.is_model_loaded();
+    SpeechStatusPayload {
+        loaded,
+        backend: if loaded { "whisper" } else { "browser_or_unloaded" }.to_string(),
+    }
+}
+
+#[tauri::command]
+async fn transcribe_voice_pcm(
+    samples: Vec<f32>,
+    sample_rate: Option<u32>,
+    channels: Option<u16>,
+) -> Result<String, String> {
+    let lock = crate::kernel::server::get_speech_engine();
+    let engine = lock.read().await;
+    if !engine.is_model_loaded() {
+        return Err("No local Whisper GGML model loaded (~/.paseo/models/ggml-*.bin)".to_string());
+    }
+    let cfg = crate::kernel::speech::SpeechAudioConfig::new(
+        sample_rate.unwrap_or(16_000),
+        channels.unwrap_or(1),
+    );
+    engine.transcribe_with_config(&samples, cfg)
+}
+
+#[tauri::command]
+async fn download_whisper_model(model_name: Option<String>) -> Result<SpeechStatusPayload, String> {
+    let variant = match model_name.as_deref().unwrap_or("tiny.en") {
+        "base.en" => "ggml-base.en.bin",
+        _ => "ggml-tiny.en.bin",
+    };
+    let models_dir = get_data_dir().join("models");
+    fs::create_dir_all(&models_dir)
+        .map_err(|e| format!("Failed creating Whisper models directory: {e}"))?;
+    let target_path = models_dir.join(variant);
+
+    if !target_path.is_file() {
+        let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{variant}");
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .map_err(|e| format!("Failed creating download HTTP client: {e}"))?;
+        let resp = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed downloading {variant}: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!(
+                "Whisper model download returned HTTP {}",
+                resp.status()
+            ));
+        }
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed reading downloaded Whisper model bytes: {e}"))?;
+        let path_clone = target_path.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::kernel::config_store::atomic_write(&path_clone, &bytes)
+        })
+        .await
+        .map_err(|e| format!("Failed joining model write task: {e}"))?
+        .map_err(|e| format!("Failed writing Whisper model to disk: {e}"))?;
+    }
+
+    let load_path = target_path.clone();
+    let new_engine = tokio::task::spawn_blocking(move || {
+        crate::kernel::speech::SpeechEngine::new(Some(&load_path))
+    })
+    .await
+    .map_err(|e| format!("Failed joining Whisper loader task: {e}"))??;
+
+    let loaded = new_engine.is_model_loaded();
+    let lock = crate::kernel::server::get_speech_engine();
+    *lock.write().await = new_engine;
+
+    Ok(SpeechStatusPayload {
+        loaded,
+        backend: if loaded { "whisper" } else { "browser_or_unloaded" }.to_string(),
+    })
+}
+
+#[tauri::command]
+async fn start_preview_tunnel(
+    local_port: u16,
+    provider: crate::kernel::tunnel::TunnelProvider,
+) -> Result<crate::kernel::tunnel::TunnelState, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut mgr = crate::kernel::tunnel::get_tunnel_manager()
+            .lock()
+            .map_err(|_| "Tunnel manager mutex poisoned".to_string())?;
+        mgr.start(local_port, provider)
+    })
+    .await
+    .map_err(|e| format!("Preview tunnel task panicked: {e}"))?
+}
+
+#[tauri::command]
+async fn stop_preview_tunnel() -> crate::kernel::tunnel::TunnelState {
+    if let Ok(mut mgr) = crate::kernel::tunnel::get_tunnel_manager().lock() {
+        mgr.stop();
+        mgr.state().clone()
+    } else {
+        crate::kernel::tunnel::TunnelState::Inactive
+    }
+}
+
+#[tauri::command]
+async fn get_preview_tunnel_state() -> crate::kernel::tunnel::TunnelState {
+    if let Ok(mgr) = crate::kernel::tunnel::get_tunnel_manager().lock() {
+        mgr.state().clone()
+    } else {
+        crate::kernel::tunnel::TunnelState::Inactive
+    }
+}
+
+#[tauri::command]
+async fn scaffold_project_template(
+    parent_dir: String,
+    project_name: String,
+    command: String,
+) -> Result<String, String> {
+    let clean_name = project_name.trim();
+    if clean_name.is_empty()
+        || clean_name.contains("..")
+        || clean_name.contains('/')
+        || clean_name.contains('\\')
+    {
+        return Err("Invalid project name; use a simple folder name without path separators.".into());
+    }
+    let parent = std::path::PathBuf::from(&parent_dir);
+    if !parent.is_dir() {
+        return Err(format!("Target directory not found: {parent_dir}"));
+    }
+    let final_cmd = command.replace("my-app", clean_name);
+    let target_dir = parent.join(clean_name);
+    let parent_clone = parent.clone();
+    let target_clone = target_dir.clone();
+
+    tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let mut cmd = if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/C", &final_cmd]);
+            c
+        } else {
+            let mut c = std::process::Command::new("sh");
+            c.args(["-c", &final_cmd]);
+            c
+        };
+        cmd.current_dir(&parent_clone);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        let output = cmd
+            .output()
+            .map_err(|e| format!("Failed launching template scaffolder: {e}"))?;
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            let out = String::from_utf8_lossy(&output.stdout);
+            return Err(format!(
+                "Template scaffold command failed ({}): {} {}",
+                output.status,
+                err.trim(),
+                out.trim()
+            ));
+        }
+        if !target_clone.exists() {
+            fs::create_dir_all(&target_clone)
+                .map_err(|e| format!("Failed creating target directory: {e}"))?;
+        }
+        Ok(target_clone.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| format!("Scaffold task panicked: {e}"))?
+}
+
+#[tauri::command]
+async fn load_workspace_memories(
+    cwd: String,
+) -> Result<Vec<crate::agent::memories::MemoryEntry>, String> {
+    tokio::task::spawn_blocking(move || {
+        let dir = std::path::Path::new(&cwd);
+        if !dir.is_dir() {
+            return Err(format!("Workspace directory not found: {cwd}"));
+        }
+        Ok(crate::agent::memories::load_workspace_memories(dir))
+    })
+    .await
+    .map_err(|e| format!("Load memories task panicked: {e}"))?
+}
+
+#[tauri::command]
+async fn save_workspace_memories(
+    cwd: String,
+    entries: Vec<crate::agent::memories::MemoryEntry>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let dir = std::path::Path::new(&cwd);
+        if !dir.is_dir() {
+            return Err(format!("Workspace directory not found: {cwd}"));
+        }
+        crate::agent::memories::save_workspace_memories(dir, &entries)
+            .map_err(|e| format!("Failed to save .kronos/memories.md: {e}"))
+    })
+    .await
+    .map_err(|e| format!("Save memories task panicked: {e}"))?
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TestCommandRunResult {
+    exit_code: i32,
+    passed: bool,
+    stdout: String,
+    stderr: String,
+    combined: String,
+}
+
+#[tauri::command]
+async fn run_workspace_test_command(
+    cwd: String,
+    command: String,
+) -> Result<TestCommandRunResult, String> {
+    tokio::task::spawn_blocking(move || {
+        let dir = std::path::Path::new(&cwd);
+        if !dir.is_dir() {
+            return Err(format!("Workspace directory not found: {cwd}"));
+        }
+        let policy = crate::agent::guardrails::get_permission_policy();
+        let risk = crate::agent::guardrails::evaluate_command_risk(&command);
+        if policy.execution_mode != "yolo" && risk.is_destructive() {
+            return Err("Destructive command blocked by Guarded Execution Policy".to_string());
+        }
+
+        let mut cmd = if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd.exe");
+            c.args(["/C", &command]);
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x08000000);
+            c
+        } else {
+            let mut c = std::process::Command::new("sh");
+            c.args(["-c", &command]);
+            c
+        };
+        cmd.current_dir(dir);
+        let output = cmd
+            .output()
+            .map_err(|e| format!("Failed executing test command: {e}"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let combined = format!("{stdout}\n{stderr}");
+        Ok(TestCommandRunResult {
+            exit_code: output.status.code().unwrap_or(-1),
+            passed: output.status.success(),
+            stdout,
+            stderr,
+            combined,
+        })
+    })
+    .await
+    .map_err(|e| format!("Test runner panicked: {e}"))?
+}
+
+async fn forward_rpc_to_external_daemon_if_detached(message: serde_json::Value) {
+    if crate::daemon::is_embedded_running() {
+        return;
+    }
+    let port = crate::daemon::get_active_daemon_port();
+    let ws_url = format!("ws://127.0.0.1:{port}/ws");
+    let token_path = get_data_dir().join("local-credential");
+    let token = std::fs::read_to_string(token_path)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let Ok((mut ws, _)) = tokio_tungstenite::connect_async(&ws_url).await else {
+        return;
+    };
+    use futures_util::SinkExt;
+    let hello = if token.is_empty() {
+        serde_json::json!({ "type": "hello", "protocolVersion": 1 })
+    } else {
+        serde_json::json!({
+            "type": "hello",
+            "protocolVersion": 1,
+            "auth": { "kind": "localCredential", "token": token }
+        })
+    };
+    if ws
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            hello.to_string().into(),
+        ))
+        .await
+        .is_ok()
+    {
+        let _ = ws
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                message.to_string().into(),
+            ))
+            .await;
+    }
+    let _ = ws.close(None).await;
+}
+
+#[tauri::command]
+async fn set_agent_execution_mode(agent_id: String, mode_id: String) -> Result<(), String> {
+    let mgr = crate::kernel::server::get_agent_manager();
+    if let Some(mut agent) = mgr.get_agent(&agent_id) {
+        let mut cfg = agent.config.unwrap_or_else(|| serde_json::json!({}));
+        if let Some(obj) = cfg.as_object_mut() {
+            obj.insert("modeId".to_string(), serde_json::json!(mode_id));
+            obj.insert("persona".to_string(), serde_json::json!(mode_id));
+        }
+        agent.config = Some(cfg);
+        mgr.storage().save_record(agent).map_err(|e| e.to_string())?;
+        crate::agent::runner::broadcast_agent_status_update(&agent_id);
+    } else if crate::daemon::is_embedded_running() {
+        return Err(format!("Agent '{agent_id}' not found"));
+    }
+    forward_rpc_to_external_daemon_if_detached(serde_json::json!({
+        "type": "set_agent_mode_request",
+        "requestId": format!("tauri-mode-{agent_id}"),
+        "agentId": agent_id,
+        "modeId": mode_id,
+    }))
+    .await;
+    Ok(())
+}
+
+#[tauri::command]
 async fn watch_directory(path: String, ignore: Option<Vec<String>>) -> Result<String, String> {
     let engine = crate::kernel::server::get_watcher_engine();
     let ignore_patterns = ignore.unwrap_or_default();
@@ -850,6 +1656,9 @@ pub fn get_or_create_server_id() -> String {
     id
 }
 
+static DAEMON_PROCESS_STARTED_AT: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| chrono::Utc::now().to_rfc3339());
+
 fn get_daemon_status_json() -> String {
     let home = get_data_dir();
 
@@ -885,7 +1694,7 @@ fn get_daemon_status_json() -> String {
         "version": env!("CARGO_PKG_VERSION"),
         "desktopManaged": true,
         "ownedByDesktop": true,
-        "startedAt": if is_healthy { Some("2026-09-26T12:00:00.000Z") } else { None },
+        "startedAt": if is_healthy { Some(DAEMON_PROCESS_STARTED_AT.as_str()) } else { None },
         "error": null
     })
     .to_string()
@@ -1303,6 +2112,166 @@ fn restart_desktop_daemon(state: tauri::State<DaemonState>) -> serde_json::Value
     get_live_daemon_status()
 }
 
+fn is_running_under_arm64_translation() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(out) = std::process::Command::new("sysctl")
+            .args(["-in", "sysctl.proc_translated"])
+            .output()
+        {
+            return String::from_utf8_lossy(&out.stdout).trim() == "1";
+        }
+    }
+    #[cfg(windows)]
+    {
+        if std::env::var("PROCESSOR_ARCHITECTURE")
+            .map(|a| a.eq_ignore_ascii_case("x86"))
+            .unwrap_or(false)
+            && std::env::var("PROCESSOR_ARCHITEW6432")
+                .map(|a| a.to_uppercase().contains("ARM64"))
+                .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+#[tauri::command]
+fn desktop_get_runtime_info() -> serde_json::Value {
+    serde_json::json!({
+        "appVersion": env!("CARGO_PKG_VERSION"),
+        "runningUnderARM64Translation": is_running_under_arm64_translation(),
+    })
+}
+
+#[tauri::command]
+async fn get_local_daemon_version() -> serde_json::Value {
+    let port = daemon::get_active_daemon_port();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build();
+    if let Ok(client) = client {
+        let url = format!("http://127.0.0.1:{port}/api/version");
+        if let Ok(resp) = client.get(&url).send().await {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let Some(ver) = json.get("version").and_then(|v| v.as_str()) {
+                    return serde_json::json!({
+                        "version": ver,
+                        "error": serde_json::Value::Null,
+                    });
+                }
+            }
+        }
+    }
+    if wait_for_daemon_health(1) {
+        return serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "error": serde_json::Value::Null,
+        });
+    }
+    serde_json::json!({
+        "version": serde_json::Value::Null,
+        "error": "Local daemon is not reachable on loopback.",
+    })
+}
+
+#[tauri::command]
+fn run_local_daemon_update(state: tauri::State<DaemonState>) -> serde_json::Value {
+    let engine = std::env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "rust".to_string());
+    if engine.eq_ignore_ascii_case("node") {
+        let bin = if cfg!(windows) { "npm.cmd" } else { "npm" };
+        if let Ok(out) = std::process::Command::new(bin)
+            .args(["install", "-g", "@getpaseo/cli@latest"])
+            .output()
+        {
+            let code = out.status.code().unwrap_or(1);
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            if code == 0 {
+                let _ = daemon::restart_daemon(&state);
+            }
+            return serde_json::json!({
+                "exitCode": code,
+                "stdout": stdout,
+                "stderr": stderr,
+            });
+        }
+    }
+
+    let restarted = daemon::restart_daemon(&state);
+    let healthy = if restarted { wait_for_daemon_health(20) } else { wait_for_daemon_health(1) };
+    serde_json::json!({
+        "exitCode": if healthy { 0 } else { 1 },
+        "stdout": if healthy {
+            format!("Embedded Kronos kernel daemon is active on v{} (port {}).", env!("CARGO_PKG_VERSION"), daemon::get_active_daemon_port())
+        } else {
+            String::new()
+        },
+        "stderr": if healthy {
+            String::new()
+        } else {
+            "Embedded daemon did not respond healthy after restart.".to_string()
+        },
+    })
+}
+
+#[tauri::command]
+fn cli_daemon_status() -> String {
+    let live: serde_json::Value =
+        serde_json::from_str(&get_daemon_status_json()).unwrap_or(serde_json::Value::Null);
+    let status = live["status"].as_str().unwrap_or("unknown");
+    let listen = live["listen"].as_str().unwrap_or("unknown");
+    let pid = live["pid"]
+        .as_u64()
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let home = live["home"].as_str().unwrap_or("unknown");
+    let version = live["version"].as_str().unwrap_or(env!("CARGO_PKG_VERSION"));
+    let started = live["startedAt"].as_str().unwrap_or("n/a");
+    let agents = crate::kernel::server::get_agent_manager().list_agents();
+    let providers = crate::agent::registry::ProviderRegistry::new().list();
+    let ready_providers: Vec<String> = providers
+        .into_iter()
+        .filter(|p| p.is_installed)
+        .map(|p| p.id)
+        .collect();
+    let mcp_count = crate::kernel::mcp::McpHub::load_external_servers().len();
+    let policy = crate::agent::guardrails::get_permission_policy();
+    let budget = crate::agent::guardrails::get_budget_policy();
+
+    format!(
+        "Kronos Kernel Daemon Status\n\
+         ---------------------------\n\
+         State:            {}\n\
+         Version:          {}\n\
+         Listen:           {}\n\
+         PID:              {}\n\
+         Started At:       {}\n\
+         Data Home:        {}\n\
+         Active Agents:    {}\n\
+         Ready Providers:  {}\n\
+         External MCPs:    {}\n\
+         Guardrails Mode:  {}\n\
+         Cost Limit (USD): {:?}",
+        status,
+        version,
+        listen,
+        pid,
+        started,
+        home,
+        agents.len(),
+        if ready_providers.is_empty() {
+            "none".to_string()
+        } else {
+            ready_providers.join(", ")
+        },
+        mcp_count,
+        policy.execution_mode,
+        budget.max_cost_usd
+    )
+}
+
 #[cfg(windows)]
 fn get_system_idle_time_ms() -> u64 {
     use std::mem;
@@ -1330,8 +2299,54 @@ fn get_system_idle_time_ms() -> u64 {
     0
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 fn get_system_idle_time_ms() -> u64 {
+    std::process::Command::new("ioreg")
+        .args(["-c", "IOHIDSystem"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            let text = String::from_utf8_lossy(&o.stdout);
+            for line in text.lines() {
+                if line.contains("HIDIdleTime") {
+                    if let Some((_, val)) = line.split_once('=') {
+                        if let Ok(ns) = val.trim().parse::<u64>() {
+                            return Some(ns / 1_000_000);
+                        }
+                    }
+                }
+            }
+            None
+        })
+        .unwrap_or(0)
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn get_system_idle_time_ms() -> u64 {
+    if let Ok(out) = std::process::Command::new("xprintidle").output() {
+        if out.status.success() {
+            if let Ok(ms) = String::from_utf8_lossy(&out.stdout).trim().parse::<u64>() {
+                return ms;
+            }
+        }
+    }
+    if let Ok(out) = std::process::Command::new("dbus-send")
+        .args([
+            "--print-reply=literal",
+            "--dest=org.freedesktop.ScreenSaver",
+            "/org/freedesktop/ScreenSaver",
+            "org.freedesktop.ScreenSaver.GetSessionIdleTime",
+        ])
+        .output()
+    {
+        if out.status.success() {
+            let txt = String::from_utf8_lossy(&out.stdout);
+            if let Some(num) = txt.split_whitespace().last().and_then(|s| s.parse::<u64>().ok()) {
+                return num;
+            }
+        }
+    }
     0
 }
 
@@ -1837,12 +2852,128 @@ try {{
         }}
         return null;
       }},
-      ask: async function(_message, _options) {{
-        return true;
+      ask: async function(message, options) {{
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            const opts = options || {{}};
+            return await window.__TAURI_INTERNALS__.invoke('ask_confirmation_dialog', {{
+              message: String(message || ''),
+              title: opts.title || null,
+              okLabel: opts.okLabel || null,
+              cancelLabel: opts.cancelLabel || null,
+              kind: opts.kind || null
+            }});
+          }}
+        }} catch (e) {{
+          console.error('[TauriBridge] ask dialog failed:', e);
+        }}
+        return typeof window.confirm === 'function' ? window.confirm(String(message || '')) : false;
       }},
-      askWithCheckbox: async function(_message, _options) {{
-        return {{ confirmed: true, dontAskAgain: false }};
+      askWithCheckbox: async function(message, options) {{
+        const opts = options || {{}};
+        if (opts.checkboxLabel && typeof document !== 'undefined' && document.body) {{
+          return await new Promise((resolve) => {{
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;';
+            const box = document.createElement('div');
+            box.style.cssText = 'background:#18181b;color:#f4f4f5;border:1px solid #3f3f46;border-radius:10px;padding:18px 20px;max-width:440px;width:90%;box-shadow:0 20px 50px rgba(0,0,0,0.45);';
+            const titleEl = document.createElement('div');
+            titleEl.style.cssText = 'font-weight:600;font-size:15px;margin-bottom:8px;';
+            titleEl.textContent = opts.title || 'Confirm';
+            const msgEl = document.createElement('div');
+            msgEl.style.cssText = 'font-size:13px;line-height:1.45;color:#d4d4d8;margin-bottom:14px;word-break:break-word;';
+            msgEl.textContent = String(message || '');
+            const labelEl = document.createElement('label');
+            labelEl.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:12px;color:#a1a1aa;margin-bottom:16px;cursor:pointer;user-select:none;';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            const cbText = document.createElement('span');
+            cbText.textContent = String(opts.checkboxLabel);
+            labelEl.appendChild(cb);
+            labelEl.appendChild(cbText);
+            const actions = document.createElement('div');
+            actions.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;';
+            const cancelBtn = document.createElement('button');
+            cancelBtn.textContent = opts.cancelLabel || 'Cancel';
+            cancelBtn.style.cssText = 'padding:6px 12px;border-radius:6px;border:1px solid #3f3f46;background:#27272a;color:#e4e4e7;cursor:pointer;font-size:13px;';
+            const okBtn = document.createElement('button');
+            okBtn.textContent = opts.okLabel || 'Confirm';
+            okBtn.style.cssText = 'padding:6px 14px;border-radius:6px;border:none;background:#3b82f6;color:#ffffff;font-weight:600;cursor:pointer;font-size:13px;';
+            const cleanup = (confirmed) => {{
+              const dontAskAgain = !!cb.checked;
+              window.removeEventListener('keydown', onKey);
+              overlay.remove();
+              resolve({{ confirmed, dontAskAgain }});
+            }};
+            const onKey = (ev) => {{
+              if (ev.key === 'Escape') cleanup(false);
+            }};
+            window.addEventListener('keydown', onKey);
+            cancelBtn.onclick = () => cleanup(false);
+            okBtn.onclick = () => cleanup(true);
+            actions.appendChild(cancelBtn);
+            actions.appendChild(okBtn);
+            box.appendChild(titleEl);
+            box.appendChild(msgEl);
+            box.appendChild(labelEl);
+            box.appendChild(actions);
+            overlay.appendChild(box);
+            document.body.appendChild(overlay);
+          }});
+        }}
+        try {{
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+            const confirmed = await window.__TAURI_INTERNALS__.invoke('ask_confirmation_dialog', {{
+              message: String(message || ''),
+              title: opts.title || null,
+              okLabel: opts.okLabel || null,
+              cancelLabel: opts.cancelLabel || null,
+              kind: opts.kind || null
+            }});
+            return {{ confirmed: !!confirmed, dontAskAgain: false }};
+          }}
+        }} catch (e) {{
+          console.error('[TauriBridge] askWithCheckbox failed:', e);
+        }}
+        const fallback = typeof window.confirm === 'function' ? window.confirm(String(message || '')) : false;
+        return {{ confirmed: fallback, dontAskAgain: false }};
       }}
+    }},
+    browser: {{
+      profilePartition: 'persist:kronos',
+      executeAutomationCommand: async function(request) {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          return await window.__TAURI_INTERNALS__.invoke('browser_automation_execute', {{ request: request }});
+        }}
+        throw new Error('Tauri IPC unavailable');
+      }},
+      registerAttachedBrowser: async function(input) {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          await window.__TAURI_INTERNALS__.invoke('browser_register_attached', {{
+            browserId: input && input.browserId,
+            workspaceId: (input && input.workspaceId) || 'default',
+            url: (input && input.url) || null
+          }});
+        }}
+      }},
+      unregisterWorkspaceBrowser: async function(browserId) {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          await window.__TAURI_INTERNALS__.invoke('browser_unregister_tab', {{ browserId: browserId }});
+        }}
+      }},
+      focus: async function(browserId) {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          return await window.__TAURI_INTERNALS__.invoke('browser_focus_tab', {{ browserId: browserId }});
+        }}
+        return false;
+      }},
+      clearProfile: async function() {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          await window.__TAURI_INTERNALS__.invoke('browser_clear_profile');
+        }}
+      }},
+      setShortcutPolicy: async function() {{}},
+      setWorkspaceActiveBrowser: async function() {{}}
     }},
     opener: {{
       openUrl: async function(url) {{
@@ -1962,14 +3093,38 @@ try {{
         }} catch (e) {{}}
         return daemonData;
       }}
-      if (command === 'get_cli_install_status' || command === 'install_cli') {{
-        return {{ status: 'installed' }};
+      if (command === 'get_cli_install_status') {{
+        return await window.__TAURI_INTERNALS__.invoke('get_cli_install_status');
+      }}
+      if (command === 'install_cli') {{
+        return await window.__TAURI_INTERNALS__.invoke('install_cli');
+      }}
+      if (command === 'uninstall_cli') {{
+        return await window.__TAURI_INTERNALS__.invoke('uninstall_cli');
       }}
       if (command === 'desktop_update_diagnostics') {{
-        return {{ platform: 'win32', currentVersion: daemonData.version, targetVersion: null, targetVersionError: null, files: [] }};
+        return await window.__TAURI_INTERNALS__.invoke('desktop_update_diagnostics');
       }}
       if (command === 'desktop_sandbox_diagnostics') {{
-        return {{ enabled: false, available: false, error: null }};
+        return await window.__TAURI_INTERNALS__.invoke('desktop_sandbox_diagnostics');
+      }}
+      if (command === 'check_app_update') {{
+        return await window.__TAURI_INTERNALS__.invoke('check_app_update', args || {{}});
+      }}
+      if (command === 'install_app_update') {{
+        return await window.__TAURI_INTERNALS__.invoke('install_app_update', args || {{}});
+      }}
+      if (command === 'desktop_get_runtime_info') {{
+        return await window.__TAURI_INTERNALS__.invoke('desktop_get_runtime_info');
+      }}
+      if (command === 'get_local_daemon_version') {{
+        return await window.__TAURI_INTERNALS__.invoke('get_local_daemon_version');
+      }}
+      if (command === 'run_local_daemon_update') {{
+        return await window.__TAURI_INTERNALS__.invoke('run_local_daemon_update');
+      }}
+      if (command === 'cli_daemon_status') {{
+        return await window.__TAURI_INTERNALS__.invoke('cli_daemon_status');
       }}
       if (command === 'read_legacy_skill_selection' || command === 'delete_legacy_skill_selection') {{
         return null;
@@ -2004,12 +3159,20 @@ try {{
       if (command === 'desktop_local_credential') {{
         return await window.__TAURI_INTERNALS__.invoke('get_live_local_credential', {{ listen: args && args.listen || '' }});
       }}
-      if (command === 'get_desktop_settings' || command === 'patch_desktop_settings') {{
-        return {{
-          releaseChannel: 'stable',
-          notifications: {{ playSound: true }},
-          daemon: {{ manageBuiltInDaemon: true, keepRunningAfterQuit: false }}
-        }};
+      if (command === 'get_desktop_settings') {{
+        return await window.__TAURI_INTERNALS__.invoke('get_desktop_settings');
+      }}
+      if (command === 'patch_desktop_settings') {{
+        return await window.__TAURI_INTERNALS__.invoke('patch_desktop_settings', {{ patch: args || {{}} }});
+      }}
+      if (command === 'set_budget_policy') {{
+        return await window.__TAURI_INTERNALS__.invoke('set_budget_policy', args || {{}});
+      }}
+      if (command === 'get_budget_policy') {{
+        return await window.__TAURI_INTERNALS__.invoke('get_budget_policy');
+      }}
+      if (command === 'reset_agent_budget_usage') {{
+        return await window.__TAURI_INTERNALS__.invoke('reset_agent_budget_usage', args || {{}});
       }}
       if (command === 'desktop_get_system_idle_time') {{
         try {{
@@ -2066,7 +3229,7 @@ try {{
         }}
         return null;
       }}
-      if (command === 'mark_first_paint' || command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast' || command === 'crdt_doc_action' || command === 'get_ioring_status' || command === 'transcribe_audio_chunk' || command === 'get_speech_engine_status' || command === 'get_shm_status' || command === 'push_shm_chunk' || command === 'web_search_query' || command === 'web_scrape_url' || command === 'get_repo_map') {{
+      if (command === 'mark_first_paint' || command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast' || command === 'crdt_doc_action' || command === 'get_ioring_status' || command === 'transcribe_audio_chunk' || command === 'get_speech_engine_status' || command === 'get_shm_status' || command === 'push_shm_chunk' || command === 'web_search_query' || command === 'web_scrape_url' || command === 'get_repo_map' || command === 'synthesize_terminal_command') {{
         try {{
           if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
             return await window.__TAURI_INTERNALS__.invoke(command, args || {{}});
@@ -2363,9 +3526,66 @@ try {{
             save_kronos_workspace_doc,
             get_dependency_graph,
             discover_workspace_databases,
-            execute_sqlite_query
+            execute_sqlite_query,
+            workspace_text_search,
+            workspace_batch_replace,
+            get_github_pr_draft,
+            create_github_pr,
+            detect_cloud_project,
+            deploy_cloud_project,
+            semantic_search_codebase,
+            verify_web_ui_url,
+            run_codebase_bug_audit,
+            detect_workspace_preview_url,
+            load_workspace_env_vars,
+            save_workspace_env_vars,
+            set_permission_policy,
+            get_permission_policy,
+            set_budget_policy,
+            get_budget_policy,
+            reset_agent_budget_usage,
+            ask_confirmation_dialog,
+            get_desktop_settings,
+            patch_desktop_settings,
+            get_cli_install_status,
+            install_cli,
+            uninstall_cli,
+            desktop_update_diagnostics,
+            desktop_sandbox_diagnostics,
+            desktop_get_runtime_info,
+            get_local_daemon_version,
+            run_local_daemon_update,
+            cli_daemon_status,
+            mcp_list_servers,
+            mcp_save_servers,
+            mcp_probe_server,
+            mcp_sync_all_servers,
+            list_available_ai_models,
+            run_inline_code_edit,
+            synthesize_terminal_command,
+            run_inline_completion,
+            generate_ai_semantic_commit,
+            run_model_arena_comparison,
+            synthesize_consensus_patch,
+            get_speech_status,
+            download_whisper_model,
+            transcribe_voice_pcm,
+            run_workspace_test_command,
+            set_agent_execution_mode,
+            start_preview_tunnel,
+            stop_preview_tunnel,
+            get_preview_tunnel_state,
+            scaffold_project_template,
+            load_workspace_memories,
+            save_workspace_memories,
+            browser_automation_execute,
+            browser_register_attached,
+            browser_unregister_tab,
+            browser_focus_tab,
+            browser_clear_profile
         ])
         .setup(move |app| {
+            crate::browser_automation::init_app_handle(app.handle().clone());
             crate::kernel::watchdog::start_watchdog(app.handle().clone());
             let _ = setup_tray(app.handle());
             setup_notification_listeners(app.handle());
@@ -2884,24 +4104,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_transcribe_audio_chunk_command() {
-        let synthetic_samples: Vec<f32> =
-            (0..16000).map(|i| (i as f32 * 0.05).sin() * 0.75).collect();
-
-        let res = transcribe_audio_chunk(synthetic_samples, Some(16000), Some(1)).await;
-        assert!(
-            res.is_ok(),
-            "transcribe_audio_chunk should succeed: {:?}",
-            res.err()
-        );
-        let val = res.unwrap();
-        assert!(val["transcript"].is_string());
-        assert!(!val["transcript"].as_str().unwrap().is_empty());
-        assert_eq!(val["samples_count"], 16000);
-
         let status = get_speech_engine_status().await;
         assert!(status.is_ok());
         let sval = status.unwrap();
         assert_eq!(sval["target_sample_rate"], 16000);
+
+        let synthetic_samples: Vec<f32> =
+            (0..16000).map(|i| (i as f32 * 0.05).sin() * 0.75).collect();
+
+        let res = transcribe_audio_chunk(synthetic_samples, Some(16000), Some(1)).await;
+        if sval["is_model_loaded"].as_bool().unwrap_or(false) {
+            assert!(
+                res.is_ok(),
+                "transcribe_audio_chunk should succeed when model is loaded: {:?}",
+                res.err()
+            );
+            let val = res.unwrap();
+            assert!(val["transcript"].is_string());
+            assert_eq!(val["samples_count"], 16000);
+        } else {
+            assert!(
+                res.is_err(),
+                "transcribe_audio_chunk must reject when no Whisper model exists instead of faking a transcript"
+            );
+            assert!(res.unwrap_err().contains("ggml-*.bin"));
+        }
     }
 
     #[tokio::test]

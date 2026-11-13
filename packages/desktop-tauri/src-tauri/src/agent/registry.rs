@@ -71,18 +71,55 @@ impl ProviderRegistry {
             },
         );
 
-        // 6. Generic ACP
+        // 6. Generic ACP + configured ACP extensions
+        let cfg = crate::kernel::config_store::get_config_store().get_config();
+        let acp_custom = cfg
+            .providers_config
+            .get("acp")
+            .and_then(|v| v.get("command"))
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.as_str())
+            .map(is_command_available)
+            .unwrap_or(false);
         map.insert(
             "acp".to_string(),
             ProviderDescriptor {
                 id: "acp".to_string(),
                 label: "Agent Client Protocol".to_string(),
                 description: "ACP stdio agent protocol runner (Cursor, Copilot, Trae)".to_string(),
-                is_installed: true,
+                is_installed: is_command_available("acp") || acp_custom,
             },
         );
+        if let Some(obj) = cfg.providers_config.as_object() {
+            for (prov_id, entry) in obj {
+                if entry.get("extends").and_then(|v| v.as_str()) == Some("acp") && prov_id != "acp"
+                {
+                    let cmd_bin = entry
+                        .get("command")
+                        .and_then(|v| v.as_array())
+                        .and_then(|arr| arr.first())
+                        .and_then(|v| v.as_str());
+                    let available = cmd_bin.map(is_command_available).unwrap_or(false);
+                    map.insert(
+                        prov_id.clone(),
+                        ProviderDescriptor {
+                            id: prov_id.clone(),
+                            label: entry
+                                .get("label")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(prov_id)
+                                .to_string(),
+                            description: "Configured ACP stdio agent".to_string(),
+                            is_installed: available,
+                        },
+                    );
+                }
+            }
+        }
 
-        // 7. Mock
+        #[cfg(test)]
+        // 7. Mock (strictly for unit tests)
         map.insert(
             "mock".to_string(),
             ProviderDescriptor {
@@ -100,7 +137,7 @@ impl ProviderRegistry {
                 id: "ollama".to_string(),
                 label: "Ollama (Local)".to_string(),
                 description: "Local open-weights LLMs via Ollama daemon (127.0.0.1:11434)".to_string(),
-                is_installed: is_command_available("ollama"),
+                is_installed: is_command_available("ollama") || is_local_port_open(11434),
             },
         );
 
@@ -111,7 +148,7 @@ impl ProviderRegistry {
                 id: "lmstudio".to_string(),
                 label: "LM Studio (Local)".to_string(),
                 description: "Local GGUF models via LM Studio local inference server (127.0.0.1:1234)".to_string(),
-                is_installed: true,
+                is_installed: is_command_available("lms") || is_local_port_open(1234),
             },
         );
 
@@ -190,6 +227,13 @@ pub fn resolve_command(cmd: &str) -> Option<std::path::PathBuf> {
 
 pub fn is_command_available(cmd: &str) -> bool {
     resolve_command(cmd).is_some()
+}
+
+pub fn is_local_port_open(port: u16) -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+    TcpStream::connect_timeout(&addr, Duration::from_millis(40)).is_ok()
 }
 
 pub fn resolve_provider_for_model(model: &str) -> Option<&'static str> {

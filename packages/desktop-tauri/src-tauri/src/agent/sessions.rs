@@ -482,7 +482,7 @@ fn parse_antigravity_transcript(
         last_activity_at,
         message_count,
         subagent_count,
-        model: Some("gemini-3.8-flash".to_string()),
+        model: None,
     })
 }
 
@@ -536,6 +536,149 @@ pub async fn scan_omp_sessions_raw(
     }
 
     (sessions, scanned_count)
+}
+
+/// Inspects a single OMP session JSONL file from `~/.omp/agent/sessions/**/*.jsonl`,
+/// returning parsed turns, tool calls, modified file paths, and real summary stats.
+pub fn inspect_omp_session(target_id: &str) -> Option<serde_json::Value> {
+    if target_id.trim().is_empty() {
+        return None;
+    }
+    let home = dirs::home_dir()?;
+    let sessions_dir = home.join(".omp").join("agent").join("sessions");
+    let candidate_files = find_jsonl_files_sorted_by_mtime(&sessions_dir, 200);
+
+    let mut matched_path: Option<PathBuf> = None;
+    for path in candidate_files {
+        let stem_matches = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s == target_id);
+        if stem_matches {
+            matched_path = Some(path);
+            break;
+        }
+        if let Ok(f) = File::open(&path) {
+            let mut r = BufReader::new(f);
+            let mut first_line = String::new();
+            if r.read_line(&mut first_line).is_ok() {
+                if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&first_line) {
+                    if obj.get("id").and_then(|v| v.as_str()) == Some(target_id) {
+                        matched_path = Some(path);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let path = matched_path?;
+    let file = File::open(&path).ok()?;
+    let reader = BufReader::new(file);
+
+    let mut title: Option<String> = None;
+    let mut cwd: Option<String> = None;
+    let mut turns: Vec<serde_json::Value> = Vec::new();
+    let mut file_diffs_set = std::collections::BTreeSet::<String>::new();
+    let mut total_tool_calls: usize = 0;
+
+    for line_res in reader.lines() {
+        let Ok(line) = line_res else { continue };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+
+        let typ = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if typ == "title" && title.is_none() {
+            title = obj.get("title").and_then(|v| v.as_str()).map(|s| s.to_string());
+        } else if typ == "session" && cwd.is_none() {
+            cwd = obj.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
+        }
+
+        if let Some(msg) = obj.get("message") {
+            let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("assistant");
+            let ts = obj
+                .get("timestamp")
+                .or_else(|| msg.get("timestamp"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let mut text_parts = Vec::new();
+            let mut tool_calls = Vec::new();
+            if let Some(content) = msg.get("content") {
+                if let Some(s) = content.as_str() {
+                    if !s.trim().is_empty() {
+                        text_parts.push(s.to_string());
+                    }
+                } else if let Some(arr) = content.as_array() {
+                    for part in arr {
+                        let ptype = part.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                        if ptype == "text" {
+                            if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
+                                if !t.trim().is_empty() {
+                                    text_parts.push(t.to_string());
+                                }
+                            }
+                        } else if ptype == "toolCall" || ptype == "tool_use" {
+                            total_tool_calls += 1;
+                            let name = part
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("tool")
+                                .to_string();
+                            let input = part
+                                .get("arguments")
+                                .or_else(|| part.get("input"))
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null);
+                            for key in ["path", "filePath", "TargetFile", "file"] {
+                                if let Some(fp) = input.get(key).and_then(|v| v.as_str()) {
+                                    if matches!(
+                                        name.to_ascii_lowercase().as_str(),
+                                        "edit" | "write" | "write_to_file" | "replace_file_content" | "patch" | "edit_file" | "write_file"
+                                    ) {
+                                        file_diffs_set.insert(fp.to_string());
+                                    }
+                                }
+                            }
+                            tool_calls.push(serde_json::json!({
+                                "name": name,
+                                "input": input,
+                            }));
+                        }
+                    }
+                }
+            }
+            turns.push(serde_json::json!({
+                "role": role,
+                "text": text_parts.join("\n"),
+                "toolCalls": tool_calls,
+                "timestamp": ts,
+            }));
+        }
+    }
+
+    let file_diffs: Vec<serde_json::Value> = file_diffs_set
+        .iter()
+        .map(|p| serde_json::json!({ "path": p }))
+        .collect();
+    let files_modified = file_diffs.len();
+    let total_turns = turns.len();
+
+    Some(serde_json::json!({
+        "id": target_id,
+        "title": title.unwrap_or_else(|| format!("OMP {}", safe_prefix(target_id, 8))),
+        "cwd": cwd,
+        "turns": turns,
+        "fileDiffs": file_diffs,
+        "stats": {
+            "totalTurns": total_turns,
+            "totalToolCalls": total_tool_calls,
+            "filesModified": files_modified,
+        }
+    }))
 }
 
 fn parse_omp_session_file_rich(
@@ -720,7 +863,10 @@ fn parse_omp_session_file_rich(
         .to_string();
 
     let cwd = session_cwd.unwrap_or_else(|| {
-        format!("C:/Users/Acer/Desktop/{}", project_name)
+        dirs::desktop_dir()
+            .or_else(dirs::home_dir)
+            .map(|base| base.join(&project_name).to_string_lossy().into_owned())
+            .unwrap_or_else(|| project_name.clone())
     });
 
     if let Some(target) = filter_cwd {
@@ -745,7 +891,7 @@ fn parse_omp_session_file_rich(
         last_activity_at,
         message_count: message_count.max(1),
         subagent_count,
-        model: model.or_else(|| Some("gemini-3.8-flash".to_string())),
+        model,
     })
 }
 
@@ -812,7 +958,10 @@ fn parse_claude_session_file_rich(
     let mut first_prompt = None;
     let mut last_preview = None;
     let mut timestamp = None;
-    let mut message_count = 0;
+    let mut message_count = 0usize;
+    let mut subagent_count = 0usize;
+    let mut detected_model: Option<String> = None;
+    let mut explicit_cwd: Option<String> = None;
 
     for line_res in reader.lines() {
         let line = match line_res {
@@ -822,17 +971,46 @@ fn parse_claude_session_file_rich(
         if line.trim().is_empty() {
             continue;
         }
-        message_count += 1;
 
         let obj: serde_json::Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(_) => continue,
         };
 
+        let entry_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if matches!(entry_type, "user" | "assistant" | "message")
+            || obj.get("message").is_some()
+            || obj.get("content").is_some()
+        {
+            message_count += 1;
+        }
+
+        if obj.get("parent_tool_use_id").and_then(|v| v.as_str()).is_some()
+            || entry_type == "subagent"
+        {
+            subagent_count += 1;
+        }
+
         if session_id.is_none() {
             if let Some(sid) = obj.get("sessionId").and_then(|v| v.as_str()) {
                 session_id = Some(sid.to_string());
             }
+        }
+
+        if explicit_cwd.is_none() {
+            if let Some(c) = obj.get("cwd").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                explicit_cwd = Some(c.to_string());
+            }
+        }
+
+        if let Some(m) = obj
+            .get("message")
+            .and_then(|m| m.get("model"))
+            .and_then(|v| v.as_str())
+            .or_else(|| obj.get("model").and_then(|v| v.as_str()))
+            .filter(|s| !s.is_empty())
+        {
+            detected_model = Some(m.to_string());
         }
 
         if let Some(ts) = obj.get("timestamp").and_then(|v| v.as_str()) {
@@ -859,7 +1037,7 @@ fn parse_claude_session_file_rich(
     })?;
 
     let parent_name = path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()).unwrap_or(".");
-    let cwd = decode_claude_project_dir(parent_name);
+    let cwd = explicit_cwd.unwrap_or_else(|| decode_claude_project_dir(parent_name));
     let project_name = Path::new(&cwd).file_name().and_then(|s| s.to_str()).unwrap_or("general").to_string();
 
     if let Some(target) = filter_cwd {
@@ -880,9 +1058,73 @@ fn parse_claude_session_file_rich(
         last_message_preview: last_preview.unwrap_or_else(|| "Active conversation".to_string()),
         last_activity_at,
         message_count: message_count.max(1),
-        subagent_count: 0,
-        model: Some("claude-3-7-sonnet".to_string()),
+        subagent_count,
+        model: detected_model,
     })
+}
+
+/// Inspects `~/.codex/sessions` rollout JSONL files for a given Codex session ID to extract
+/// real message counts, model name, and working directory when available on disk.
+fn inspect_codex_rollout_metadata(
+    codex_dir: &Path,
+    session_id: &str,
+) -> (Option<usize>, Option<String>, Option<String>, usize) {
+    let sessions_root = codex_dir.join("sessions");
+    if !sessions_root.is_dir() {
+        return (None, None, None, 0);
+    }
+    let mut files = Vec::new();
+    collect_files_recursive(&sessions_root, &mut files, 0);
+    for file_path in files {
+        let fname = file_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if !fname.contains(session_id) {
+            continue;
+        }
+        let Ok(file) = File::open(&file_path) else {
+            continue;
+        };
+        let reader = BufReader::new(file);
+        let mut msg_count = 0usize;
+        let mut sub_count = 0usize;
+        let mut model: Option<String> = None;
+        let mut cwd: Option<String> = None;
+
+        for line in reader.lines().flatten() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            let typ = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if matches!(typ, "message" | "response_item" | "event_msg" | "user" | "assistant") {
+                msg_count += 1;
+            }
+            if typ.contains("subagent") {
+                sub_count += 1;
+            }
+            if cwd.is_none() {
+                if let Some(c) = obj
+                    .get("cwd")
+                    .or_else(|| obj.get("payload").and_then(|p| p.get("cwd")))
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                {
+                    cwd = Some(c.to_string());
+                }
+            }
+            if let Some(m) = obj
+                .get("model")
+                .or_else(|| obj.get("payload").and_then(|p| p.get("model")))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                model = Some(m.to_string());
+            }
+        }
+        return (Some(msg_count.max(1)), model, cwd, sub_count);
+    }
+    (None, None, None, 0)
 }
 
 /// Discovers Codex sessions from `~/.codex/session_index.jsonl`.
@@ -919,7 +1161,8 @@ pub async fn scan_codex_sessions_raw(
         None => return (Vec::new(), 0),
     };
 
-    let index_file = home.join(".codex").join("session_index.jsonl");
+    let codex_dir = home.join(".codex");
+    let index_file = codex_dir.join("session_index.jsonl");
     let file = match File::open(&index_file) {
         Ok(f) => f,
         Err(_) => return (Vec::new(), 0),
@@ -965,20 +1208,49 @@ pub async fn scan_codex_sessions_raw(
             crate::agent::types::now_iso()
         };
 
-        let proj = Path::new(&default_cwd).file_name().and_then(|s| s.to_str()).unwrap_or("general").to_string();
+        let (rollout_msgs, rollout_model, rollout_cwd, subagent_count) =
+            inspect_codex_rollout_metadata(&codex_dir, &id);
+        let cwd = obj
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or(rollout_cwd)
+            .unwrap_or_else(|| default_cwd.clone());
+
+        if let Some(target_cwd) = filter_cwd {
+            if !paths_match(&cwd, target_cwd) {
+                continue;
+            }
+        }
+
+        let message_count = obj
+            .get("message_count")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+            .or(rollout_msgs)
+            .unwrap_or(1);
+        let model = obj
+            .get("model")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or(rollout_model);
+
+        let proj = Path::new(&cwd).file_name().and_then(|s| s.to_str()).unwrap_or("general").to_string();
 
         descriptors.push(UniversalIndexedSessionItem {
             id,
             provider_id: "codex".to_string(),
             provider_label: "Codex".to_string(),
             project_name: proj,
-            cwd: default_cwd.clone(),
+            cwd,
             title: title.clone().unwrap_or_else(|| "Codex Session".to_string()),
             last_message_preview: title.unwrap_or_else(|| "Codex Task".to_string()),
             last_activity_at,
-            message_count: 5,
-            subagent_count: 0,
-            model: Some("gpt-5.3-codex".to_string()),
+            message_count,
+            subagent_count,
+            model,
         });
     }
 
@@ -1040,6 +1312,20 @@ pub async fn discover_opencode_sessions(
             crate::agent::types::now_iso()
         };
 
+        let message_count = item
+            .get("messageCount")
+            .or_else(|| item.get("message_count"))
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+            .or_else(|| item.get("messages").and_then(|m| m.as_array()).map(|a| a.len()));
+        let model = item
+            .get("model")
+            .or_else(|| item.get("modelID"))
+            .or_else(|| item.get("modelId"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+
         let proj = Path::new(&cwd).file_name().and_then(|s| s.to_str()).unwrap_or("general").to_string();
 
         descriptors.push(RecentProviderSessionDescriptor {
@@ -1052,9 +1338,9 @@ pub async fn discover_opencode_sessions(
             last_prompt_preview: None,
             last_activity_at,
             project_name: Some(proj),
-            message_count: Some(5),
+            message_count,
             subagent_count: Some(0),
-            model: Some("deepseek-v3".to_string()),
+            model,
         });
     }
 
@@ -1121,12 +1407,11 @@ fn parse_pi_session_file(path: &Path, filter_cwd: Option<&str>) -> Option<Univer
     let mut session_cwd = None;
     let mut session_timestamp = None;
     let mut first_prompt = None;
-    let mut message_count = 0;
+    let mut last_prompt = None;
+    let mut detected_model: Option<String> = None;
+    let mut message_count = 0usize;
 
-    for (idx, line_res) in reader.lines().enumerate() {
-        if idx > 30 {
-            break;
-        }
+    for line_res in reader.lines() {
         let line = match line_res {
             Ok(l) => l,
             Err(_) => continue,
@@ -1134,12 +1419,21 @@ fn parse_pi_session_file(path: &Path, filter_cwd: Option<&str>) -> Option<Univer
         if line.trim().is_empty() {
             continue;
         }
-        message_count += 1;
 
         let obj: serde_json::Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(_) => continue,
         };
+
+        if let Some(m) = obj
+            .get("model")
+            .or_else(|| obj.get("modelId"))
+            .or_else(|| obj.get("message").and_then(|msg| msg.get("model")))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            detected_model = Some(m.to_string());
+        }
 
         if let Some(typ) = obj.get("type").and_then(|v| v.as_str()) {
             if typ == "session" {
@@ -1152,9 +1446,14 @@ fn parse_pi_session_file(path: &Path, filter_cwd: Option<&str>) -> Option<Univer
                 if let Some(ts) = obj.get("timestamp").and_then(|v| v.as_str()) {
                     session_timestamp = Some(ts.to_string());
                 }
-            } else if typ == "message" && first_prompt.is_none() {
+            } else if typ == "message" {
+                message_count += 1;
                 if let Some(content) = obj.get("content").and_then(|v| v.as_str()) {
-                    first_prompt = Some(content.to_string());
+                    let snip = safe_truncate(content.trim(), 80);
+                    if first_prompt.is_none() {
+                        first_prompt = Some(snip.clone());
+                    }
+                    last_prompt = Some(snip);
                 }
             }
         }
@@ -1181,11 +1480,11 @@ fn parse_pi_session_file(path: &Path, filter_cwd: Option<&str>) -> Option<Univer
         project_name: proj,
         cwd,
         title: first_prompt.clone().unwrap_or_else(|| "Pi Session".to_string()),
-        last_message_preview: first_prompt.unwrap_or_else(|| "Active Pi session".to_string()),
+        last_message_preview: last_prompt.or(first_prompt).unwrap_or_else(|| "Active Pi session".to_string()),
         last_activity_at,
         message_count: message_count.max(1),
         subagent_count: 0,
-        model: Some("pi-flash".to_string()),
+        model: detected_model,
     })
 }
 

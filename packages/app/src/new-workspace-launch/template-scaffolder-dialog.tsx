@@ -1,8 +1,14 @@
-import React, { memo, useState } from "react";
-import { View, Text, Pressable, ScrollView, TextInput } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { Layers, Rocket, Sparkles, X, Check, Code, Server, Cpu } from "lucide-react-native";
+import React, { memo, useCallback, useState } from "react";
+import { View, Text, ScrollView } from "react-native";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { Rocket, Sparkles, X } from "lucide-react-native";
 import { useToast } from "@/contexts/toast-context";
+import { AdaptiveTextInput } from "@/components/adaptive-text-input";
+import { Button } from "@/components/ui/button";
+import { PressHighlight } from "@/components/ui/press-highlight";
+
+const ThemedRocketIcon = withUnistyles(Rocket, (theme) => ({ color: theme.colors.accent }));
+const ThemedCloseIcon = withUnistyles(X, (theme) => ({ color: theme.colors.foregroundMuted }));
 
 export interface ProjectTemplate {
   id: string;
@@ -70,19 +76,50 @@ export interface TemplateScaffolderDialogProps {
   onScaffold: (template: ProjectTemplate, projectName: string) => void;
 }
 
+const TemplateCardItem = memo(function TemplateCardItem({
+  template,
+  isSelected,
+  onSelect,
+}: {
+  template: ProjectTemplate;
+  isSelected: boolean;
+  onSelect: (template: ProjectTemplate) => void;
+}) {
+  const handlePress = useCallback(() => {
+    onSelect(template);
+  }, [onSelect, template]);
+
+  return (
+    <PressHighlight
+      onPress={handlePress}
+      style={[styles.templateCard, isSelected && styles.templateCardSelected]}
+    >
+      <View style={styles.cardHeader}>
+        <Text style={styles.templateName}>{template.name}</Text>
+        <Text style={styles.categoryBadge}>{template.category}</Text>
+      </View>
+      <Text style={styles.templateTagline}>{template.tagline}</Text>
+      <View style={styles.stackPills}>
+        {template.stack.map((s) => (
+          <View key={s} style={styles.stackPill}>
+            <Text style={styles.stackText}>{s}</Text>
+          </View>
+        ))}
+      </View>
+    </PressHighlight>
+  );
+});
+
 export const TemplateScaffolderDialog = memo(function TemplateScaffolderDialog({
   visible,
   onClose,
   onScaffold,
 }: TemplateScaffolderDialogProps) {
-  const { theme } = useUnistyles();
   const toast = useToast();
   const [selectedTemplate, setSelectedTemplate] = useState<ProjectTemplate>(POPULAR_TEMPLATES[0]);
   const [projectName, setProjectName] = useState("my-kronos-app");
 
-  if (!visible) return null;
-
-  const handleCreate = () => {
+  const handleCreate = useCallback(() => {
     if (!projectName.trim()) {
       toast.show("Please enter a valid project name", { variant: "error" });
       return;
@@ -90,7 +127,9 @@ export const TemplateScaffolderDialog = memo(function TemplateScaffolderDialog({
     onScaffold(selectedTemplate, projectName.trim());
     toast.show(`Scaffolding ${selectedTemplate.name} template...`, { variant: "success" });
     onClose();
-  };
+  }, [onClose, onScaffold, projectName, selectedTemplate, toast]);
+
+  if (!visible) return null;
 
   return (
     <View style={styles.overlay}>
@@ -98,62 +137,45 @@ export const TemplateScaffolderDialog = memo(function TemplateScaffolderDialog({
         {/* Header */}
         <View style={styles.header}>
           <View style={styles.headerTitleRow}>
-            <Rocket size={20} color={theme.colors.accent} />
+            <ThemedRocketIcon size={20} />
             <Text style={styles.headerTitle}>1-Click Project Template Scaffolder</Text>
           </View>
-          <Pressable onPress={onClose} style={styles.closeButton}>
-            <X size={18} color={theme.colors.foregroundMuted} />
-          </Pressable>
+          <PressHighlight onPress={onClose} style={styles.closeButton}>
+            <ThemedCloseIcon size={18} />
+          </PressHighlight>
         </View>
 
         {/* Project Name Input */}
         <View style={styles.projectNameBlock}>
           <Text style={styles.inputLabel}>Project Directory Name</Text>
-          <TextInput
+          <AdaptiveTextInput
             style={styles.projectNameInput}
-            value={projectName}
+            initialValue={projectName}
             onChangeText={setProjectName}
             placeholder="my-kronos-app"
-            placeholderTextColor={theme.colors.foregroundMuted}
           />
         </View>
 
         {/* Templates Grid */}
         <ScrollView style={styles.templateScroll}>
-          {POPULAR_TEMPLATES.map((tmpl) => {
-            const isSelected = selectedTemplate.id === tmpl.id;
-            return (
-              <Pressable
-                key={tmpl.id}
-                onPress={() => setSelectedTemplate(tmpl)}
-                style={[styles.templateCard, isSelected && styles.templateCardSelected]}
-              >
-                <View style={styles.cardHeader}>
-                  <Text style={styles.templateName}>{tmpl.name}</Text>
-                  <Text style={styles.categoryBadge}>{tmpl.category}</Text>
-                </View>
-                <Text style={styles.templateTagline}>{tmpl.tagline}</Text>
-                <View style={styles.stackPills}>
-                  {tmpl.stack.map((s, idx) => (
-                    <View key={idx} style={styles.stackPill}>
-                      <Text style={styles.stackText}>{s}</Text>
-                    </View>
-                  ))}
-                </View>
-              </Pressable>
-            );
-          })}
+          {POPULAR_TEMPLATES.map((tmpl) => (
+            <TemplateCardItem
+              key={tmpl.id}
+              template={tmpl}
+              isSelected={selectedTemplate.id === tmpl.id}
+              onSelect={setSelectedTemplate}
+            />
+          ))}
         </ScrollView>
 
         {/* Footer */}
         <View style={styles.footer}>
-          <Pressable onPress={onClose} style={styles.cancelButton}>
-            <Text style={styles.cancelButtonText}>Cancel</Text>
-          </Pressable>
-          <Pressable onPress={handleCreate} style={styles.createButton}>
-            <Sparkles size={14} color="#ffffff" />
-            <Text style={styles.createButtonText}>Scaffold & Launch</Text>
-          </Pressable>
+          <Button variant="outline" size="sm" onPress={onClose}>
+            Cancel
+          </Button>
+          <Button variant="default" size="sm" onPress={handleCreate} leftIcon={Sparkles}>
+            Scaffold &amp; Launch
+          </Button>
         </View>
       </View>
     </View>

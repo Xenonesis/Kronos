@@ -20,6 +20,14 @@ import { InteractiveInspectOverlay, type InspectTargetInfo } from "./interactive
 import { formatGrabPayloadAsText, type BrowserGrabPayload } from "./browser-grab-payload";
 import { BrowserMarkupOverlay } from "./browser-markup-overlay";
 import type { BrowserAnnotationPayload } from "./browser-markup-types";
+import { PreviewTunnelBanner } from "@/desktop/components/preview-tunnel-banner";
+import { invokeTauri } from "@/utils/tauri-invoke";
+
+type PreviewTunnelState =
+  | { status: "inactive" }
+  | { status: "starting"; localPort: number }
+  | { status: "active"; localPort: number; publicUrl: string; provider: string }
+  | { status: "failed"; error: string };
 
 export interface BrowserPaneViewProps {
   browserId: string;
@@ -45,6 +53,7 @@ export function BrowserPaneView({
   browserId,
   serverId,
   workspaceId,
+  cwd,
   testID = "browser-pane-view",
 }: BrowserPaneViewProps) {
   const toast = useToast();
@@ -62,7 +71,7 @@ export function BrowserPaneView({
       history: [initialUrl],
       historyIndex: 0,
       isLoading: false,
-      hasLoadError: true, // Defaults to error state when server isn't running yet (matching Orca initial load)
+      hasLoadError: false,
     },
   ]);
   const [activeTabId, setActiveTabId] = useState("tab-1");
@@ -72,6 +81,22 @@ export function BrowserPaneView({
   const [isInspectActive, setIsInspectActive] = useState(false);
   const [isMarkupActive, setIsMarkupActive] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const [tunnelState, setTunnelState] = useState<PreviewTunnelState>({ status: "inactive" });
+  const [isTunnelBusy, setIsTunnelBusy] = useState(false);
+
+  useEffect(() => {
+    async function syncTunnelState() {
+      try {
+        const state = await invokeTauri<PreviewTunnelState>("get_preview_tunnel_state");
+        if (state && typeof state.status === "string") {
+          setTunnelState(state);
+        }
+      } catch {
+        // Non-Tauri environment or unavailable
+      }
+    }
+    void syncTunnelState();
+  }, []);
   const activeTab = useMemo(
     () => tabs.find((t) => t.id === activeTabId) ?? tabs[0]!,
     [tabs, activeTabId],
@@ -162,6 +187,45 @@ export function BrowserPaneView({
     },
     [activeTabId, browserId, updateBrowser, verifyReachability],
   );
+
+  useEffect(() => {
+    if (browserRecord?.url) {
+      const targetUrl = normalizeAddressBarInput(browserRecord.url);
+      setTabs((prev) => {
+        const first = prev[0];
+        if (!first || first.url === targetUrl) return prev;
+        return [
+          {
+            ...first,
+            url: targetUrl,
+            title: parseHostFromUrl(targetUrl),
+            history: [targetUrl],
+            historyIndex: 0,
+            hasLoadError: false,
+          },
+          ...prev.slice(1),
+        ];
+      });
+      void verifyReachability(targetUrl, "tab-1");
+      return;
+    }
+
+    if (!cwd) return;
+    let cancelled = false;
+    async function detectPreview() {
+      try {
+        const detectedUrl = await invokeTauri<string>("detect_workspace_preview_url", { cwd });
+        if (cancelled || !detectedUrl) return;
+        updateBrowser(browserId, { url: detectedUrl });
+      } catch {
+        // Keep default localhost fallback if detection fails
+      }
+    }
+    void detectPreview();
+    return () => {
+      cancelled = true;
+    };
+  }, [browserId, browserRecord?.url, cwd, updateBrowser, verifyReachability]);
 
   const handleGoBack = useCallback(() => {
     if (activeTab.historyIndex > 0) {
@@ -278,6 +342,80 @@ export function BrowserPaneView({
   const handleCancelInspect = useCallback(() => setIsInspectActive(false), []);
   const handleToggleMarkup = useCallback(() => setIsMarkupActive((prev) => !prev), []);
   const handleCloseMarkup = useCallback(() => setIsMarkupActive(false), []);
+
+  const handleStopTunnel = useCallback(async () => {
+    setIsTunnelBusy(true);
+    try {
+      const next = await invokeTauri<PreviewTunnelState>("stop_preview_tunnel");
+      setTunnelState(next ?? { status: "inactive" });
+      toast.show("Preview tunnel stopped");
+    } catch (err) {
+      toast.show(`Failed to stop tunnel: ${String(err)}`, { variant: "error" });
+    } finally {
+      setIsTunnelBusy(false);
+    }
+  }, [toast]);
+
+  const handleToggleTunnel = useCallback(async () => {
+    if (tunnelState.status === "active") {
+      await handleStopTunnel();
+      return;
+    }
+    let localPort = 3000;
+    try {
+      const parsed = new URL(activeTab.url);
+      if (parsed.port) {
+        localPort = Number.parseInt(parsed.port, 10) || 3000;
+      } else if (parsed.protocol === "https:") {
+        localPort = 443;
+      } else if (parsed.protocol === "http:") {
+        localPort = 80;
+      }
+    } catch {
+      localPort = 3000;
+    }
+
+    setIsTunnelBusy(true);
+    toast.show(`Starting public preview tunnel for localhost:${localPort}...`);
+    try {
+      const started = await invokeTauri<PreviewTunnelState>("start_preview_tunnel", {
+        localPort,
+        provider: "cloudflare",
+      });
+      if (started) {
+        setTunnelState(started);
+        if (started.status === "active") {
+          toast.show(`Public tunnel active: ${started.publicUrl}`, { variant: "success" });
+        }
+      }
+    } catch (cfErr) {
+      try {
+        const boreStarted = await invokeTauri<PreviewTunnelState>("start_preview_tunnel", {
+          localPort,
+          provider: "bore",
+        });
+        if (boreStarted) {
+          setTunnelState(boreStarted);
+          if (boreStarted.status === "active") {
+            toast.show(`Public tunnel active: ${boreStarted.publicUrl}`, { variant: "success" });
+          }
+        }
+      } catch {
+        setTunnelState({ status: "failed", error: String(cfErr) });
+        toast.show(`Public tunnel unavailable: ${String(cfErr)}`, { variant: "error" });
+      }
+    } finally {
+      setIsTunnelBusy(false);
+    }
+  }, [activeTab.url, handleStopTunnel, toast, tunnelState.status]);
+
+  const onPressTunnel = useCallback(() => {
+    void handleToggleTunnel();
+  }, [handleToggleTunnel]);
+
+  const onPressStopTunnel = useCallback(() => {
+    void handleStopTunnel();
+  }, [handleStopTunnel]);
 
   // Inject inspector and listen for selected elements
   const injectInspectorIntoIframe = useCallback(() => {
@@ -454,8 +592,19 @@ export function BrowserPaneView({
         isInspectActive={isInspectActive}
         onToggleMarkup={handleToggleMarkup}
         isMarkupActive={isMarkupActive}
+        onToggleTunnel={onPressTunnel}
+        isTunnelActive={tunnelState.status === "active"}
+        isTunnelBusy={isTunnelBusy}
         onSelectViewportPreset={setViewportPreset}
       />
+      {tunnelState.status === "active" ? (
+        <PreviewTunnelBanner
+          localPort={tunnelState.localPort}
+          tunnelUrl={tunnelState.publicUrl}
+          onStopTunnel={onPressStopTunnel}
+          onOpenInBrowser={navigateTo}
+        />
+      ) : null}
       {/* 3. Main Viewport Content */}
       <View style={styles.viewportWrapper}>
         <View style={viewportStyle}>

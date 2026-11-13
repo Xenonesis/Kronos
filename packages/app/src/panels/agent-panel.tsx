@@ -29,6 +29,11 @@ import { useRetainedPanelActive } from "@/components/retained-panel";
 import { RetainedChatContent } from "./retained-chat-content";
 import { Composer } from "@/composer";
 import {
+  DynamicTaskChecklistHud,
+  type TaskChecklistItem,
+} from "@/components/dynamic-task-checklist-hud";
+import { ArchitectModeToggle } from "@/components/architect-mode-toggle";
+import {
   GitHubPrModal,
   CloudDeploymentModal,
   BrowserVerificationModal,
@@ -40,8 +45,22 @@ import {
   WorkspaceDocsModal,
   DatabaseStudioModal,
   ModelArenaModal,
+  SemanticSearchModal,
+  CodebaseBugHunterModal,
+  EnvVaultModal,
+  MemoriesManagementDialog,
+  VisualDependencyGraphModal,
+  type BugAuditItem,
   type ReviewFileEntry,
 } from "@/desktop/components";
+import {
+  executeKronosClientSlashCommand,
+  syncPermissionPolicyToHost,
+} from "./kronos-slash-handlers";
+import { type TodoEntry } from "@/types/stream";
+import { useCostBudgetStore } from "@/stores/cost-budget-store";
+
+const EMPTY_TODO_LIST: readonly TodoEntry[] = [];
 import { TurnCheckpointModal } from "@/timeline/turn-checkpoint-modal";
 import { GlobalSearchReplaceModal } from "@/panels/global-search-replace-modal";
 import { ArtifactsCanvasModal, type ArtifactItem } from "@/components/artifacts-canvas-modal";
@@ -114,7 +133,7 @@ import {
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { buildWorkspaceTabPersistenceKey, type WorkspaceTabTarget } from "@/workspace-tabs/model";
 import { openWorkspaceChanges } from "@/workspace-tabs/open-supporting-view";
-import { useSettings } from "@/hooks/use-settings";
+import { useAppSettings, useSettings } from "@/hooks/use-settings";
 import type { Theme } from "@/styles/theme";
 import type { PendingPermission } from "@/types/shared";
 import type { StreamItem } from "@/types/stream";
@@ -1602,18 +1621,6 @@ const AgentComposerSection = memo(function AgentComposerSection({
   );
 });
 
-const CLIENT_SLASH_TOASTS: Partial<Record<ClientSlashCommand["kind"], string>> = {
-  "compact-session": "Session context compacted (-75% tokens freed)",
-  "test-loop": "Autonomous test-driven repair loop initiated",
-  "audit-codebase": "Scanning codebase for security vulnerabilities & bugs...",
-  "consensus-mode": "Multi-model consensus synthesizer active",
-  "semantic-search": "Codebase semantic vector search initialized",
-  "agent-mode": "Agent execution mode updated (Architect / Code / Ask / Test)",
-  "yolo-mode": "YOLO Autonomous Terminal Mode toggled 🚀",
-  "voice-dictation": "Hands-Free Voice Dictation mode activated 🎙️",
-  "agent-swarm": "Autonomous subagent dispatched to background swarm 🐝",
-};
-
 async function runRepoMapSlashCommand(
   cwd: string,
   toast: { show: (msg: string, opts?: { variant?: "success" | "error" }) => void },
@@ -1688,11 +1695,35 @@ function ActiveAgentComposer({
   }>({ visible: false, tab: "notepad" });
   const [isDatabaseModalVisible, setIsDatabaseModalVisible] = useState(false);
   const [isModelArenaModalVisible, setIsModelArenaModalVisible] = useState(false);
+  const [isSemanticSearchVisible, setIsSemanticSearchVisible] = useState(false);
+  const [isBugHunterVisible, setIsBugHunterVisible] = useState(false);
+  const [isEnvVaultVisible, setIsEnvVaultVisible] = useState(false);
+  const [isMemoriesVisible, setIsMemoriesVisible] = useState(false);
+  const [isDepsGraphVisible, setIsDepsGraphVisible] = useState(false);
+  const [isChecklistHudVisible, setIsChecklistHudVisible] = useState(false);
+  const [customChecklistItems, setCustomChecklistItems] = useState<TaskChecklistItem[]>([]);
+  const [taskStatusOverrides, setTaskStatusOverrides] = useState<
+    Record<string, "completed" | "pending">
+  >({});
+  const [bugAuditItems, setBugAuditItems] = useState<BugAuditItem[]>([]);
   const [webSearchModalState, setWebSearchModalState] = useState<{
     visible: boolean;
     mode: "search" | "fetch";
     query: string;
   }>({ visible: false, mode: "search", query: "" });
+  const { settings: appSettings, updateSettings: updateAppSettings } = useAppSettings();
+  const requestedCostModalAgentId = useCostBudgetStore((state) => state.requestedModalAgentId);
+
+  useEffect(() => {
+    void syncPermissionPolicyToHost(appSettings);
+  }, [appSettings]);
+
+  useEffect(() => {
+    if (requestedCostModalAgentId === agentId) {
+      setIsCostModalVisible(true);
+      useCostBudgetStore.getState().clearCostModalRequest();
+    }
+  }, [agentId, requestedCostModalAgentId]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1733,6 +1764,33 @@ function ActiveAgentComposer({
     [isCompactFormFactor, openInSidePane, serverId, workspaceId],
   );
 
+  const openPreviewBrowser = useCallback(() => {
+    const previewWorkspaceKey = buildWorkspaceTabPersistenceKey({ serverId, workspaceId });
+    if (previewWorkspaceKey) {
+      openPreferredWorkspaceTarget({
+        workspaceKey: previewWorkspaceKey,
+        target: { kind: "browser", browserId: "preview" },
+        source: "chatFiles",
+        preferences: openInSidePane,
+        parentTabId: tabId,
+      });
+    }
+  }, [openInSidePane, serverId, tabId, workspaceId]);
+
+  const handleOpenArtifactsFromSlash = useCallback((items: ArtifactItem[]) => {
+    setDiagramArtifacts(items);
+    setIsArtifactsModalVisible(true);
+  }, []);
+
+  const handleOpenBugHunterFromSlash = useCallback((items: BugAuditItem[]) => {
+    setBugAuditItems(items);
+    setIsBugHunterVisible(true);
+  }, []);
+
+  const handleOpenSemanticSearchFromSlash = useCallback(() => {
+    setIsSemanticSearchVisible(true);
+  }, []);
+
   const handleClientSlashCommand = useCallback(
     async (command: ClientSlashCommand) => {
       const agent = resolveChatAgentFromSession(useSessionStore.getState(), serverId, agentId);
@@ -1740,18 +1798,27 @@ function ActiveAgentComposer({
         throw new Error("Agent not found");
       }
 
-      const simpleToast = CLIENT_SLASH_TOASTS[command.kind];
-      if (simpleToast) {
-        toast.show(simpleToast, { variant: "success" });
+      const handledKronos = await executeKronosClientSlashCommand(command.kind, {
+        agent,
+        agentId,
+        serverId,
+        workspaceId,
+        tabId,
+        cwd,
+        toast,
+        settings: appSettings,
+        updateSettings: updateAppSettings,
+        onOpenSemanticSearch: handleOpenSemanticSearchFromSlash,
+        onOpenArtifacts: handleOpenArtifactsFromSlash,
+        onOpenBugHunter: handleOpenBugHunterFromSlash,
+        onOpenPreviewBrowser: openPreviewBrowser,
+      });
+      if (handledKronos) {
         return;
       }
 
       const syncHandlers: Partial<Record<ClientSlashCommand["kind"], () => void>> = {
         "create-pr": () => setIsGitHubPrModalVisible(true),
-        "artifacts-view": () => {
-          setDiagramArtifacts(undefined);
-          setIsArtifactsModalVisible(true);
-        },
         "cloud-deploy": () => setIsDeployModalVisible(true),
         "browser-test": () => setIsBrowserTestModalVisible(true),
         "web-search": () => setWebSearchModalState({ visible: true, mode: "search", query: "" }),
@@ -1765,21 +1832,10 @@ function ActiveAgentComposer({
         "custom-workflows": () => setDocsModalState({ visible: true, tab: "command" }),
         "database-studio": () => setIsDatabaseModalVisible(true),
         "model-arena": () => setIsModelArenaModalVisible(true),
-        "web-preview": () => {
-          const previewWorkspaceKey = buildWorkspaceTabPersistenceKey({ serverId, workspaceId });
-          if (previewWorkspaceKey) {
-            openPreferredWorkspaceTarget({
-              workspaceKey: previewWorkspaceKey,
-              target: { kind: "browser", browserId: "preview" },
-              source: "chatFiles",
-              preferences: openInSidePane,
-              parentTabId: tabId,
-            });
-          }
-          toast.show("Live webview preview opened with Click-to-Prompt inspector", {
-            variant: "success",
-          });
-        },
+        "env-vault": () => setIsEnvVaultVisible(true),
+        "memories-manager": () => setIsMemoriesVisible(true),
+        "module-deps": () => setIsDepsGraphVisible(true),
+        "checklist-hud": () => setIsChecklistHudVisible((prev) => !prev),
       };
 
       const syncHandler = syncHandlers[command.kind];
@@ -1849,16 +1905,21 @@ function ActiveAgentComposer({
     },
     [
       agentId,
+      appSettings,
       archiveAgent,
       closeWorkspaceTab,
       cwd,
+      handleOpenArtifactsFromSlash,
+      handleOpenBugHunterFromSlash,
+      handleOpenSemanticSearchFromSlash,
       hideWorkspaceAgent,
-      openInSidePane,
+      openPreviewBrowser,
       retargetCurrentTab,
       serverId,
       tabId,
       toast,
       unpinWorkspaceAgent,
+      updateAppSettings,
       workspaceId,
     ],
   );
@@ -1914,6 +1975,8 @@ function ActiveAgentComposer({
   );
   const closeDatabaseModal = useCallback(() => setIsDatabaseModalVisible(false), []);
   const closeModelArenaModal = useCallback(() => setIsModelArenaModalVisible(false), []);
+  const closeSemanticSearchModal = useCallback(() => setIsSemanticSearchVisible(false), []);
+  const closeBugHunterModal = useCallback(() => setIsBugHunterVisible(false), []);
   const handleModelArenaPickWinner = useCallback(
     (arenaPrompt: string, modelId: string) => {
       useDraftStore.getState().replaceDraftText({
@@ -1926,22 +1989,114 @@ function ActiveAgentComposer({
   );
   const closeDeployModal = useCallback(() => setIsDeployModalVisible(false), []);
   const closeBrowserTestModal = useCallback(() => setIsBrowserTestModalVisible(false), []);
+  const closeEnvVaultModal = useCallback(() => setIsEnvVaultVisible(false), []);
+  const closeMemoriesModal = useCallback(() => setIsMemoriesVisible(false), []);
+  const closeDepsGraphModal = useCallback(() => setIsDepsGraphVisible(false), []);
+  const closeChecklistHud = useCallback(() => setIsChecklistHudVisible(false), []);
+  const sessionAgentTasks = useSessionStore(
+    useCallback(
+      (state) => state.sessions[serverId]?.agentTasks.get(agentId) ?? EMPTY_TODO_LIST,
+      [serverId, agentId],
+    ),
+  );
+  const mergedChecklistTasks = useMemo<TaskChecklistItem[]>(() => {
+    const mapped: TaskChecklistItem[] = sessionAgentTasks.map((entry, idx) => {
+      const id = entry.id ?? `agent-task-${idx}`;
+      const baseStatus = entry.completed ? "completed" : (entry.status ?? "pending");
+      return {
+        id,
+        title: entry.text,
+        status: taskStatusOverrides[id] ?? baseStatus,
+      };
+    });
+    return [...mapped, ...customChecklistItems];
+  }, [sessionAgentTasks, customChecklistItems, taskStatusOverrides]);
+  const handleToggleChecklistTask = useCallback(
+    (taskId: string) => {
+      const isCustom = customChecklistItems.some((item) => item.id === taskId);
+      if (isCustom) {
+        setCustomChecklistItems((prev) =>
+          prev.map((item) =>
+            item.id === taskId
+              ? { ...item, status: item.status === "completed" ? "pending" : "completed" }
+              : item,
+          ),
+        );
+        return;
+      }
+      const target = mergedChecklistTasks.find((t) => t.id === taskId);
+      const nextStatus: "completed" | "pending" =
+        target?.status === "completed" ? "pending" : "completed";
+      setTaskStatusOverrides((prev) => ({ ...prev, [taskId]: nextStatus }));
+    },
+    [customChecklistItems, mergedChecklistTasks],
+  );
+  const handleAddChecklistTask = useCallback((title: string) => {
+    setCustomChecklistItems((prev) => [
+      ...prev,
+      { id: `user-task-${Date.now()}`, title, status: "pending" },
+    ]);
+  }, []);
   const closeWebSearchModal = useCallback(
     () => setWebSearchModalState((prev) => ({ ...prev, visible: false })),
     [],
   );
   const insertWebSearchContent = useCallback(
     (text: string) => {
+      const draftKey = buildDraftStoreKey({ serverId, agentId });
+      const existing = useDraftStore.getState().drafts[draftKey]?.input.text ?? "";
+      useDraftStore.getState().replaceDraftText({
+        draftKey,
+        text: existing.trim() ? `${existing}\n\n${text}` : text,
+      });
       if (navigator?.clipboard?.writeText) {
         void navigator.clipboard.writeText(text);
       }
-      toast.show("Web content copied to clipboard for prompt composer", { variant: "success" });
+      toast.show("Inserted web content into active prompt composer", { variant: "success" });
     },
-    [toast],
+    [agentId, serverId, toast],
+  );
+  const serverModeId = useSessionStore(
+    (state) => state.sessions[serverId]?.agents.get(agentId)?.currentModeId,
+  );
+  const [optimisticArchitectMode, setOptimisticArchitectMode] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (serverModeId !== undefined) {
+      setOptimisticArchitectMode(serverModeId === "architect");
+    }
+  }, [serverModeId]);
+  const isArchitectMode = optimisticArchitectMode ?? serverModeId === "architect";
+  const handleToggleArchitectMode = useCallback(
+    (enabled: boolean) => {
+      const nextMode = enabled ? "architect" : "code";
+      setOptimisticArchitectMode(enabled);
+      void invokeTauri("set_agent_execution_mode", { agentId, modeId: nextMode }).catch((err) => {
+        toast.show(`Failed to persist mode on backend: ${String(err)}`, { variant: "error" });
+      });
+      const client = useSessionStore.getState().sessions[serverId]?.client;
+      if (client) {
+        void client.setAgentMode(agentId, nextMode).catch(() => {
+          // Host may manage mode locally when daemon doesn't expose dynamic mode switch
+        });
+      }
+      toast.show(`Agent persona mode set to "${nextMode}"`, { variant: "success" });
+    },
+    [agentId, serverId, toast],
   );
 
   return (
     <View style={animatedStaticStyles.inputAreaWrapper} onLayout={onInputAreaLayout}>
+      {isChecklistHudVisible ? (
+        <DynamicTaskChecklistHud
+          tasks={mergedChecklistTasks}
+          onToggleTask={handleToggleChecklistTask}
+          onAddTask={handleAddChecklistTask}
+          onClose={closeChecklistHud}
+        />
+      ) : null}
+      <View style={styles.architectModeRail}>
+        <ArchitectModeToggle enabled={isArchitectMode} onToggle={handleToggleArchitectMode} />
+      </View>
       <Composer
         agentId={agentId}
         serverId={serverId}
@@ -2009,12 +2164,30 @@ function ActiveAgentComposer({
       />
       <ModelArenaModal
         visible={isModelArenaModalVisible}
+        cwd={cwd}
         onClose={closeModelArenaModal}
         onPickWinner={handleModelArenaPickWinner}
+      />
+      <SemanticSearchModal
+        visible={isSemanticSearchVisible}
+        cwd={cwd}
+        serverId={serverId}
+        agentId={agentId}
+        onClose={closeSemanticSearchModal}
+      />
+      <CodebaseBugHunterModal
+        visible={isBugHunterVisible}
+        items={bugAuditItems}
+        serverId={serverId}
+        agentId={agentId}
+        onClose={closeBugHunterModal}
       />
       <CloudDeploymentModal visible={isDeployModalVisible} cwd={cwd} onClose={closeDeployModal} />
       <BrowserVerificationModal
         visible={isBrowserTestModalVisible}
+        cwd={cwd}
+        serverId={serverId}
+        agentId={agentId}
         onClose={closeBrowserTestModal}
       />
       <WebSearchModal
@@ -2023,6 +2196,19 @@ function ActiveAgentComposer({
         initialQuery={webSearchModalState.query}
         onClose={closeWebSearchModal}
         onInsertToComposer={insertWebSearchContent}
+      />
+      <EnvVaultModal visible={isEnvVaultVisible} cwd={cwd} onClose={closeEnvVaultModal} />
+      <MemoriesManagementDialog
+        visible={isMemoriesVisible}
+        cwd={cwd}
+        onClose={closeMemoriesModal}
+      />
+      <VisualDependencyGraphModal
+        visible={isDepsGraphVisible}
+        cwd={cwd}
+        serverId={serverId}
+        agentId={agentId}
+        onClose={closeDepsGraphModal}
       />
     </View>
   );
@@ -2231,5 +2417,14 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.sm,
     color: theme.colors.foregroundMuted,
     textAlign: "center",
+  },
+  architectModeRail: {
+    width: "100%",
+    maxWidth: theme.contentMaxWidth,
+    alignSelf: "center",
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    paddingHorizontal: theme.spacing[4],
+    paddingBottom: theme.spacing[1],
   },
 }));

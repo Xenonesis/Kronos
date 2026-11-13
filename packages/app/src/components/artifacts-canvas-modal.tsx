@@ -12,6 +12,8 @@ import {
   Sparkles,
 } from "lucide-react-native";
 import { useToast } from "@/contexts/toast-context";
+import { MermaidFence } from "@/components/markdown/fence/mermaid";
+import { MarkdownRenderer } from "@/components/markdown/renderer";
 
 export interface ArtifactItem {
   id: string;
@@ -26,74 +28,68 @@ export interface ArtifactsCanvasModalProps {
   onClose: () => void;
 }
 
-const DEFAULT_ARTIFACTS: ArtifactItem[] = [
-  {
-    id: "arch-1",
-    title: "System Architecture Flow",
-    type: "mermaid",
-    content: `graph TD
-  User((User)) -->|Prompt / CodeLens| KronosUI[Kronos React Desktop UI]
-  KronosUI -->|Zero-Copy SHM / IPC| RustKernel[Kronos Native Rust Kernel]
-  RustKernel -->|Diagnostics Probe| ShadowLinter[Background Shadow Linter]
-  RustKernel -->|Headless Process| OpenCode[OpenCode / Beam AI Engine]
-  OpenCode -->|Multi-Model Debate| Consensus[Consensus Synthesizer]
-  RustKernel -->|Branch & PR Ops| GitHubOps[1-Click GitHub PR Engine]
-  RustKernel -->|Sub-millisecond| Ripgrep[Ripgrep Batch Search Engine]`,
-  },
-  {
-    id: "spec-1",
-    title: "Technical Specification",
-    type: "markdown",
-    content: `# Kronos Enterprise Parity Architecture Specification
+export function extractArtifactsFromMessages(
+  messages: Array<{ id?: string; kind?: string; text?: string }>,
+): ArtifactItem[] {
+  const collected: ArtifactItem[] = [];
+  let count = 0;
 
-## Overview
-Kronos unites extreme client responsiveness (zero-node native Rust runtime) with deep frontier agent capabilities:
+  for (const msg of messages) {
+    if (msg.kind !== "assistant_message" || !msg.text) continue;
+    const text = msg.text;
+    const fenceRegex = /```(mermaid|html|svg)\s*\r?\n([\s\S]*?)```/gi;
+    let match: RegExpExecArray | null = fenceRegex.exec(text);
+    while (match !== null) {
+      count += 1;
+      const lang = match[1].toLowerCase();
+      const body = match[2].trim();
+      if (body) {
+        collected.push({
+          id: `artifact-${msg.id ?? "msg"}-${count}`,
+          title:
+            lang === "mermaid"
+              ? `Diagram #${count}`
+              : lang === "svg"
+                ? `SVG Graphic #${count}`
+                : `HTML Sandbox #${count}`,
+          type: lang === "mermaid" ? "mermaid" : "html",
+          content: body,
+        });
+      }
+      match = fenceRegex.exec(text);
+    }
 
-- **Background Shadow Linter**: Continuous compiler/typecheck verification after every file edit.
-- **Inline Ctrl+K Micro-Composer**: Context-aware in-place refactor and code transformation inside CodeMirror.
-- **1-Click GitHub PR Engine**: Automated branch staging, git push, and AI-synthesized PR generation.
-- **Global Ripgrep Search & Batch Replace**: Instant regex project-wide text manipulation.
-- **Visual Artifacts Canvas**: Real-time architecture diagrams, markdown deliverables, and live HTML sandboxes.`,
-  },
-  {
-    id: "html-1",
-    title: "Interactive Component Sandbox",
-    type: "html",
-    content: `<!DOCTYPE html>
-<html>
-<head>
-  <style>
-    body { font-family: system-ui, sans-serif; background: #09090b; color: #f4f4f5; padding: 24px; }
-    .card { background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 20px; max-width: 480px; }
-    .badge { display: inline-block; background: #2563eb; color: #fff; border-radius: 20px; padding: 4px 10px; font-size: 11px; font-weight: 600; }
-    h2 { margin: 12px 0 8px 0; font-size: 18px; }
-    p { color: #a1a1aa; font-size: 13px; line-height: 1.5; }
-    button { background: #3b82f6; border: none; border-radius: 6px; color: #fff; padding: 8px 16px; cursor: pointer; font-weight: 500; }
-    button:hover { background: #2563eb; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div class="badge">LIVE PREVIEW</div>
-    <h2>Kronos Native Component Sandbox</h2>
-    <p>This interactive component renders in an isolated sandbox. Edit the prompt or source to see real-time updates.</p>
-    <button onclick="alert('Action dispatched!')">Interact with Component</button>
-  </div>
-</body>
-</html>`,
-  },
-];
+    if (text.length >= 260 && /^#\s+/m.test(text)) {
+      count += 1;
+      const firstHeading = text.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? `Report #${count}`;
+      collected.push({
+        id: `artifact-md-${msg.id ?? "msg"}-${count}`,
+        title: firstHeading.slice(0, 42),
+        type: "markdown",
+        content: text,
+      });
+    }
+  }
+
+  return collected;
+}
 
 export const ArtifactsCanvasModal = memo(function ArtifactsCanvasModal({
   visible,
-  artifacts = DEFAULT_ARTIFACTS,
+  artifacts = [],
   onClose,
 }: ArtifactsCanvasModalProps) {
   const [activeArtifactId, setActiveArtifactId] = useState(artifacts[0]?.id ?? "");
   const [copied, setCopied] = useState(false);
   const toast = useToast();
 
-  const activeArtifact = artifacts.find((a) => a.id === activeArtifactId) ?? artifacts[0];
+  React.useEffect(() => {
+    if (visible && artifacts.length > 0 && !artifacts.some((a) => a.id === activeArtifactId)) {
+      setActiveArtifactId(artifacts[0].id);
+    }
+  }, [visible, artifacts, activeArtifactId]);
+
+  const activeArtifact = artifacts.find((a) => a.id === activeArtifactId) ?? artifacts[0] ?? null;
 
   const handleCopy = useCallback(() => {
     if (!activeArtifact) return;
@@ -105,7 +101,7 @@ export const ArtifactsCanvasModal = memo(function ArtifactsCanvasModal({
     }
   }, [activeArtifact, toast]);
 
-  if (!visible || !activeArtifact) return null;
+  if (!visible) return null;
 
   return (
     <div
@@ -200,7 +196,7 @@ export const ArtifactsCanvasModal = memo(function ArtifactsCanvasModal({
           }}
         >
           {artifacts.map((a) => {
-            const isActive = a.id === activeArtifact.id;
+            const isActive = a.id === activeArtifact?.id;
             return (
               <button
                 key={a.id}
@@ -238,7 +234,30 @@ export const ArtifactsCanvasModal = memo(function ArtifactsCanvasModal({
             flexDirection: "column",
           }}
         >
-          {activeArtifact.type === "html" ? (
+          {!activeArtifact ? (
+            <div
+              style={{
+                flex: 1,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#71717a",
+                padding: "32px",
+                textAlign: "center",
+                gap: "8px",
+              }}
+            >
+              <Layers size={28} />
+              <div style={{ fontSize: "14px", fontWeight: 600, color: "#d4d4d8" }}>
+                No Session Artifacts Yet
+              </div>
+              <div style={{ fontSize: "12px", maxWidth: "420px" }}>
+                Ask the agent to output a Mermaid diagram, HTML snippet, or Markdown report — or run
+                /diagram to generate a live workspace dependency graph.
+              </div>
+            </div>
+          ) : activeArtifact.type === "html" ? (
             <iframe
               srcDoc={activeArtifact.content}
               title={activeArtifact.title}
@@ -250,24 +269,13 @@ export const ArtifactsCanvasModal = memo(function ArtifactsCanvasModal({
                 backgroundColor: "#09090b",
               }}
             />
+          ) : activeArtifact.type === "mermaid" ? (
+            <div style={{ padding: "24px", maxWidth: "960px", margin: "0 auto", width: "100%" }}>
+              <MermaidFence code={activeArtifact.content} />
+            </div>
           ) : (
-            <div style={{ padding: "24px", maxWidth: "800px", margin: "0 auto", width: "100%" }}>
-              <pre
-                style={{
-                  fontFamily: "monospace",
-                  fontSize: "13px",
-                  lineHeight: "1.6",
-                  color: "#e4e4e7",
-                  backgroundColor: "#18181b",
-                  padding: "16px",
-                  borderRadius: "8px",
-                  border: "1px solid #27272a",
-                  overflowX: "auto",
-                  whiteSpace: "pre-wrap",
-                }}
-              >
-                {activeArtifact.content}
-              </pre>
+            <div style={{ padding: "24px", maxWidth: "840px", margin: "0 auto", width: "100%" }}>
+              <MarkdownRenderer text={activeArtifact.content} selectable />
             </div>
           )}
         </div>

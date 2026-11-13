@@ -5,11 +5,25 @@ use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DetailedDependencyNode {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    #[serde(rename = "type")]
+    pub node_type: String,
+    pub dependencies: Vec<String>,
+    pub callers: Vec<String>,
+    pub exports: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DependencyGraphResult {
     pub node_count: usize,
     pub edge_count: usize,
     pub modules: Vec<String>,
     pub mermaid: String,
+    pub detailed_nodes: Vec<DetailedDependencyNode>,
 }
 
 const MAX_REPO_MAP_CHARS: usize = 6_000; // ~1,500 tokens
@@ -245,15 +259,39 @@ pub fn generate_dependency_graph(cwd: &Path) -> Option<DependencyGraphResult> {
     }
     source_files.sort();
 
+    let ast_engine = AstEngine::new();
     let mut module_edges: BTreeSet<(String, String)> = BTreeSet::new();
     let mut modules: BTreeSet<String> = BTreeSet::new();
+    let mut sample_paths: BTreeMap<String, String> = BTreeMap::new();
+    let mut module_exports: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     for rel_path in source_files.iter().take(MAX_FILES_TO_SCAN) {
         let src_module = module_bucket(rel_path);
         modules.insert(src_module.clone());
-        let Ok(content) = std::fs::read_to_string(cwd.join(rel_path)) else {
+        sample_paths
+            .entry(src_module.clone())
+            .or_insert_with(|| rel_path.clone());
+
+        let full_path = cwd.join(rel_path);
+        let Ok(content) = std::fs::read_to_string(&full_path) else {
             continue;
         };
+        let ext = full_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let entry_exports = module_exports.entry(src_module.clone()).or_default();
+        if entry_exports.len() < 8 {
+            for sym in extract_file_symbols(&full_path, &ext, &ast_engine) {
+                if !entry_exports.contains(&sym) {
+                    entry_exports.push(sym);
+                    if entry_exports.len() >= 8 {
+                        break;
+                    }
+                }
+            }
+        }
         for target in extract_import_targets(&content) {
             let dst_module = normalize_import_bucket(&target, rel_path);
             if let Some(dst) = dst_module {
@@ -279,21 +317,52 @@ pub fn generate_dependency_graph(cwd: &Path) -> Option<DependencyGraphResult> {
     }
 
     let mut rendered_edges = 0usize;
+    let mut deps_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut callers_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (src, dst) in &module_edges {
         if let (Some(src_id), Some(dst_id)) = (id_map.get(src), id_map.get(dst)) {
-            mermaid.push_str(&format!("  {src_id} --> {dst_id}\n"));
-            rendered_edges += 1;
-            if rendered_edges >= 48 {
-                break;
+            if rendered_edges < 48 {
+                mermaid.push_str(&format!("  {src_id} --> {dst_id}\n"));
+                rendered_edges += 1;
             }
+            deps_map.entry(src.clone()).or_default().push(dst.clone());
+            callers_map.entry(dst.clone()).or_default().push(src.clone());
         }
     }
+
+    let detailed_nodes = module_list
+        .iter()
+        .map(|m| {
+            let dependencies = deps_map.get(m).cloned().unwrap_or_default();
+            let callers = callers_map.get(m).cloned().unwrap_or_default();
+            let lower = m.to_lowercase();
+            let node_type = if lower.contains("store") || lower.contains("state") {
+                "store"
+            } else if lower.contains("util") || lower.contains("helper") || lower.contains("lib") {
+                "utility"
+            } else if callers.is_empty() || lower.contains("app") || lower.contains("main") {
+                "entry"
+            } else {
+                "module"
+            };
+            DetailedDependencyNode {
+                id: m.clone(),
+                name: m.clone(),
+                path: sample_paths.get(m).cloned().unwrap_or_else(|| m.clone()),
+                node_type: node_type.to_string(),
+                dependencies,
+                callers,
+                exports: module_exports.get(m).cloned().unwrap_or_default(),
+            }
+        })
+        .collect();
 
     Some(DependencyGraphResult {
         node_count: module_list.len(),
         edge_count: rendered_edges,
         modules: module_list,
         mermaid,
+        detailed_nodes,
     })
 }
 

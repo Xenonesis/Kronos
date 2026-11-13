@@ -89,6 +89,81 @@ fn walk_files(dir: &Path, files: &mut Vec<PathBuf>, include_ext: Option<&str>) {
     }
 }
 
+/// Finds all occurrence ranges of `query` in `line`, supporting regex, case sensitivity, and whole-word matching.
+pub fn find_matches_in_line_with_options(
+    line: &str,
+    query: &str,
+    is_regex: bool,
+    case_sensitive: bool,
+    whole_word: bool,
+) -> Result<Vec<(usize, usize)>, String> {
+    if query.is_empty() || line.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let is_word_boundary = |start: usize, end: usize| -> bool {
+        if !whole_word {
+            return true;
+        }
+        let before_ok = start == 0
+            || line[..start]
+                .chars()
+                .last()
+                .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+        let after_ok = end >= line.len()
+            || line[end..]
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+        before_ok && after_ok
+    };
+
+    if is_regex {
+        let mut pattern = if whole_word {
+            format!(r"\b(?:{query})\b")
+        } else {
+            query.to_string()
+        };
+        if !case_sensitive {
+            pattern = format!("(?i){pattern}");
+        }
+        let re = regex::Regex::new(&pattern).map_err(|e| format!("Invalid regex pattern: {e}"))?;
+        let ranges = re
+            .find_iter(line)
+            .filter(|m| m.start() < m.end() && is_word_boundary(m.start(), m.end()))
+            .map(|m| (m.start(), m.end()))
+            .collect();
+        return Ok(ranges);
+    }
+
+    if case_sensitive {
+        let mut matches = Vec::new();
+        let mut offset = 0;
+        while let Some(pos) = line[offset..].find(query) {
+            let start = offset + pos;
+            let end = start + query.len();
+            if is_word_boundary(start, end) {
+                matches.push((start, end));
+            }
+            offset = end.max(offset + 1);
+            if offset >= line.len() {
+                break;
+            }
+        }
+        return Ok(matches);
+    }
+
+    let escaped = regex::escape(query);
+    let re = regex::Regex::new(&format!("(?i){escaped}"))
+        .map_err(|e| format!("Failed building case-insensitive search: {e}"))?;
+    let matches = re
+        .find_iter(line)
+        .filter(|m| is_word_boundary(m.start(), m.end()))
+        .map(|m| (m.start(), m.end()))
+        .collect();
+    Ok(matches)
+}
+
 /// Finds all occurrence ranges of `query` in `text` respecting case and whole_word rules.
 pub fn find_matches_in_line(
     line: &str,
@@ -96,56 +171,8 @@ pub fn find_matches_in_line(
     case_sensitive: bool,
     whole_word: bool,
 ) -> Vec<(usize, usize)> {
-    if query.is_empty() || line.is_empty() {
-        return Vec::new();
-    }
-
-    let mut matches = Vec::new();
-    let haystack = if case_sensitive {
-        line.to_string()
-    } else {
-        line.to_lowercase()
-    };
-    let needle = if case_sensitive {
-        query.to_string()
-    } else {
-        query.to_lowercase()
-    };
-
-    let mut offset = 0;
-    while let Some(pos) = haystack[offset..].find(&needle) {
-        let start = offset + pos;
-        let end = start + needle.len();
-
-        let is_valid = if whole_word {
-            let before_ok = if start == 0 {
-                true
-            } else {
-                let prev_char = line[..start].chars().last().unwrap_or(' ');
-                !prev_char.is_alphanumeric() && prev_char != '_'
-            };
-            let after_ok = if end >= line.len() {
-                true
-            } else {
-                let next_char = line[end..].chars().next().unwrap_or(' ');
-                !next_char.is_alphanumeric() && next_char != '_'
-            };
-            before_ok && after_ok
-        } else {
-            true
-        };
-
-        if is_valid {
-            matches.push((start, end));
-        }
-
-        offset = end;
-        if offset >= haystack.len() {
-            break;
-        }
-    }
-
-    matches
+    find_matches_in_line_with_options(line, query, false, case_sensitive, whole_word)
+        .unwrap_or_default()
 }
 
 /// Executes a fast multi-file search across the workspace.
@@ -166,12 +193,14 @@ pub fn search_workspace(req: &WorkspaceSearchQuery) -> Result<Vec<FileMatchesGro
     let mut total_matches = 0;
     let mut groups = Vec::new();
 
-    for file_path in files {
+    // Batch-read workspace files via Windows Kernel IoRing / Rayon parallel pool
+    let loaded_files = crate::kernel::ioring::IoRingBatchReader::read_files_lossy(&files, 2 * 1024 * 1024);
+
+    for (file_path, raw_bytes) in loaded_files {
         if total_matches >= max_results {
             break;
         }
-
-        if let Ok(content) = fs::read_to_string(&file_path) {
+        if let Ok(content) = String::from_utf8(raw_bytes) {
             let relative_path = file_path
                 .strip_prefix(root)
                 .unwrap_or(&file_path)
@@ -181,12 +210,13 @@ pub fn search_workspace(req: &WorkspaceSearchQuery) -> Result<Vec<FileMatchesGro
             let mut file_matches = Vec::new();
 
             for (idx, line) in content.lines().enumerate() {
-                let line_matches = find_matches_in_line(
+                let line_matches = find_matches_in_line_with_options(
                     line,
                     &req.query,
+                    req.is_regex,
                     req.case_sensitive,
                     req.whole_word,
-                );
+                )?;
 
                 for (start, end) in line_matches {
                     file_matches.push(SearchMatch {
@@ -252,12 +282,13 @@ pub fn batch_replace_workspace(
             let mut file_count = 0;
 
             for line in content.lines() {
-                let matches = find_matches_in_line(
+                let matches = find_matches_in_line_with_options(
                     line,
                     &req.query,
+                    req.is_regex,
                     req.case_sensitive,
                     req.whole_word,
-                );
+                )?;
 
                 if matches.is_empty() {
                     line_replaced.push(line.to_string());
@@ -276,7 +307,10 @@ pub fn batch_replace_workspace(
             }
 
             if file_count > 0 {
-                let joined = line_replaced.join("\n");
+                let mut joined = line_replaced.join("\n");
+                if content.ends_with('\n') {
+                    joined.push('\n');
+                }
                 if fs::write(&file_path, joined.as_bytes()).is_ok() {
                     files_modified += 1;
                     total_replacements += file_count;

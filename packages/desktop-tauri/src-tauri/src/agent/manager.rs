@@ -712,6 +712,173 @@ TASK:
         Ok(record)
     }
 
+    fn mutate_agent_record<F>(
+        &self,
+        id: &str,
+        allow_while_active: bool,
+        mutator: F,
+    ) -> Result<StoredAgentRecord, String>
+    where
+        F: FnOnce(&mut StoredAgentRecord) -> Result<(), String>,
+    {
+        let gate = self.lifecycle_gate(id);
+        let _guard = gate.lock().unwrap_or_else(|e| e.into_inner());
+        if !allow_while_active {
+            self.ensure_inactive(id)?;
+        }
+        let mut record = self
+            .get_agent(id)
+            .ok_or_else(|| format!("Agent {id} not found"))?;
+        mutator(&mut record)?;
+        record.updated_at = now_iso();
+        let status = record.last_status;
+        self.storage
+            .save_record(record.clone())
+            .map_err(|e| format!("Failed to save agent record: {e}"))?;
+        self.active_statuses
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.to_string(), status);
+        Ok(record)
+    }
+
+    pub fn set_agent_mode(
+        &self,
+        id: &str,
+        mode_id: Option<&str>,
+    ) -> Result<StoredAgentRecord, String> {
+        self.mutate_agent_record(id, false, |record| {
+            let mut config = record.config.take().unwrap_or_else(|| serde_json::json!({}));
+            let obj = config
+                .as_object_mut()
+                .ok_or_else(|| "Agent config must be an object".to_string())?;
+            if let Some(m) = mode_id.filter(|s| !s.trim().is_empty()) {
+                obj.insert("modeId".to_string(), serde_json::json!(m));
+                obj.insert("persona".to_string(), serde_json::json!(m));
+            } else {
+                obj.remove("modeId");
+                obj.remove("persona");
+            }
+            record.config = Some(config);
+            Ok(())
+        })
+    }
+
+    pub fn set_agent_feature(
+        &self,
+        id: &str,
+        feature_id: &str,
+        value: Value,
+    ) -> Result<StoredAgentRecord, String> {
+        if feature_id.trim().is_empty() {
+            return Err("Missing featureId".to_string());
+        }
+        self.mutate_agent_record(id, false, |record| {
+            let mut config = record.config.take().unwrap_or_else(|| serde_json::json!({}));
+            let obj = config
+                .as_object_mut()
+                .ok_or_else(|| "Agent config must be an object".to_string())?;
+            let mut options = obj
+                .get("options")
+                .and_then(|v| v.as_object())
+                .cloned()
+                .unwrap_or_default();
+            if value.is_null() {
+                options.remove(feature_id);
+            } else {
+                options.insert(feature_id.to_string(), value.clone());
+            }
+            obj.insert("options".to_string(), Value::Object(options));
+            let mut features = obj
+                .get("featureValues")
+                .and_then(|v| v.as_object())
+                .cloned()
+                .unwrap_or_default();
+            if value.is_null() {
+                features.remove(feature_id);
+            } else {
+                features.insert(feature_id.to_string(), value);
+            }
+            obj.insert("featureValues".to_string(), Value::Object(features));
+            record.config = Some(config);
+            Ok(())
+        })
+    }
+
+    pub fn archive_agent(
+        &self,
+        id: &str,
+        archived_at: &str,
+    ) -> Result<StoredAgentRecord, String> {
+        let _ = self.cancel_agent(id);
+        self.mutate_agent_record(id, true, |record| {
+            record.last_status = AgentStatus::Closed;
+            let mut config = record.config.take().unwrap_or_else(|| serde_json::json!({}));
+            if let Some(obj) = config.as_object_mut() {
+                obj.insert("archivedAt".to_string(), serde_json::json!(archived_at));
+                obj.insert("requiresAttention".to_string(), serde_json::json!(false));
+            }
+            record.config = Some(config);
+            Ok(())
+        })
+    }
+
+    pub fn clear_agent_attention(&self, id: &str) -> Result<StoredAgentRecord, String> {
+        self.mutate_agent_record(id, true, |record| {
+            let mut config = record.config.take().unwrap_or_else(|| serde_json::json!({}));
+            if let Some(obj) = config.as_object_mut() {
+                obj.insert("requiresAttention".to_string(), serde_json::json!(false));
+                obj.remove("attentionReason");
+                obj.insert("attentionClearedAt".to_string(), serde_json::json!(now_iso()));
+            }
+            record.config = Some(config);
+            Ok(())
+        })
+    }
+
+    pub fn update_agent_metadata(
+        &self,
+        id: &str,
+        metadata_patch: Value,
+    ) -> Result<StoredAgentRecord, String> {
+        self.mutate_agent_record(id, true, |record| {
+            let mut config = record.config.take().unwrap_or_else(|| serde_json::json!({}));
+            let obj = config
+                .as_object_mut()
+                .ok_or_else(|| "Agent config must be an object".to_string())?;
+            let mut existing = obj
+                .get("metadata")
+                .and_then(|v| v.as_object())
+                .cloned()
+                .unwrap_or_default();
+            if let Some(patch_obj) = metadata_patch.as_object() {
+                for (k, v) in patch_obj {
+                    if v.is_null() {
+                        existing.remove(k);
+                    } else {
+                        existing.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+            obj.insert("metadata".to_string(), Value::Object(existing));
+            record.config = Some(config);
+            Ok(())
+        })
+    }
+
+    pub fn detach_agent(&self, id: &str) -> Result<StoredAgentRecord, String> {
+        let _ = self.cancel_agent(id);
+        self.mutate_agent_record(id, true, |record| {
+            record.last_status = AgentStatus::Closed;
+            let mut config = record.config.take().unwrap_or_else(|| serde_json::json!({}));
+            if let Some(obj) = config.as_object_mut() {
+                obj.insert("detachedAt".to_string(), serde_json::json!(now_iso()));
+            }
+            record.config = Some(config);
+            Ok(())
+        })
+    }
+
     pub fn get_timeline(&self, id: &str) -> Vec<AgentTimelineItem> {
         self.storage.get_timeline(id)
     }

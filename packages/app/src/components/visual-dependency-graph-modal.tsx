@@ -1,10 +1,21 @@
-import React, { memo, useState } from "react";
-import { View, Text, Pressable, ScrollView } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { GitFork, Network, Layers, ArrowRight, Sparkles, X, Box } from "lucide-react-native";
+import React, { memo, useCallback, useEffect, useState } from "react";
+import { View, Text, ScrollView } from "react-native";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { Network, ArrowRight, Sparkles, X, Box } from "lucide-react-native";
+import { PressHighlight } from "@/components/ui/press-highlight";
+import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
+import { Button } from "@/components/ui/button";
 import { useSessionStore } from "@/stores/session-store";
 import { useDraftStore } from "@/stores/draft-store";
 import { useToast } from "@/contexts/toast-context";
+import { invokeTauri } from "@/utils/tauri-invoke";
+
+const ThemedNetworkIcon = withUnistyles(Network, (theme) => ({ color: theme.colors.accent }));
+const ThemedCloseIcon = withUnistyles(X, (theme) => ({ color: theme.colors.foregroundMuted }));
+const ThemedBoxActiveIcon = withUnistyles(Box, (theme) => ({ color: theme.colors.accent }));
+const ThemedBoxMutedIcon = withUnistyles(Box, (theme) => ({ color: theme.colors.foregroundMuted }));
+const ThemedArrowRightIcon = withUnistyles(ArrowRight, (theme) => ({ color: theme.colors.accent }));
+const ThemedSparklesIcon = withUnistyles(Sparkles, () => ({ color: "#ffffff" }));
 
 export interface DependencyNode {
   id: string;
@@ -19,87 +30,173 @@ export interface DependencyNode {
 export interface VisualDependencyGraphModalProps {
   visible: boolean;
   onClose: () => void;
+  cwd?: string;
+  serverId?: string;
+  agentId?: string;
   nodes?: DependencyNode[];
 }
 
-const DEFAULT_GRAPH_NODES: DependencyNode[] = [
-  {
-    id: "app-entry",
-    name: "App Root",
-    path: "packages/app/src/app/index.tsx",
-    type: "entry",
-    dependencies: ["session-store", "editor-view", "terminal-pane"],
-    callers: [],
-    exports: ["PaseoDesktopApp", "rootRoute"],
-  },
-  {
-    id: "session-store",
-    name: "Session Store",
-    path: "packages/app/src/stores/session-store.ts",
-    type: "store",
-    dependencies: ["protocol-client"],
-    callers: ["app-entry", "agent-panel", "composer"],
-    exports: ["useSessionStore", "AgentSession", "FocusedAgent"],
-  },
-  {
-    id: "editor-view",
-    name: "CodeMirror Editor",
-    path: "packages/app/src/file-panels/source/editor/view.web.tsx",
-    type: "module",
-    dependencies: ["ghost-text-provider", "inline-codelens"],
-    callers: ["app-entry", "file-pane"],
-    exports: ["FileEditorView", "editorBaseExtensions"],
-  },
-  {
-    id: "ghost-text-provider",
-    name: "Ghost Text Engine",
-    path: "packages/app/src/editor/ghost-text-provider.ts",
-    type: "utility",
-    dependencies: [],
-    callers: ["editor-view"],
-    exports: ["generatePredictiveGhostText", "GhostTextMatch"],
-  },
-  {
-    id: "protocol-client",
-    name: "Desktop Rust IPC",
-    path: "packages/desktop-tauri/src-tauri/src/agent/runner.rs",
-    type: "module",
-    dependencies: [],
-    callers: ["session-store"],
-    exports: ["DesktopAgentRunner", "execute_agent_turn"],
-  },
-];
+const ModuleNodeItem = memo(function ModuleNodeItem({
+  node,
+  isSelected,
+  onSelect,
+}: {
+  node: DependencyNode;
+  isSelected: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const handlePress = useCallback(() => {
+    onSelect(node.id);
+  }, [node.id, onSelect]);
+
+  return (
+    <PressHighlight
+      onPress={handlePress}
+      style={[styles.nodeCard, isSelected && styles.nodeCardSelected]}
+    >
+      <View style={styles.nodeHeader}>
+        {isSelected ? <ThemedBoxActiveIcon size={14} /> : <ThemedBoxMutedIcon size={14} />}
+        <Text style={[styles.nodeName, isSelected && styles.nodeNameSelected]}>{node.name}</Text>
+      </View>
+      <Text style={styles.nodePath} numberOfLines={1}>
+        {node.path}
+      </Text>
+    </PressHighlight>
+  );
+});
+
+const NodeDetailsPanel = memo(function NodeDetailsPanel({
+  node,
+  onAddContext,
+}: {
+  node: DependencyNode;
+  onAddContext: () => void;
+}) {
+  return (
+    <View style={styles.detailsColumn}>
+      <View style={styles.detailsHeader}>
+        <Text style={styles.detailsTitle}>{node.name}</Text>
+        <Text style={styles.detailsPath}>{node.path}</Text>
+      </View>
+
+      <View style={styles.connectionsBlock}>
+        <Text style={styles.sectionLabel}>Outbound Dependencies ({node.dependencies.length})</Text>
+        <View style={styles.badgeWrap}>
+          {node.dependencies.length > 0 ? (
+            node.dependencies.map((dep) => (
+              <View key={dep} style={styles.depBadge}>
+                <ThemedArrowRightIcon size={10} />
+                <Text style={styles.depText}>{dep}</Text>
+              </View>
+            ))
+          ) : (
+            <Text style={styles.emptyText}>No outbound dependencies</Text>
+          )}
+        </View>
+
+        <Text style={styles.sectionLabelSpaced}>Inbound Callers ({node.callers.length})</Text>
+        <View style={styles.badgeWrap}>
+          {node.callers.length > 0 ? (
+            node.callers.map((cal) => (
+              <View key={cal} style={styles.calBadge}>
+                <Text style={styles.calText}>{cal}</Text>
+              </View>
+            ))
+          ) : (
+            <Text style={styles.emptyText}>Root module / No inbound callers</Text>
+          )}
+        </View>
+
+        <Text style={styles.sectionLabelSpaced}>Exported Symbols ({node.exports.length})</Text>
+        <View style={styles.badgeWrap}>
+          {node.exports.length > 0 ? (
+            node.exports.map((exp) => (
+              <View key={exp} style={styles.expBadge}>
+                <Text style={styles.expText}>{exp}</Text>
+              </View>
+            ))
+          ) : (
+            <Text style={styles.emptyText}>No exported symbols scanned</Text>
+          )}
+        </View>
+      </View>
+
+      <View style={styles.detailsFooter}>
+        <Button size="sm" variant="default" onPress={onAddContext} style={styles.addContextButton}>
+          <ThemedSparklesIcon size={14} />
+          <Text style={styles.addContextButtonText}>Add Sub-Graph to Context</Text>
+        </Button>
+      </View>
+    </View>
+  );
+});
 
 export const VisualDependencyGraphModal = memo(function VisualDependencyGraphModal({
   visible,
   onClose,
-  nodes = DEFAULT_GRAPH_NODES,
+  cwd,
+  serverId: propServerId,
+  agentId: propAgentId,
+  nodes: propNodes,
 }: VisualDependencyGraphModalProps) {
-  const { theme } = useUnistyles();
   const toast = useToast();
-  const [selectedNodeId, setSelectedNodeId] = useState<string>(nodes[0]?.id ?? "app-entry");
+  const [fetchedNodes, setFetchedNodes] = useState<DependencyNode[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const nodes = propNodes ?? fetchedNodes;
+  const [selectedNodeId, setSelectedNodeId] = useState<string>("");
 
-  if (!visible) return null;
+  useEffect(() => {
+    if (!visible || propNodes || !cwd) return;
+    let cancelled = false;
+    async function scan() {
+      setIsLoading(true);
+      try {
+        const res = await invokeTauri<{ detailedNodes?: DependencyNode[] }>(
+          "get_dependency_graph",
+          { cwd },
+        );
+        if (cancelled) return;
+        const list = Array.isArray(res?.detailedNodes) ? res.detailedNodes : [];
+        setFetchedNodes(list);
+        if (list[0]) {
+          setSelectedNodeId(list[0].id);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          toast.show(`Dependency scan failed: ${String(err)}`, { variant: "error" });
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
+    }
+    void scan();
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, propNodes, cwd, toast]);
 
-  const selectedNode = nodes.find((n) => n.id === selectedNodeId) || nodes[0];
+  const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? nodes[0] ?? null;
 
-  const handleAddGraphToContext = () => {
+  const handleAddGraphToContext = useCallback(() => {
+    if (!selectedNode) return;
     const sessions = useSessionStore.getState().sessions;
-    const serverIds = Object.keys(sessions);
-    const serverId = serverIds[0];
+    const serverId = propServerId ?? Object.keys(sessions)[0];
     const session = serverId ? sessions[serverId] : undefined;
-    const activeAgent = session?.agents ? Array.from(session.agents.values())[0] : undefined;
+    const activeAgentId =
+      propAgentId ?? (session?.agents ? Array.from(session.agents.values())[0]?.id : undefined);
 
-    if (!serverId || !activeAgent) {
+    if (!serverId || !activeAgentId) {
       toast.show("No active agent available to add context", { variant: "error" });
       return;
     }
 
-    const draftKey = `agent:${serverId}:${activeAgent.id}`;
+    const draftKey = `agent:${serverId}:${activeAgentId}`;
     const contextPrompt =
-      `### 🕸️ Visual Architecture Context: \`${selectedNode.name}\`\n` +
+      `### Visual Architecture Context: \`${selectedNode.name}\`\n` +
       `File: \`${selectedNode.path}\`\n` +
-      `Exports: ${selectedNode.exports.join(", ")}\n` +
+      `Exports: ${selectedNode.exports.join(", ") || "None detected"}\n` +
       `Dependencies: ${selectedNode.dependencies.join(", ") || "None"}\n` +
       `Callers: ${selectedNode.callers.join(", ") || "None"}\n\n` +
       `Please keep this architectural sub-graph and module interfaces in mind during refactoring.`;
@@ -107,110 +204,53 @@ export const VisualDependencyGraphModal = memo(function VisualDependencyGraphMod
     useDraftStore.getState().replaceDraftText({ draftKey, text: contextPrompt });
     toast.show("Architecture sub-graph added to composer context", { variant: "success" });
     onClose();
-  };
+  }, [onClose, propAgentId, propServerId, selectedNode, toast]);
+
+  if (!visible) return null;
+
+  const activeNodeId = selectedNode?.id ?? "";
 
   return (
     <View style={styles.overlay}>
       <View style={styles.modal}>
-        {/* Header */}
         <View style={styles.header}>
           <View style={styles.headerTitleRow}>
-            <Network size={20} color={theme.colors.accent} />
+            <ThemedNetworkIcon size={20} />
             <Text style={styles.headerTitle}>Module Dependency & Architecture Graph</Text>
           </View>
-          <Pressable onPress={onClose} style={styles.closeButton}>
-            <X size={18} color={theme.colors.foregroundMuted} />
-          </Pressable>
+          <ToolbarButton label="Close" onPress={onClose} style={styles.closeButton}>
+            <ThemedCloseIcon size={18} />
+          </ToolbarButton>
         </View>
 
-        <View style={styles.contentBody}>
-          {/* Nodes Map List */}
-          <ScrollView style={styles.nodesColumn}>
-            <Text style={styles.columnTitle}>Workspace Modules ({nodes.length})</Text>
-            {nodes.map((node) => {
-              const isSelected = node.id === selectedNode.id;
-              return (
-                <Pressable
-                  key={node.id}
-                  onPress={() => setSelectedNodeId(node.id)}
-                  style={[styles.nodeCard, isSelected && styles.nodeCardSelected]}
-                >
-                  <View style={styles.nodeHeader}>
-                    <Box
-                      size={14}
-                      color={isSelected ? theme.colors.accent : theme.colors.foregroundMuted}
-                    />
-                    <Text style={[styles.nodeName, isSelected && styles.nodeNameSelected]}>
-                      {node.name}
-                    </Text>
-                  </View>
-                  <Text style={styles.nodePath} numberOfLines={1}>
-                    {node.path}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-
-          {/* Selected Node Details & Connections */}
+        {isLoading ? (
           <View style={styles.detailsColumn}>
-            <View style={styles.detailsHeader}>
-              <Text style={styles.detailsTitle}>{selectedNode.name}</Text>
-              <Text style={styles.detailsPath}>{selectedNode.path}</Text>
-            </View>
-
-            <View style={styles.connectionsBlock}>
-              <Text style={styles.sectionLabel}>
-                Outbound Dependencies ({selectedNode.dependencies.length})
-              </Text>
-              <View style={styles.badgeWrap}>
-                {selectedNode.dependencies.length > 0 ? (
-                  selectedNode.dependencies.map((dep, idx) => (
-                    <View key={idx} style={styles.depBadge}>
-                      <ArrowRight size={10} color={theme.colors.accent} />
-                      <Text style={styles.depText}>{dep}</Text>
-                    </View>
-                  ))
-                ) : (
-                  <Text style={styles.emptyText}>No outbound dependencies</Text>
-                )}
-              </View>
-
-              <Text style={[styles.sectionLabel, { marginTop: 12 }]}>
-                Inbound Callers ({selectedNode.callers.length})
-              </Text>
-              <View style={styles.badgeWrap}>
-                {selectedNode.callers.length > 0 ? (
-                  selectedNode.callers.map((cal, idx) => (
-                    <View key={idx} style={styles.calBadge}>
-                      <Text style={styles.calText}>{cal}</Text>
-                    </View>
-                  ))
-                ) : (
-                  <Text style={styles.emptyText}>Root module / No inbound callers</Text>
-                )}
-              </View>
-
-              <Text style={[styles.sectionLabel, { marginTop: 12 }]}>
-                Exported Symbols ({selectedNode.exports.length})
-              </Text>
-              <View style={styles.badgeWrap}>
-                {selectedNode.exports.map((exp, idx) => (
-                  <View key={idx} style={styles.expBadge}>
-                    <Text style={styles.expText}>{exp}</Text>
-                  </View>
-                ))}
-              </View>
-            </View>
-
-            <View style={styles.detailsFooter}>
-              <Pressable onPress={handleAddGraphToContext} style={styles.addContextButton}>
-                <Sparkles size={14} color="#ffffff" />
-                <Text style={styles.addContextButtonText}>Add Sub-Graph to Context</Text>
-              </Pressable>
-            </View>
+            <Text style={styles.emptyText}>Scanning workspace AST & imports...</Text>
           </View>
-        </View>
+        ) : null}
+
+        {!isLoading && !selectedNode ? (
+          <View style={styles.detailsColumn}>
+            <Text style={styles.emptyText}>No source modules detected in workspace.</Text>
+          </View>
+        ) : null}
+
+        {!isLoading && selectedNode ? (
+          <View style={styles.contentBody}>
+            <ScrollView style={styles.nodesColumn}>
+              <Text style={styles.columnTitle}>Workspace Modules ({nodes.length})</Text>
+              {nodes.map((node) => (
+                <ModuleNodeItem
+                  key={node.id}
+                  node={node}
+                  isSelected={node.id === activeNodeId}
+                  onSelect={setSelectedNodeId}
+                />
+              ))}
+            </ScrollView>
+            <NodeDetailsPanel node={selectedNode} onAddContext={handleAddGraphToContext} />
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -334,6 +374,13 @@ const styles = StyleSheet.create((theme) => ({
     fontWeight: "600",
     color: theme.colors.foregroundMuted,
     marginBottom: 6,
+  },
+  sectionLabelSpaced: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: theme.colors.foregroundMuted,
+    marginBottom: 6,
+    marginTop: 12,
   },
   badgeWrap: {
     flexDirection: "row",

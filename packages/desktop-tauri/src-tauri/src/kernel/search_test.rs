@@ -193,7 +193,7 @@ mod tests {
         let engine = AstEngine::new();
 
         let summary = engine
-            .parse_syntax("pub fn main() {}", "rs")
+            .parse_syntax("unsupported syntax blob", "xyz")
             .expect("Unsupported extension should safely return fallback summary");
 
         assert_eq!(summary.root_kind, "unsupported");

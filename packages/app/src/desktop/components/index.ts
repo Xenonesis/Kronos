@@ -18,10 +18,10 @@ export {
   type BugAuditItem,
 } from "@/components/codebase-bug-hunter-modal";
 export {
-  VisualElementInspector,
-  type VisualElementInspectorProps,
-  type InspectedElement,
-} from "@/components/visual-element-inspector";
+  MemoriesManagementDialog,
+  type MemoriesManagementDialogProps,
+  type MemoryItem,
+} from "@/components/memories-management-dialog";
 export {
   TemplateScaffolderDialog,
   type TemplateScaffolderDialogProps,
@@ -60,3 +60,8 @@ export { McpHubModal, type McpHubModalProps } from "./mcp-hub-modal";
 export { WorkspaceDocsModal, type WorkspaceDocsModalProps } from "./workspace-docs-modal";
 export { DatabaseStudioModal, type DatabaseStudioModalProps } from "./database-studio-modal";
 export { ModelArenaModal, type ModelArenaModalProps } from "./model-arena-modal";
+export {
+  SemanticSearchModal,
+  type SemanticSearchModalProps,
+  type SemanticCodeChunk,
+} from "./semantic-search-modal";

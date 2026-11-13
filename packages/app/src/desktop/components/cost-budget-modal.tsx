@@ -1,15 +1,22 @@
-import React, { memo, useState, useCallback, useEffect } from "react";
+import React, { memo, useState, useCallback, useEffect, useMemo } from "react";
 import { View, Text, Modal, ScrollView } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Coins, X, RotateCcw, AlertTriangle, ShieldCheck } from "lucide-react-native";
 import { AdaptiveTextInput } from "@/components/adaptive-text-input";
-import { useCostBudgetStore } from "@/stores/cost-budget-store";
+import { useCostBudgetStore, calculateCostUsd } from "@/stores/cost-budget-store";
+import { invokeDesktopCommand } from "@/desktop/electron/invoke";
+import { useSessionStore } from "@/stores/session-store";
 import { Button } from "@/components/ui/button";
 import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
+import { PromptCachingAnalyticsHud } from "@/components/prompt-caching-analytics-hud";
 
 const ThemedCoinsIcon = withUnistyles(Coins, (theme) => ({ color: theme.colors.accent }));
 const ThemedCloseIcon = withUnistyles(X, (theme) => ({ color: theme.colors.foregroundMuted }));
 const ThemedResetIcon = withUnistyles(RotateCcw, (theme) => ({ color: theme.colors.foreground }));
+
+function bumpBudgetCounter(value: number): number {
+  return value + 1;
+}
 
 export interface CostBudgetModalProps {
   visible: boolean;
@@ -53,6 +60,85 @@ const BudgetThresholdControls = memo(function BudgetThresholdControls({
   );
 });
 
+function pickTokenCount(primary?: number, fallback?: number): number {
+  return primary ?? fallback ?? 0;
+}
+
+function computeCostModalSummary(params: {
+  usage:
+    | {
+        inputTokens: number;
+        outputTokens: number;
+        cacheReadTokens: number;
+        cacheWriteTokens?: number;
+        costUsd: number;
+      }
+    | undefined;
+  liveUsage:
+    | {
+        inputTokens?: number;
+        outputTokens?: number;
+        cachedInputTokens?: number;
+        cacheWriteTokens?: number;
+        totalCostUsd?: number;
+      }
+    | null
+    | undefined;
+  liveModelId: string | null;
+  usageByAgent: Record<string, { costUsd: number }>;
+  budgetLimitUsd: number;
+}) {
+  const { usage, liveUsage, liveModelId, usageByAgent, budgetLimitUsd } = params;
+  const inputTokens = pickTokenCount(usage?.inputTokens, liveUsage?.inputTokens);
+  const outputTokens = pickTokenCount(usage?.outputTokens, liveUsage?.outputTokens);
+  const cacheReadTokens = pickTokenCount(usage?.cacheReadTokens, liveUsage?.cachedInputTokens);
+  const cacheWriteTokens = pickTokenCount(usage?.cacheWriteTokens, liveUsage?.cacheWriteTokens);
+
+  const liveCost = liveUsage?.totalCostUsd;
+  const fallbackAgentCost =
+    liveCost && liveCost > 0
+      ? liveCost
+      : calculateCostUsd({
+          modelId: liveModelId,
+          inputTokens,
+          outputTokens,
+          cacheReadTokens,
+        });
+  const agentCost = usage?.costUsd ?? fallbackAgentCost;
+  const storeSessionCost = Object.values(usageByAgent).reduce((sum, e) => sum + e.costUsd, 0);
+  const totalSessionCost = Math.max(storeSessionCost, agentCost);
+  const pct = Math.min(100, (totalSessionCost / Math.max(0.01, budgetLimitUsd)) * 100);
+
+  const uncachedBaseline = calculateCostUsd({
+    modelId: liveModelId,
+    inputTokens: cacheReadTokens,
+    outputTokens: 0,
+  });
+  const cachedActual = calculateCostUsd({
+    modelId: liveModelId,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens,
+  });
+
+  return {
+    inputTokens,
+    outputTokens,
+    agentCost,
+    totalSessionCost,
+    pct,
+    isOver: totalSessionCost >= budgetLimitUsd,
+    cachingMetrics: {
+      inputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      outputTokens,
+      estimatedSavingsUsd: Math.max(0, uncachedBaseline - cachedActual),
+      netCostUsd: agentCost,
+    },
+  };
+}
+
 export const CostBudgetModal = memo(function CostBudgetModal({
   visible,
   agentId,
@@ -63,15 +149,42 @@ export const CostBudgetModal = memo(function CostBudgetModal({
   const budgetLimitUsd = useCostBudgetStore((s) => s.budgetLimitUsd);
   const setBudgetLimitUsd = useCostBudgetStore((s) => s.setBudgetLimitUsd);
   const resetAgentUsage = useCostBudgetStore((s) => s.resetAgentUsage);
+  const liveAgentSnapshot = useSessionStore((s) => {
+    for (const session of Object.values(s.sessions)) {
+      const ag = session?.agents.get(agentId);
+      if (ag) return ag;
+    }
+    return null;
+  });
 
   const [budgetDraft, setBudgetDraft] = useState(String(budgetLimitUsd));
   const [resetKey, setResetKey] = useState(0);
 
   useEffect(() => {
-    if (visible) {
-      setBudgetDraft(String(budgetLimitUsd));
-      setResetKey((k) => k + 1);
+    if (!visible) {
+      return;
     }
+    setBudgetDraft(String(budgetLimitUsd));
+    setResetKey((k) => k + 1);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const policy = await invokeDesktopCommand<{
+          maxTokens?: number | null;
+          maxCostUsd?: number | null;
+        }>("get_budget_policy");
+        if (!cancelled && typeof policy?.maxCostUsd === "number" && policy.maxCostUsd > 0) {
+          setBudgetDraft(String(policy.maxCostUsd));
+          setResetKey(bumpBudgetCounter);
+          useCostBudgetStore.setState({ budgetLimitUsd: policy.maxCostUsd });
+        }
+      } catch {
+        // Non-desktop or offline runtime fallback
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [visible, budgetLimitUsd]);
 
   const handleSaveBudget = useCallback(() => {
@@ -85,12 +198,22 @@ export const CostBudgetModal = memo(function CostBudgetModal({
     resetAgentUsage(agentId);
   }, [agentId, resetAgentUsage]);
 
+  const summary = useMemo(
+    () =>
+      computeCostModalSummary({
+        usage,
+        liveUsage: liveAgentSnapshot?.lastUsage,
+        liveModelId: liveAgentSnapshot?.model ?? null,
+        usageByAgent,
+        budgetLimitUsd,
+      }),
+    [usage, liveAgentSnapshot, usageByAgent, budgetLimitUsd],
+  );
+
   if (!visible) return null;
 
-  const totalSessionCost = Object.values(usageByAgent).reduce((sum, e) => sum + e.costUsd, 0);
-  const agentCost = usage?.costUsd ?? 0;
-  const pct = Math.min(100, (totalSessionCost / Math.max(0.01, budgetLimitUsd)) * 100);
-  const isOver = totalSessionCost >= budgetLimitUsd;
+  const { inputTokens, outputTokens, agentCost, totalSessionCost, pct, isOver, cachingMetrics } =
+    summary;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -112,8 +235,7 @@ export const CostBudgetModal = memo(function CostBudgetModal({
                 <Text style={styles.statLabel}>Current Agent Cost</Text>
                 <Text style={styles.statValue}>${agentCost.toFixed(4)}</Text>
                 <Text style={styles.statSub}>
-                  {(usage?.inputTokens ?? 0).toLocaleString()} in /{" "}
-                  {(usage?.outputTokens ?? 0).toLocaleString()} out
+                  {inputTokens.toLocaleString()} in / {outputTokens.toLocaleString()} out
                 </Text>
               </View>
               <View style={styles.statBox}>
@@ -149,6 +271,8 @@ export const CostBudgetModal = memo(function CostBudgetModal({
                   : "Usage is within configured session USD budget."}
               </Text>
             </View>
+
+            <PromptCachingAnalyticsHud metrics={cachingMetrics} />
 
             <BudgetThresholdControls
               budgetDraft={budgetDraft}

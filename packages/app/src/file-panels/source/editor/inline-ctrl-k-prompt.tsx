@@ -1,12 +1,13 @@
 import React, { memo, useState, useCallback, useEffect, useRef } from "react";
 import { Sparkles, Check, X, CornerDownLeft, Loader2 } from "lucide-react-native";
-import { useSessionStore } from "@/stores/session-store";
 import { useToast } from "@/contexts/toast-context";
+import { invokeTauri } from "@/utils/tauri-invoke";
 
 export interface InlineCtrlKPromptProps {
   visible: boolean;
   filename: string;
   selectedText: string;
+  cwd?: string;
   selectionCoords?: { top: number; left: number } | null;
   onAccept: (newCode: string) => void;
   onClose: () => void;
@@ -16,6 +17,7 @@ export const InlineCtrlKPrompt = memo(function InlineCtrlKPrompt({
   visible,
   filename,
   selectedText,
+  cwd,
   selectionCoords,
   onAccept,
   onClose,
@@ -40,32 +42,31 @@ export const InlineCtrlKPrompt = memo(function InlineCtrlKPrompt({
 
     setIsGenerating(true);
     try {
-      // Direct fast local heuristic or agent dispatch
-      // Generate clean transformation based on user prompt instruction
-      const instruction = prompt.toLowerCase();
-      let result = selectedText;
-
-      if (instruction.includes("async") || instruction.includes("await")) {
-        result = selectedText.replace(/function\s+(\w+)\s*\(/g, "async function $1(");
-        result = result.replace(/const\s+(\w+)\s*=\s*\(/g, "const $1 = async (");
-      } else if (instruction.includes("comment") || instruction.includes("doc")) {
-        result = `/**\n * ${prompt.trim()}\n */\n` + selectedText;
-      } else if (instruction.includes("try") || instruction.includes("catch") || instruction.includes("error")) {
-        result = `try {\n  ${selectedText.split("\n").join("\n  ")}\n} catch (error) {\n  console.error("Error executing operation:", error);\n  throw error;\n}`;
-      } else if (instruction.includes("arrow")) {
-        result = selectedText.replace(/function\s+(\w+)\s*\(([^)]*)\)\s*\{/g, "const $1 = ($2) => {");
-      } else {
-        // Fallback or append prompt instruction note
-        result = `// Optimized: ${prompt.trim()}\n` + selectedText;
+      const response = await invokeTauri<{
+        provider: string;
+        model: string;
+        text: string;
+        latencyMs: number;
+      }>("run_inline_code_edit", {
+        filename,
+        selectedCode: selectedText,
+        instruction: prompt.trim(),
+        cwd,
+      });
+      if (!response?.text) {
+        toast.show(
+          "No active local/CLI model returned an inline edit. Start Ollama/LM Studio or configure Claude/Codex.",
+          { variant: "error" },
+        );
+        return;
       }
-
-      setGeneratedCode(result);
-    } catch {
-      toast.show("Inline generation failed", { variant: "error" });
+      setGeneratedCode(response.text);
+    } catch (err) {
+      toast.show(`Inline AI edit failed: ${String(err)}`, { variant: "error" });
     } finally {
       setIsGenerating(false);
     }
-  }, [prompt, selectedText, isGenerating, toast]);
+  }, [prompt, selectedText, filename, cwd, isGenerating, toast]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -89,7 +90,7 @@ export const InlineCtrlKPrompt = memo(function InlineCtrlKPrompt({
   if (!visible) return null;
 
   const top = Math.max(8, (selectionCoords?.top ?? 60) - 8);
-  const left = Math.max(16, (selectionCoords?.left ?? 60));
+  const left = Math.max(16, selectionCoords?.left ?? 60);
 
   return (
     <div
@@ -156,7 +157,11 @@ export const InlineCtrlKPrompt = memo(function InlineCtrlKPrompt({
               cursor: prompt.trim() && !isGenerating ? "pointer" : "default",
             }}
           >
-            {isGenerating ? <Loader2 size={12} className="animate-spin" /> : <CornerDownLeft size={12} />}
+            {isGenerating ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <CornerDownLeft size={12} />
+            )}
             Generate
           </button>
 
@@ -192,11 +197,34 @@ export const InlineCtrlKPrompt = memo(function InlineCtrlKPrompt({
               lineHeight: "1.4",
             }}
           >
-            <div style={{ color: "#ef4444", backgroundColor: "rgba(239, 68, 68, 0.1)", padding: "2px 4px", borderRadius: "2px", marginBottom: "4px" }}>
-              - {selectedText.split("\n")[0]}...
+            <div
+              style={{
+                color: "#ef4444",
+                backgroundColor: "rgba(239, 68, 68, 0.1)",
+                padding: "4px 6px",
+                borderRadius: "2px",
+                marginBottom: "4px",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {selectedText
+                .split("\n")
+                .map((line) => `- ${line}`)
+                .join("\n")}
             </div>
-            <div style={{ color: "#22c55e", backgroundColor: "rgba(34, 197, 94, 0.1)", padding: "2px 4px", borderRadius: "2px" }}>
-              + {generatedCode.split("\n")[0]}...
+            <div
+              style={{
+                color: "#22c55e",
+                backgroundColor: "rgba(34, 197, 94, 0.1)",
+                padding: "4px 6px",
+                borderRadius: "2px",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {generatedCode
+                .split("\n")
+                .map((line) => `+ ${line}`)
+                .join("\n")}
             </div>
           </div>
 
@@ -212,7 +240,13 @@ export const InlineCtrlKPrompt = memo(function InlineCtrlKPrompt({
               color: "#a1a1aa",
             }}
           >
-            <span>Press <kbd style={{ padding: "1px 4px", backgroundColor: "#27272a", borderRadius: "3px" }}>Tab</kbd> to accept</span>
+            <span>
+              Press{" "}
+              <kbd style={{ padding: "1px 4px", backgroundColor: "#27272a", borderRadius: "3px" }}>
+                Tab
+              </kbd>{" "}
+              to accept
+            </span>
             <div style={{ display: "flex", gap: "6px" }}>
               <button
                 onClick={() => {

@@ -31,7 +31,12 @@ export type ClientSlashCommandKind =
   | "custom-workflows"
   | "dependency-diagram"
   | "database-studio"
-  | "model-arena";
+  | "model-arena"
+  | "env-vault"
+  | "memories-manager"
+  | "module-deps"
+  | "preview-tunnel"
+  | "checklist-hud";
 export type ClientSlashCommandExecution = "immediate" | "insert";
 
 export interface ClientSlashCommand {
@@ -319,6 +324,51 @@ export const CLIENT_SLASH_COMMANDS: readonly ClientSlashCommand[] = [
     descriptionKey: "composer.clientCommands.archiveAgent",
     argumentHint: "",
     kind: "model-arena",
+    execution: "immediate",
+  },
+  {
+    name: "env",
+    aliases: ["secrets", "vault", "dotenv"],
+    description: "Manage workspace .env secrets and API keys directly on disk",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "env-vault",
+    execution: "immediate",
+  },
+  {
+    name: "memories",
+    aliases: ["memory", "remember"],
+    description: "Manage persistent cross-session rules in .kronos/memories.md",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "memories-manager",
+    execution: "immediate",
+  },
+  {
+    name: "deps",
+    aliases: ["modules", "callers", "imports"],
+    description: "Inspect interactive workspace module dependencies, callers, and exports",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "module-deps",
+    execution: "immediate",
+  },
+  {
+    name: "tunnel",
+    aliases: ["share", "public-url"],
+    description: "Open or toggle a live public preview tunnel (cloudflared / bore)",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "preview-tunnel",
+    execution: "immediate",
+  },
+  {
+    name: "checklist",
+    aliases: ["tasks", "todos"],
+    description: "Toggle the interactive Dynamic Task Checklist HUD for this agent",
+    descriptionKey: "composer.clientCommands.archiveAgent",
+    argumentHint: "",
+    kind: "checklist-hud",
     execution: "immediate",
   },
 ];

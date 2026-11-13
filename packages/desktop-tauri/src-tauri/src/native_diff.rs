@@ -120,6 +120,26 @@ pub fn compute_file_diff_sync(old_text: &str, new_text: &str, context_lines: usi
         });
     }
 
+    if let Some(first_hunk) = hunks.first() {
+        let preview_lines: Vec<String> = first_hunk
+            .lines
+            .iter()
+            .take(32)
+            .map(|l| l.content.clone())
+            .collect();
+        let rkyv_hunk = crate::kernel::rkyv_shm::DiffHunkChunk::new(
+            "diff-preview",
+            first_hunk.old_start as u32,
+            first_hunk.new_start as u32,
+            preview_lines,
+        );
+        if let Ok(aligned) = rkyv_hunk.serialize_to_aligned_bytes() {
+            if let Ok(archived) = crate::kernel::rkyv_shm::DiffHunkChunk::access_archived(&aligned) {
+                let _ = crate::kernel::rkyv_shm::DiffHunkChunk::deserialize_archived(archived);
+            }
+        }
+    }
+
     FileDiffResult {
         hunks,
         additions,

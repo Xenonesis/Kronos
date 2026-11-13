@@ -27,47 +27,18 @@ export interface BugAuditItem {
 
 export interface CodebaseBugHunterModalProps {
   visible: boolean;
+  serverId?: string;
+  agentId?: string;
   onClose: () => void;
   items?: BugAuditItem[];
 }
 
-const DEFAULT_AUDIT_ITEMS: BugAuditItem[] = [
-  {
-    id: "sec-1",
-    filePath: "src/server/auth.ts",
-    lineNumber: 42,
-    severity: "Critical",
-    category: "Security / Secret Leak",
-    title: "Hardcoded API secret token detected in repository",
-    description: "Found sensitive string matching API key pattern in client-accessible bundle.",
-    suggestedFix: "Extract token to environment variable or secure vault.",
-  },
-  {
-    id: "sec-2",
-    filePath: "src/db/queries.ts",
-    lineNumber: 88,
-    severity: "High",
-    category: "Security / SQL Injection",
-    title: "Dynamic SQL query concatenation without parameterized inputs",
-    description: "Raw SQL query interpolation found on user-supplied parameter.",
-    suggestedFix: "Use parameterized query placeholders ($1, $2).",
-  },
-  {
-    id: "bug-3",
-    filePath: "src/hooks/use-polling.ts",
-    lineNumber: 29,
-    severity: "Medium",
-    category: "Reliability / Memory Leak",
-    title: "setInterval not cleared on component unmount",
-    description: "Effect returns undefined instead of cleanup function.",
-    suggestedFix: "Return () => clearInterval(intervalId) in useEffect.",
-  },
-];
-
 export const CodebaseBugHunterModal = memo(function CodebaseBugHunterModal({
   visible,
+  serverId: propServerId,
+  agentId: propAgentId,
   onClose,
-  items = DEFAULT_AUDIT_ITEMS,
+  items = [],
 }: CodebaseBugHunterModalProps) {
   const { theme } = useUnistyles();
   const toast = useToast();
@@ -85,17 +56,17 @@ export const CodebaseBugHunterModal = memo(function CodebaseBugHunterModal({
 
   const handleFixIssue = (item: BugAuditItem) => {
     const sessions = useSessionStore.getState().sessions;
-    const serverIds = Object.keys(sessions);
-    const serverId = serverIds[0];
+    const serverId = propServerId ?? Object.keys(sessions)[0];
     const session = serverId ? sessions[serverId] : undefined;
-    const activeAgent = session?.agents ? Array.from(session.agents.values())[0] : undefined;
+    const activeAgentId =
+      propAgentId ?? (session?.agents ? Array.from(session.agents.values())[0]?.id : undefined);
 
-    if (!serverId || !activeAgent) {
+    if (!serverId || !activeAgentId) {
       toast.show("No active agent available to apply fix", { variant: "error" });
       return;
     }
 
-    const draftKey = `agent:${serverId}:${activeAgent.id}`;
+    const draftKey = `agent:${serverId}:${activeAgentId}`;
     const fixPrompt =
       `### 🛡️ Kronos Security / Bug Fix Request\n` +
       `File: \`${item.filePath}:${item.lineNumber}\`\n` +
@@ -160,6 +131,15 @@ export const CodebaseBugHunterModal = memo(function CodebaseBugHunterModal({
 
         {/* Issues List */}
         <ScrollView style={styles.issuesScroll}>
+          {displayedItems.length === 0 ? (
+            <View style={{ paddingVertical: 24, alignItems: "center", gap: 6 }}>
+              <ShieldCheck size={28} color="#22c55e" />
+              <Text style={styles.issueTitle}>No security or bug issues detected</Text>
+              <Text style={styles.issueDescription}>
+                Static audit across workspace source files completed cleanly.
+              </Text>
+            </View>
+          ) : null}
           {displayedItems.map((item) => (
             <View key={item.id} style={styles.issueCard}>
               <View style={styles.issueHeader}>

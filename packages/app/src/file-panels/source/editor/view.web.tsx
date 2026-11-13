@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { FileFind, FileFindModel } from "../find/index.web";
 import { Annotation, Compartment, EditorState, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -15,6 +15,7 @@ import { useCascadeFlowStore } from "@/stores/cascade-flow-store";
 interface FileEditorViewProps {
   model: FileEditorModel;
   filename: string;
+  cwd?: string;
   location: WorkspaceFileLocation;
   navigationRevision: number;
   vimEnabled: boolean;
@@ -41,6 +42,7 @@ function wrappingForFile(filename: string) {
 export function FileEditorView({
   model,
   filename,
+  cwd,
   location,
   navigationRevision,
   vimEnabled,
@@ -69,6 +71,8 @@ export function FileEditorView({
   });
   const onCursorChangeRef = useRef(onCursorChange);
   onCursorChangeRef.current = onCursorChange;
+  const filenameRef = useRef(filename);
+  filenameRef.current = filename;
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -98,7 +102,7 @@ export function FileEditorView({
               const line = update.state.doc.lineAt(head);
               const col = head - line.from + 1;
               onCursorChangeRef.current({ line: line.number, column: col });
-              useCascadeFlowStore.getState().setActiveFile(filename, line.number, col);
+              useCascadeFlowStore.getState().setActiveFile(filenameRef.current, line.number, col);
 
               if (!update.state.selection.main.empty) {
                 const from = update.state.selection.main.from;
@@ -219,20 +223,26 @@ export function FileEditorView({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  const handleCtrlKAccept = (newCode: string) => {
-    const view = viewRef.current;
-    if (!view) return;
-    const main = view.state.selection.main;
-    const from = main.empty ? view.state.doc.lineAt(main.head).from : main.from;
-    const to = main.empty ? view.state.doc.lineAt(main.head).to : main.to;
-    view.dispatch({
-      changes: { from, to, insert: newCode },
-      selection: { anchor: from + newCode.length },
-    });
-    const { lineSeparator } = model.getSnapshot();
-    model.edit(view.state.doc.sliceString(0, undefined, lineSeparator));
-    setIsCtrlKVisible(false);
-  };
+  const handleCloseCodeLens = useCallback(() => setIsCodeLensVisible(false), []);
+  const handleCloseCtrlK = useCallback(() => setIsCtrlKVisible(false), []);
+
+  const handleCtrlKAccept = useCallback(
+    (newCode: string) => {
+      const view = viewRef.current;
+      if (!view) return;
+      const main = view.state.selection.main;
+      const from = main.empty ? view.state.doc.lineAt(main.head).from : main.from;
+      const to = main.empty ? view.state.doc.lineAt(main.head).to : main.to;
+      view.dispatch({
+        changes: { from, to, insert: newCode },
+        selection: { anchor: from + newCode.length },
+      });
+      const { lineSeparator } = model.getSnapshot();
+      model.edit(view.state.doc.sliceString(0, undefined, lineSeparator));
+      setIsCtrlKVisible(false);
+    },
+    [model],
+  );
 
   return (
     <div style={FRAME_STYLE}>
@@ -249,15 +259,16 @@ export function FileEditorView({
         filename={filename}
         selectedText={selectedText}
         selectionCoords={selectionCoords}
-        onClose={() => setIsCodeLensVisible(false)}
+        onClose={handleCloseCodeLens}
       />
       <InlineCtrlKPrompt
         visible={isCtrlKVisible}
         filename={filename}
         selectedText={selectedText}
+        cwd={cwd}
         selectionCoords={selectionCoords}
         onAccept={handleCtrlKAccept}
-        onClose={() => setIsCtrlKVisible(false)}
+        onClose={handleCloseCtrlK}
       />
     </div>
   );

@@ -283,6 +283,150 @@ fn parse_json_rows(json_text: &str, engine: &str) -> Result<DatabaseQueryResult,
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvVarEntry {
+    pub key: String,
+    pub value: String,
+    pub is_secret: bool,
+}
+
+fn is_secret_env_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    lower.contains("key")
+        || lower.contains("token")
+        || lower.contains("secret")
+        || lower.contains("password")
+        || lower.contains("auth")
+        || lower.contains("cert")
+        || lower.contains("database_url")
+}
+
+fn resolve_env_file_path(cwd: &Path) -> PathBuf {
+    let local = cwd.join(".env.local");
+    if local.is_file() {
+        return local;
+    }
+    let env_file = cwd.join(".env");
+    if env_file.is_file() {
+        return env_file;
+    }
+    local
+}
+
+/// Loads real key/value pairs from workspace `.env.local` or `.env`.
+pub fn load_workspace_env_vars(cwd: &Path) -> Result<(String, Vec<EnvVarEntry>), String> {
+    if !cwd.is_dir() {
+        return Err(format!("Workspace directory not found: {}", cwd.display()));
+    }
+    let path = resolve_env_file_path(cwd);
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(".env.local")
+        .to_string();
+
+    if !path.is_file() {
+        return Ok((file_name, Vec::new()));
+    }
+
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed reading {}: {e}", path.display()))?;
+    let mut vars = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let cleaned = trimmed.strip_prefix("export ").unwrap_or(trimmed);
+        if let Some((raw_k, raw_v)) = cleaned.split_once('=') {
+            let key = raw_k.trim().to_string();
+            if key.is_empty() {
+                continue;
+            }
+            let val_trimmed = raw_v.trim();
+            let value = val_trimmed
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .or_else(|| {
+                    val_trimmed
+                        .strip_prefix('\'')
+                        .and_then(|s| s.strip_suffix('\''))
+                })
+                .unwrap_or(val_trimmed)
+                .to_string();
+            vars.push(EnvVarEntry {
+                is_secret: is_secret_env_key(&key),
+                key,
+                value,
+            });
+        }
+    }
+
+    Ok((file_name, vars))
+}
+
+/// Persists workspace environment variables to `.env.local` or `.env`.
+pub fn save_workspace_env_vars(cwd: &Path, vars: &[EnvVarEntry]) -> Result<String, String> {
+    if !cwd.is_dir() {
+        return Err(format!("Workspace directory not found: {}", cwd.display()));
+    }
+    let path = resolve_env_file_path(cwd);
+    let mut lines = Vec::with_capacity(vars.len());
+    for var in vars {
+        let key = var.key.trim();
+        if key.is_empty() || key.contains('=') || key.contains('\n') {
+            continue;
+        }
+        let needs_quotes = var.value.contains(' ') || var.value.contains('#');
+        if needs_quotes {
+            let escaped = var.value.replace('"', "\\\"");
+            lines.push(format!("{key}=\"{escaped}\""));
+        } else {
+            lines.push(format!("{key}={}", var.value));
+        }
+    }
+    let mut content = lines.join("\n");
+    if !content.is_empty() {
+        content.push('\n');
+    }
+    std::fs::write(&path, content.as_bytes())
+        .map_err(|e| format!("Failed writing {}: {e}", path.display()))?;
+    Ok(path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(".env.local")
+        .to_string())
+}
+
+/// Probes common local dev server ports in the workspace and falls back to framework port detection.
+pub fn detect_workspace_preview_url(cwd: &Path) -> String {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+
+    let candidate_ports: &[u16] = &[5173, 3000, 4173, 8081, 8000, 8080, 4321];
+    for &port in candidate_ports {
+        let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+        if TcpStream::connect_timeout(&addr, Duration::from_millis(60)).is_ok() {
+            return format!("http://127.0.0.1:{port}");
+        }
+    }
+
+    if let Ok(pkg) = std::fs::read_to_string(cwd.join("package.json")) {
+        if pkg.contains("\"next\"") || pkg.contains("\"react-scripts\"") {
+            return "http://localhost:3000".to_string();
+        }
+        if pkg.contains("\"expo\"") {
+            return "http://localhost:8081".to_string();
+        }
+        if pkg.contains("\"astro\"") {
+            return "http://localhost:4321".to_string();
+        }
+    }
+
+    "http://localhost:5173".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

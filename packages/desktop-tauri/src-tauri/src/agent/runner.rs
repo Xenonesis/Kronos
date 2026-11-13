@@ -232,41 +232,75 @@ impl ProviderOutput {
             "claude" => match event_type {
                 "stream_event" if event["parent_tool_use_id"].is_null() => {
                     let partial = &event["event"];
-                    match partial["type"].as_str() {
-                        Some("message_start") => {
-                            self.claude_message = partial["message"]["id"]
-                                .as_str()
-                                .unwrap_or("message")
-                                .to_string();
-                        }
-                        Some("content_block_start") | Some("content_block_delta") => {
-                            let is_start = partial["type"].as_str() == Some("content_block_start");
-                            let block = if is_start {
-                                &partial["content_block"]
-                            } else {
-                                &partial["delta"]
-                            };
-                            let (kind, field) = match block["type"].as_str() {
-                                Some("text") | Some("text_delta") => {
-                                    (OutputKind::Assistant, "text")
-                                }
-                                Some("thinking") | Some("thinking_delta") => {
-                                    (OutputKind::Reasoning, "thinking")
-                                }
-                                _ => return live,
-                            };
-                            if let Some(text) = block[field].as_str() {
-                                let index = partial["index"].as_u64().unwrap_or(0);
-                                self.update(
-                                    format!("{}:{index}", self.claude_message),
-                                    kind,
-                                    text,
-                                    is_start,
-                                    &mut live,
-                                );
+                    if let Ok(parsed_evt) = serde_json::from_value::<
+                        crate::agent::providers::claude::ClaudeStreamEvent,
+                    >(partial.clone())
+                    {
+                        match parsed_evt {
+                            crate::agent::providers::claude::ClaudeStreamEvent::MessageStart {
+                                message,
+                            } => {
+                                self.claude_message = message["id"]
+                                    .as_str()
+                                    .unwrap_or("message")
+                                    .to_string();
                             }
+                            crate::agent::providers::claude::ClaudeStreamEvent::ContentBlockStart {
+                                index,
+                                content_block,
+                            } => {
+                                let (kind, field) = match content_block["type"].as_str() {
+                                    Some("text") | Some("text_delta") => {
+                                        (OutputKind::Assistant, "text")
+                                    }
+                                    Some("thinking") | Some("thinking_delta") => {
+                                        (OutputKind::Reasoning, "thinking")
+                                    }
+                                    _ => return live,
+                                };
+                                if let Some(text) = content_block[field].as_str() {
+                                    self.update(
+                                        format!("{}:{index}", self.claude_message),
+                                        kind,
+                                        text,
+                                        true,
+                                        &mut live,
+                                    );
+                                }
+                            }
+                            crate::agent::providers::claude::ClaudeStreamEvent::ContentBlockDelta {
+                                index,
+                                delta,
+                            } => {
+                                let (kind, field) = match delta["type"].as_str() {
+                                    Some("text") | Some("text_delta") => {
+                                        (OutputKind::Assistant, "text")
+                                    }
+                                    Some("thinking") | Some("thinking_delta") => {
+                                        (OutputKind::Reasoning, "thinking")
+                                    }
+                                    _ => return live,
+                                };
+                                if let Some(text) = delta[field].as_str() {
+                                    self.update(
+                                        format!("{}:{index}", self.claude_message),
+                                        kind,
+                                        text,
+                                        false,
+                                        &mut live,
+                                    );
+                                }
+                            }
+                            crate::agent::providers::claude::ClaudeStreamEvent::Error { error } => {
+                                if let Some(msg) = error["message"].as_str() {
+                                    self.error = Some(msg.to_string());
+                                }
+                            }
+                            crate::agent::providers::claude::ClaudeStreamEvent::ContentBlockStop { .. }
+                            | crate::agent::providers::claude::ClaudeStreamEvent::MessageDelta { .. }
+                            | crate::agent::providers::claude::ClaudeStreamEvent::MessageStop
+                            | crate::agent::providers::claude::ClaudeStreamEvent::Ping => {}
                         }
-                        _ => {}
                     }
                 }
                 "assistant" if event["parent_tool_use_id"].is_null() => {
@@ -773,6 +807,7 @@ async fn run_reserved_turn(mut turn: ReservedTurn, command: Option<Command>) {
             .get("totalCostUsd")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
+        crate::agent::guardrails::record_agent_usage(&agent_id, inp + out, cost);
         get_plugin_manager().record_tokens(&provider, inp, out, cost);
     }
 
@@ -889,6 +924,53 @@ async fn execute_local_http_provider_turn(
             "content": sys
         }));
     }
+
+    // Reconstruct bounded multi-turn conversation history for stateless local HTTP endpoints
+    if let Ok(mut history_turns) = turn.manager().storage().with_timeline(&turn.agent.id, |items| {
+        let mut collected: Vec<(&'static str, String)> = Vec::new();
+        for item in items {
+            match item {
+                crate::agent::types::AgentTimelineItem::UserMessage { text, .. } => {
+                    if !text.trim().is_empty() {
+                        collected.push(("user", text.clone()));
+                    }
+                }
+                crate::agent::types::AgentTimelineItem::AssistantMessage { text, .. } => {
+                    if !text.trim().is_empty() {
+                        collected.push(("assistant", text.clone()));
+                    }
+                }
+                _ => {}
+            }
+        }
+        collected
+    }) {
+        if history_turns
+            .last()
+            .is_some_and(|(role, content)| *role == "user" && content == prompt)
+        {
+            history_turns.pop();
+        }
+        const MAX_HISTORY_MESSAGES: usize = 24;
+        const MAX_HISTORY_CHARS: usize = 24_000;
+        let start = history_turns.len().saturating_sub(MAX_HISTORY_MESSAGES);
+        let mut char_budget = 0usize;
+        let mut selected = Vec::new();
+        for (role, content) in history_turns[start..].iter().rev() {
+            if char_budget + content.len() > MAX_HISTORY_CHARS && !selected.is_empty() {
+                break;
+            }
+            char_budget += content.len();
+            selected.push((*role, content.as_str()));
+        }
+        for (role, content) in selected.into_iter().rev() {
+            messages.push(serde_json::json!({
+                "role": role,
+                "content": content
+            }));
+        }
+    }
+
     messages.push(serde_json::json!({
         "role": "user",
         "content": prompt
@@ -1101,6 +1183,9 @@ async fn execute_provider_turn(
         PathBuf::from(&agent.cwd)
     };
 
+    // Enforce configured token / USD cost budget before launching provider turn
+    crate::agent::guardrails::check_agent_budget(&agent.id)?;
+
     // Automatic shadow git checkpoint before turn execution
     let _ = crate::kernel::git::GitEngine::create_checkpoint(&cwd, &turn.token).await;
 
@@ -1123,15 +1208,77 @@ async fn execute_provider_turn(
         .config
         .as_ref()
         .and_then(|config| config["modeId"].as_str().or_else(|| config["persona"].as_str()));
+    let architect_plan = agent
+        .config
+        .as_ref()
+        .and_then(|config| config["architectPlan"].as_str());
+    let architect_spec = agent.config.as_ref().and_then(|config| {
+        config
+            .get("architectPlanSpec")
+            .and_then(|v| serde_json::from_value::<crate::agent::architect::ArchitectPlanSpec>(v.clone()).ok())
+    });
     if let Some(pid) = persona_id {
-        if let Some(persona_prompt) = crate::agent::personas::get_persona_instructions(pid) {
-            context_prefix.push_str(persona_prompt);
+        if let Some(persona_prompt) = crate::agent::personas::build_stage_system_prompt(
+            pid,
+            architect_plan,
+            architect_spec.as_ref(),
+        ) {
+            context_prefix.push_str(&persona_prompt);
             context_prefix.push_str("\n\n");
         }
     }
     if let Some(rules) = crate::agent::rules::load_workspace_rules(&cwd) {
         context_prefix.push_str(&rules);
         context_prefix.push_str("\n\n");
+    }
+    let playbooks_path = cwd.join(".kronos").join("playbooks.md");
+    if playbooks_path.is_file() {
+        if let Ok(playbooks) = std::fs::read_to_string(&playbooks_path) {
+            let trimmed = playbooks.trim();
+            if !trimmed.is_empty() {
+                let capped: String = trimmed.chars().take(4000).collect();
+                context_prefix.push_str("[WORKSPACE PLAYBOOKS & LESSONS]\n");
+                context_prefix.push_str(&capped);
+                context_prefix.push_str("\n\n");
+            }
+        }
+    }
+    let loaded_memories = crate::agent::memories::load_workspace_memories(&cwd);
+    if let Some(memories_block) =
+        crate::agent::memories::format_memories_for_system_prompt(&loaded_memories)
+    {
+        context_prefix.push_str(&memories_block);
+        context_prefix.push('\n');
+    }
+    if crate::agent::guardrails::is_permission_policy_configured() {
+        let policy = crate::agent::guardrails::get_permission_policy();
+        context_prefix.push_str(&crate::agent::guardrails::format_policy_prompt_block(&policy));
+        context_prefix.push('\n');
+    }
+    let daemon_cfg = crate::kernel::config_store::get_config_store().get_config();
+    let enabled_mcp_servers: Vec<crate::kernel::mcp::ExternalMcpServerConfig> =
+        if daemon_cfg.mcp_enabled && daemon_cfg.inject_into_agents {
+            crate::kernel::mcp::McpHub::load_external_servers()
+                .into_iter()
+                .filter(|s| s.enabled)
+                .collect()
+        } else {
+            Vec::new()
+        };
+    let claude_mcp_config_path = if provider == "claude" && !enabled_mcp_servers.is_empty() {
+        write_claude_mcp_config_file(&turn.manager().provider_session_dir(&agent.id), &enabled_mcp_servers)
+    } else {
+        None
+    };
+    if !enabled_mcp_servers.is_empty() {
+        let names: Vec<String> = enabled_mcp_servers
+            .iter()
+            .map(|s| format!("{} ({})", s.name, s.transport))
+            .collect();
+        context_prefix.push_str(&format!(
+            "[INJECTED MCP SERVERS]: {}\n\n",
+            names.join(", ")
+        ));
     }
     if is_initial_turn {
         if let Some(map) = crate::kernel::repo_map::generate_repo_map(&cwd) {
@@ -1145,6 +1292,30 @@ async fn execute_provider_turn(
         let _ = turn.mark_provider_started();
         let prompt = turn.prompt.clone();
         return execute_local_http_provider_turn(turn, provider, model, &prompt, system_context.as_deref()).await;
+    }
+    let is_acp_provider = provider == "acp"
+        || daemon_cfg
+            .providers_config
+            .get(provider)
+            .and_then(|v| v.get("extends"))
+            .and_then(|v| v.as_str())
+            == Some("acp");
+    if is_acp_provider && command.is_none() {
+        let _ = turn.mark_provider_started();
+        let prompt = if let Some(ref sys) = system_context {
+            format!("{sys}\n\n{}", turn.prompt)
+        } else {
+            turn.prompt.clone()
+        };
+        return execute_acp_provider_turn(
+            turn,
+            provider,
+            &cwd,
+            &prompt,
+            &daemon_cfg,
+            &enabled_mcp_servers,
+        )
+        .await;
     }
     let mut handle = provider_handle(&agent)?;
     if handle.is_none() && agent.runtime_info.is_none() {
@@ -1198,7 +1369,7 @@ async fn execute_provider_turn(
     } else {
         turn.prompt.clone()
     };
-    let args = provider_arguments(
+    let mut args = provider_arguments(
         provider,
         model,
         thinking,
@@ -1207,6 +1378,14 @@ async fn execute_provider_turn(
         handle.as_deref(),
         Some(&session_dir),
     )?;
+    if let Some(ref mcp_path) = claude_mcp_config_path {
+        if provider == "claude" {
+            // Insert before the final positional prompt arg
+            let insert_idx = args.len().saturating_sub(1);
+            args.insert(insert_idx, "--mcp-config".into());
+            args.insert(insert_idx + 1, mcp_path.to_string_lossy().into_owned());
+        }
+    }
     let mut cmd = match command {
         Some(mut command) => {
             command.args(args);
@@ -1359,6 +1538,215 @@ async fn execute_provider_turn(
     if handle.is_none() && output.error.is_none() && !turn.is_cancelled() {
         output.error = Some(format!("{provider} did not expose a durable session identity; cannot safely continue this agent. Import an explicit provider session or create a new agent."));
     }
+    Ok(output)
+}
+
+fn write_claude_mcp_config_file(
+    session_dir: &Path,
+    servers: &[crate::kernel::mcp::ExternalMcpServerConfig],
+) -> Option<PathBuf> {
+    let mut mcp_map = serde_json::Map::new();
+    for srv in servers {
+        if srv.transport == "stdio" && !srv.command.trim().is_empty() {
+            mcp_map.insert(
+                srv.name.clone(),
+                json!({
+                    "command": srv.command,
+                    "args": srv.args,
+                }),
+            );
+        } else if let Some(ref url) = srv.url {
+            mcp_map.insert(
+                srv.name.clone(),
+                json!({
+                    "type": srv.transport,
+                    "url": url,
+                }),
+            );
+        }
+    }
+    if mcp_map.is_empty() {
+        return None;
+    }
+    let _ = std::fs::create_dir_all(session_dir);
+    let path = session_dir.join("mcp-config.json");
+    let content = serde_json::to_string_pretty(&json!({ "mcpServers": mcp_map })).ok()?;
+    std::fs::write(&path, content).ok()?;
+    Some(path)
+}
+
+async fn execute_acp_provider_turn(
+    turn: &mut ReservedTurn,
+    provider: &str,
+    cwd: &Path,
+    prompt: &str,
+    daemon_cfg: &crate::kernel::config_store::DaemonConfig,
+    enabled_mcp_servers: &[crate::kernel::mcp::ExternalMcpServerConfig],
+) -> Result<ProviderOutput, String> {
+    let custom_cmd: Vec<String> = daemon_cfg
+        .providers_config
+        .get(provider)
+        .and_then(|v| v.get("command"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let (bin, args): (String, Vec<String>) = if !custom_cmd.is_empty() {
+        (custom_cmd[0].clone(), custom_cmd[1..].to_vec())
+    } else if let Some(resolved) = resolve_command(provider) {
+        (resolved.to_string_lossy().into_owned(), Vec::new())
+    } else {
+        return Err(format!(
+            "ACP provider '{provider}' has no configured command or binary on PATH."
+        ));
+    };
+
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let mut client =
+        crate::agent::providers::acp::AcpAgentClient::spawn(&bin, &arg_refs, cwd).await?;
+    let mut output = ProviderOutput::default();
+    output.identity = turn.token.clone();
+
+    client
+        .send_request(
+            "init-1",
+            "initialize",
+            Some(json!({ "protocolVersion": 1, "clientCapabilities": {} })),
+        )
+        .await?;
+
+    // Drain initialize response
+    while let Ok(Ok(Some(val))) =
+        tokio::time::timeout(Duration::from_secs(10), client.read_message()).await
+    {
+        if val.get("id").and_then(|v| v.as_str()) == Some("init-1") {
+            break;
+        }
+    }
+
+    let mut session_id = provider_handle(&turn.agent).unwrap_or(None);
+    if session_id.is_none() {
+        let acp_mcp_servers: Vec<Value> = enabled_mcp_servers
+            .iter()
+            .filter_map(|srv| {
+                if srv.transport == "stdio" && !srv.command.trim().is_empty() {
+                    Some(json!({
+                        "name": srv.name,
+                        "command": srv.command,
+                        "args": srv.args,
+                        "env": []
+                    }))
+                } else if let Some(ref url) = srv.url {
+                    Some(json!({
+                        "type": srv.transport,
+                        "name": srv.name,
+                        "url": url,
+                        "headers": []
+                    }))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        client
+            .send_request(
+                "sess-1",
+                "session/new",
+                Some(json!({ "cwd": cwd.to_string_lossy(), "mcpServers": acp_mcp_servers })),
+            )
+            .await?;
+        while let Ok(Ok(Some(val))) =
+            tokio::time::timeout(Duration::from_secs(10), client.read_message()).await
+        {
+            if val.get("id").and_then(|v| v.as_str()) == Some("sess-1") {
+                if let Some(sid) = val
+                    .get("result")
+                    .and_then(|r| r.get("sessionId"))
+                    .and_then(|s| s.as_str())
+                {
+                    session_id = Some(sid.to_string());
+                    let _ = turn.persist_provider_handle(sid);
+                }
+                break;
+            }
+        }
+    }
+
+    let sid = session_id.unwrap_or_else(|| turn.token.clone());
+    client
+        .send_request(
+            "prompt-1",
+            "session/prompt",
+            Some(json!({
+                "sessionId": sid,
+                "prompt": [{ "type": "text", "text": prompt }]
+            })),
+        )
+        .await?;
+
+    let deadline = tokio::time::sleep(Duration::from_secs(300));
+    tokio::pin!(deadline);
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = turn.cancellation.changed() => { break; }
+            _ = &mut deadline => {
+                output.error = Some(format!("{provider} ACP turn timed out."));
+                break;
+            }
+            msg = client.read_message() => match msg {
+                Ok(Some(val)) => {
+                    if val.get("id").and_then(|v| v.as_str()) == Some("prompt-1") {
+                        if let Some(err) = val.get("error") {
+                            output.error = Some(format!("ACP error: {err}"));
+                        }
+                        break;
+                    }
+                    if val.get("method").and_then(|m| m.as_str()) == Some("session/update") {
+                        if let Some(chunk) = val
+                            .get("params")
+                            .and_then(|p| p.get("update"))
+                            .and_then(|u| u.get("content"))
+                            .and_then(|c| c.get("text"))
+                            .and_then(|t| t.as_str())
+                        {
+                            let mut live = Vec::new();
+                            output.update(
+                                "acp_answer".to_string(),
+                                OutputKind::Assistant,
+                                chunk,
+                                false,
+                                &mut live,
+                            );
+                            for item in live {
+                                let _ = get_provider_push_tx().send(
+                                    stream_message(
+                                        &turn.agent.id,
+                                        provider,
+                                        &output.identity,
+                                        &item,
+                                    )
+                                    .to_string(),
+                                );
+                            }
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    output.error = Some(e);
+                    break;
+                }
+            }
+        }
+    }
+
+    let _ = client.kill().await;
     Ok(output)
 }
 

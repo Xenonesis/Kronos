@@ -17,6 +17,7 @@ import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-
 import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
 import { pluginDisplayName, usePluginList } from "@/plugins/plugin-list";
 import { resolveProviderLabel } from "@/utils/provider-definitions";
+import { invokeTauri } from "@/utils/tauri-invoke";
 import { CLIENT_SLASH_COMMANDS, type ClientSlashCommand } from "@/client-slash-commands";
 import type { PluginClientSlashCommand } from "@/plugins/client-slash-commands";
 import { mergeSlashCommandSources } from "@/plugins/client-slash-commands/model";
@@ -65,10 +66,21 @@ type AgentAutocompleteOption =
     })
   | (AutocompleteOption & { type: "provider_command" })
   | (AutocompleteOption & {
+      type: "kronos_workflow";
+      workflowContent: string;
+    })
+  | (AutocompleteOption & {
       type: "workspace_entry";
       entryPath: string;
       mention: FileMentionRange;
     });
+
+interface KronosWorkflowDoc {
+  kind: string;
+  name: string;
+  relativePath: string;
+  content: string;
+}
 
 interface AgentAutocompleteResult {
   isVisible: boolean;
@@ -195,6 +207,11 @@ const CLIENT_COMMAND_ICONS = {
   "dependency-diagram": "command",
   "database-studio": "command",
   "model-arena": "command",
+  "env-vault": "command",
+  "memories-manager": "command",
+  "module-deps": "command",
+  "preview-tunnel": "command",
+  "checklist-hud": "command",
 } as const satisfies Record<ClientSlashCommand["kind"], AutocompleteOption["icon"]>;
 
 interface CommandOptionContext {
@@ -254,6 +271,7 @@ interface BuildAutocompleteOptionsInput {
   mode: AutocompleteMode;
   commands: AgentSlashCommand[];
   pluginCommands: readonly PluginClientSlashCommand[];
+  workflowDocs: readonly KronosWorkflowDoc[];
   pluginNames: ReadonlyMap<string, string>;
   isDraftContext: boolean;
   commandFilterQuery: string;
@@ -297,7 +315,27 @@ function buildAutocompleteOptions(input: BuildAutocompleteOptionsInput): AgentAu
       pluginNames: input.pluginNames,
       t: input.t,
     };
-    return orderAutocompleteOptions(matches).map((entry) => mapCommandToOption(entry, context));
+    const mapped = orderAutocompleteOptions(matches).map((entry) =>
+      mapCommandToOption(entry, context),
+    );
+
+    if (input.activeSlashCommand?.position !== "inline" && input.workflowDocs.length > 0) {
+      const lowerQuery = input.commandFilterQuery.toLowerCase();
+      for (const doc of input.workflowDocs) {
+        if (lowerQuery && !doc.name.toLowerCase().includes(lowerQuery)) continue;
+        mapped.push({
+          type: "kronos_workflow",
+          id: doc.name,
+          label: `/${doc.name}`,
+          icon: "command",
+          description: `Workflow (${doc.relativePath})`,
+          tag: "Workflow",
+          workflowContent: doc.content,
+        });
+      }
+    }
+
+    return mapped;
   }
 
   const activeFileMention = input.activeFileMention;
@@ -516,6 +554,85 @@ function resolveCommandsEmptyText(args: {
   return args.t("agentAutocomplete.noCommands");
 }
 
+function expandKronosWorkflowPrompt(
+  content: string,
+  slashCommand: SlashCommandRange | null,
+  text: string,
+  cwd: string,
+): string {
+  const argTail = slashCommand ? text.slice(slashCommand.end).trim() : "";
+  const replaced = content.replace(/\$ARGUMENTS/g, argTail).replace(/\$ACTIVE_FILE/g, cwd);
+  return argTail && !content.includes("$ARGUMENTS") ? `${replaced.trimEnd()}\n\n${argTail}` : replaced;
+}
+
+function resolveSlashSelectionState(input: {
+  selected: AgentAutocompleteOption;
+  current: AgentAutocompleteSnapshot;
+  autocompleteCwd: string;
+  canExecuteClientSlashCommand?: boolean;
+  onClientSlashCommand?: (command: ClientSlashCommand) => void;
+  setUserInput: (next: string) => void;
+  onAutocompleteApplied?: () => void;
+}): boolean {
+  const { selected, current } = input;
+  if (selected.type === "kronos_workflow") {
+    input.setUserInput(
+      expandKronosWorkflowPrompt(
+        selected.workflowContent,
+        current.slashCommand,
+        current.text,
+        input.autocompleteCwd,
+      ),
+    );
+    input.onAutocompleteApplied?.();
+    return true;
+  }
+  const selectedIsCommand =
+    selected.type === "client_command" ||
+    selected.type === "plugin_command" ||
+    selected.type === "provider_command";
+  if (!selectedIsCommand) return false;
+
+  if (
+    selected.type === "client_command" &&
+    selected.command.execution === "immediate" &&
+    input.canExecuteClientSlashCommand &&
+    input.onClientSlashCommand
+  ) {
+    input.onClientSlashCommand(selected.command);
+    return true;
+  }
+
+  if (!current.slashCommand) {
+    input.setUserInput(`/${selected.id} `);
+    input.onAutocompleteApplied?.();
+    return true;
+  }
+
+  input.setUserInput(
+    applySlashCommandReplacement({
+      text: current.text,
+      command: current.slashCommand,
+      commandName: selected.id,
+    }),
+  );
+  input.onAutocompleteApplied?.();
+  return true;
+}
+
+function useKronosWorkflowDocs(cwd: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["kronosWorkflowDocs", cwd],
+    queryFn: async (): Promise<KronosWorkflowDoc[]> => {
+      const docs = await invokeTauri<KronosWorkflowDoc[]>("scan_kronos_workspace_docs", { cwd });
+      return (docs ?? []).filter((d) => d.kind === "command");
+    },
+    enabled: enabled && cwd.length > 0,
+    staleTime: 10_000,
+    retry: false,
+  });
+}
+
 export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAutocompleteResult {
   const { t } = useTranslation();
   const {
@@ -592,6 +709,7 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
     enabled: mode === "command" && canLoadCommands && canListCommands,
     draftConfig: queryDraftConfig,
   });
+  const workflowDocsQuery = useKronosWorkflowDocs(autocompleteCwd, mode === "command");
   const commandsState = resolveCommandsState({
     canListCommands,
     isLoading: commandsQuery.isLoading,
@@ -663,6 +781,7 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
         commandFilterQuery,
         commands: commandsQuery.commands,
         pluginCommands: pluginClientSlashCommands,
+        workflowDocs: workflowDocsQuery.data ?? [],
         pluginNames,
         activeSlashCommand,
         fileSuggestions: fileSuggestionsQuery.data ?? [],
@@ -708,6 +827,7 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
     providerLabel,
     retryCommands,
     t,
+    workflowDocsQuery.data,
   ]);
 
   const onSelectOption = useCallback(
@@ -720,39 +840,22 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
         activeSlashCommand,
         activeFileMention,
       });
-      const selectedIsCommand =
-        selected.type === "client_command" ||
-        selected.type === "plugin_command" ||
-        selected.type === "provider_command";
-      if (snapshot && selectedIsCommand && !current.slashCommand) return;
+      if (snapshot && selected.type !== "workspace_entry" && !current.slashCommand) return;
       if (
-        selected.type === "client_command" &&
-        selected.command.execution === "immediate" &&
-        canExecuteClientSlashCommand &&
-        onClientSlashCommand
+        resolveSlashSelectionState({
+          selected,
+          current,
+          autocompleteCwd,
+          canExecuteClientSlashCommand,
+          onClientSlashCommand,
+          setUserInput,
+          onAutocompleteApplied,
+        })
       ) {
-        onClientSlashCommand(selected.command);
         return;
       }
 
-      if (selectedIsCommand) {
-        if (!current.slashCommand) {
-          setUserInput(`/${selected.id} `);
-          onAutocompleteApplied?.();
-          return;
-        }
-
-        const nextInput = applySlashCommandReplacement({
-          text: current.text,
-          command: current.slashCommand,
-          commandName: selected.id,
-        });
-        setUserInput(nextInput);
-        onAutocompleteApplied?.();
-        return;
-      }
-
-      if (!current.fileMention) return;
+      if (!current.fileMention || selected.type !== "workspace_entry") return;
       const nextInput = applyFileMentionReplacement({
         text: current.text,
         mention: current.fileMention,
@@ -762,6 +865,7 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
       onAutocompleteApplied?.();
     },
     [
+      autocompleteCwd,
       canExecuteClientSlashCommand,
       onAutocompleteApplied,
       onClientSlashCommand,

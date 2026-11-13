@@ -97,7 +97,7 @@ mod tests {
         let hub = McpHub::new();
         let tools = hub.list_tools();
 
-        assert_eq!(tools.len(), 7, "Expected 7 built-in MCP tools");
+        assert_eq!(tools.len(), 9, "Expected 9 built-in MCP tools");
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(tool_names.contains(&"read_file"));
@@ -107,6 +107,8 @@ mod tests {
         assert!(tool_names.contains(&"ast_inspect"));
         assert!(tool_names.contains(&"suggest_directory"));
         assert!(tool_names.contains(&"terminal_exec"));
+        assert!(tool_names.contains(&"web_search"));
+        assert!(tool_names.contains(&"web_fetch"));
 
         for tool in &tools {
             assert!(!tool.name.is_empty(), "Tool name must not be empty");
@@ -148,8 +150,8 @@ mod tests {
         );
 
         let updated_tools = hub.list_tools();
-        assert_eq!(updated_tools.len(), 8);
-        assert_eq!(updated_tools[7].name, "custom_echo");
+        assert_eq!(updated_tools.len(), 10);
+        assert_eq!(updated_tools[9].name, "custom_echo");
 
         let custom_res = hub
             .call_tool("custom_echo", json!({ "message": "hello world" }))
@@ -179,7 +181,7 @@ mod tests {
         let tools_array = list_resp["result"]["tools"]
             .as_array()
             .expect("tools array");
-        assert_eq!(tools_array.len(), 7);
+        assert_eq!(tools_array.len(), 9);
 
         // Verify schema serialized with both inputSchema and input_schema
         assert!(tools_array[0]["inputSchema"].is_object());

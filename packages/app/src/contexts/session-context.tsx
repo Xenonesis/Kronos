@@ -35,6 +35,7 @@ import {
   useSessionStore,
   type SessionState,
 } from "@/stores/session-store";
+import { useCostBudgetStore } from "@/stores/cost-budget-store";
 import { sendOsNotification } from "@/utils/os-notifications";
 import { getIsAppActivelyVisible, getIsAppVisible } from "@/utils/app-visibility";
 import {
@@ -367,6 +368,33 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         event.type === "turn_canceled"
       ) {
         voiceRuntime?.onTurnEvent(serverId, agentId, event.type);
+      }
+      if (event.type === "turn_completed") {
+        const usage = (event as {
+          type: string;
+          turnId?: string;
+          usage?: {
+            inputTokens?: number;
+            outputTokens?: number;
+            cachedInputTokens?: number;
+            cacheReadTokens?: number;
+            totalCostUsd?: number;
+          };
+        }).usage;
+        const turnId = (event as { turnId?: string }).turnId;
+        if (usage && ((usage.inputTokens ?? 0) > 0 || (usage.outputTokens ?? 0) > 0)) {
+          const agentModel =
+            useSessionStore.getState().sessions[serverId]?.agents.get(agentId)?.model ?? null;
+          useCostBudgetStore.getState().recordUsage({
+            agentId,
+            turnId,
+            modelId: agentModel,
+            inputTokens: usage.inputTokens ?? 0,
+            outputTokens: usage.outputTokens ?? 0,
+            cacheReadTokens: usage.cacheReadTokens ?? usage.cachedInputTokens ?? 0,
+            totalCostUsd: usage.totalCostUsd,
+          });
+        }
       }
       if ((event as { type: string }).type === "shadow_lint_diagnostic") {
         useShadowLinterStore

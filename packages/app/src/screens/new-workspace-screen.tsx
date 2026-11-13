@@ -36,6 +36,11 @@ import { useNewWorkspaceFormStack } from "./new-workspace/use-new-workspace-form
 import { NewWorkspaceLayout } from "./new-workspace/layout";
 import { NewWorkspaceComposerView } from "./new-workspace/new-workspace-composer-view";
 import { useImportSession } from "@/hooks/use-import-session";
+import {
+  TemplateScaffolderDialog,
+  type ProjectTemplate,
+} from "@/new-workspace-launch/template-scaffolder-dialog";
+import { invokeTauri } from "@/utils/tauri-invoke";
 import { useNewWorkspaceScreenPresence } from "./new-workspace/screen-presence";
 import {
   buildComposerConfig,
@@ -439,6 +444,42 @@ export function NewWorkspaceScreen({
   });
 
   const importSession = useImportSession({ serverId: selectedServerId });
+  const [isTemplateDialogOpen, setIsTemplateDialogOpen] = useState(false);
+  const openTemplatesDialog = useCallback(() => setIsTemplateDialogOpen(true), []);
+  const closeTemplatesDialog = useCallback(() => setIsTemplateDialogOpen(false), []);
+  const handleScaffoldTemplate = useCallback(
+    async (template: ProjectTemplate, projectName: string) => {
+      try {
+        const pickedParent =
+          selectedSourceDirectory ?? (await invokeTauri<string | null>("pick_folder"));
+        if (!pickedParent) {
+          toast.show("Select a target directory to scaffold the project.", { variant: "info" });
+          return;
+        }
+        toast.show(`Running '${template.name}' scaffold in ${pickedParent}...`, {
+          variant: "info",
+        });
+        const createdDir = await invokeTauri<string>("scaffold_project_template", {
+          parentDir: pickedParent,
+          projectName,
+          command: template.defaultCommand,
+        });
+        if (!createdDir) {
+          throw new Error("Template scaffolding requires the Kronos desktop runtime.");
+        }
+        toast.show(`Created ${projectName} at ${createdDir}`, { variant: "success" });
+        try {
+          const connectedClient = withConnectedClient();
+          await connectedClient.addProject(createdDir);
+        } catch {
+          // Non-fatal if host disconnected after scaffold completes.
+        }
+      } catch (err) {
+        toast.show(`Scaffold failed: ${String(err)}`, { variant: "error" });
+      }
+    },
+    [selectedSourceDirectory, toast, withConnectedClient],
+  );
   const isComposerFullscreen = composerEditing.isFullscreen(isTerminalLaunch);
 
   const composer = (
@@ -483,11 +524,17 @@ export function NewWorkspaceScreen({
         title={t("newWorkspace.title")}
         formStack={formStack}
         onImportSession={importSession.open}
+        onOpenTemplates={openTemplatesDialog}
       >
         {composer}
         {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
       </NewWorkspaceLayout>
       {importSession.sheet}
+      <TemplateScaffolderDialog
+        visible={isTemplateDialogOpen}
+        onClose={closeTemplatesDialog}
+        onScaffold={handleScaffoldTemplate}
+      />
     </FileDropZone>
   );
 }

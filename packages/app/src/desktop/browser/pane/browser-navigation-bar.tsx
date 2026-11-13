@@ -14,6 +14,7 @@ import {
   Monitor,
   MousePointer2,
   PenTool,
+  Radio,
   RotateCw,
   Smartphone,
   Tablet,
@@ -40,6 +41,7 @@ const ThemedMaximize = withUnistyles(Maximize);
 const ThemedMonitor = withUnistyles(Monitor);
 const ThemedMousePointer2 = withUnistyles(MousePointer2);
 const ThemedPenTool = withUnistyles(PenTool);
+const ThemedRadio = withUnistyles(Radio);
 const ThemedRotateCw = withUnistyles(RotateCw);
 const ThemedSmartphone = withUnistyles(Smartphone);
 const ThemedTablet = withUnistyles(Tablet);
@@ -66,6 +68,9 @@ export interface BrowserNavigationBarProps {
   isInspectActive?: boolean;
   onToggleMarkup?: () => void;
   isMarkupActive?: boolean;
+  onToggleTunnel?: () => void;
+  isTunnelActive?: boolean;
+  isTunnelBusy?: boolean;
   onSelectViewportPreset?: (preset: ViewportPreset) => void;
   testID?: string;
 }
@@ -207,6 +212,9 @@ function BrowserActionTools({
   isInspectActive,
   onToggleMarkup,
   isMarkupActive,
+  onToggleTunnel,
+  isTunnelActive,
+  isTunnelBusy,
   onSendToAgent,
 }: {
   onOpenImport?: () => void;
@@ -214,6 +222,9 @@ function BrowserActionTools({
   isInspectActive: boolean;
   onToggleMarkup?: () => void;
   isMarkupActive: boolean;
+  onToggleTunnel?: () => void;
+  isTunnelActive: boolean;
+  isTunnelBusy: boolean;
   onSendToAgent?: () => void;
 }) {
   return (
@@ -262,6 +273,25 @@ function BrowserActionTools({
           <ThemedPenTool
             size={14}
             uniProps={isMarkupActive ? activeIconMapping : foregroundIconMapping}
+          />
+        </ToolbarAction>
+      ) : null}
+
+      {onToggleTunnel ? (
+        <ToolbarAction
+          tooltip={
+            isTunnelActive
+              ? "Stop public preview tunnel"
+              : "Share localhost preview via public tunnel (cloudflared / bore)"
+          }
+          testID="browser-tunnel-btn"
+          onPress={onToggleTunnel}
+          disabled={isTunnelBusy}
+          variant={isTunnelActive ? "default" : "ghost"}
+        >
+          <ThemedRadio
+            size={14}
+            uniProps={isTunnelActive ? activeIconMapping : foregroundIconMapping}
           />
         </ToolbarAction>
       ) : null}
@@ -409,6 +439,9 @@ export function BrowserNavigationBar({
   isInspectActive = false,
   onToggleMarkup,
   isMarkupActive = false,
+  onToggleTunnel,
+  isTunnelActive = false,
+  isTunnelBusy = false,
   onSelectViewportPreset,
   testID = "browser-navigation-bar",
 }: BrowserNavigationBarProps) {
@@ -461,6 +494,9 @@ export function BrowserNavigationBar({
           isInspectActive={isInspectActive}
           onToggleMarkup={onToggleMarkup}
           isMarkupActive={isMarkupActive}
+          onToggleTunnel={onToggleTunnel}
+          isTunnelActive={isTunnelActive}
+          isTunnelBusy={isTunnelBusy}
           onSendToAgent={onSendToAgent}
         />
         <BrowserUrlTools

@@ -20,6 +20,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { isWeb } from "@/constants/platform";
 import { useAppSettings } from "@/hooks/use-settings";
+import { useSessionStore } from "@/stores/session-store";
 import { confirmDialog } from "@/utils/confirm-dialog";
 import { formatFileSize } from "@/utils/format-file-size";
 import type { Theme } from "@/styles/theme";
@@ -221,6 +222,9 @@ function EditableTextFile({
 }: TextFilePanelProps) {
   const { settings } = useAppSettings();
   const { t } = useTranslation();
+  const workspaceCwd = useSessionStore(
+    (s) => s.sessions[host.id]?.workspaces.get(workspaceId)?.workspaceDirectory,
+  );
   const [model] = useState(() => new FileEditorModel({ file }));
   const [view, setView] = useTextFileView(params, revision);
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
@@ -331,6 +335,7 @@ function EditableTextFile({
         <SourceEditor
           model={model}
           filename={params.path}
+          cwd={workspaceCwd}
           location={editorLocation}
           navigationRevision={targetRev}
           vimEnabled={settings.vimKeybindings}

@@ -101,49 +101,89 @@ pub enum WSOutboundMessage {
 
 pub fn build_server_info_payload() -> Value {
     let server_id = crate::get_or_create_server_id();
+    let hostname = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "localhost".to_string());
+    let local_whisper_ready = crate::kernel::speech::SpeechEngine::new(None)
+        .map(|e| e.is_model_loaded())
+        .unwrap_or(false);
+    let openai_key_set = std::env::var("OPENAI_API_KEY")
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false);
+    let voice_reason = if local_whisper_ready {
+        "Local Whisper GGUF model ready"
+    } else if openai_key_set {
+        "OpenAI Whisper cloud STT ready"
+    } else {
+        "Native SpeechEngine ready (download a local Whisper model in Settings > Voice for offline STT)"
+    };
+    let capabilities = serde_json::json!({
+        "voice": {
+            "dictation": {
+                "enabled": true,
+                "reason": voice_reason
+            },
+            "voice": {
+                "enabled": true,
+                "reason": voice_reason
+            }
+        }
+    });
+    let mut features = serde_json::json!({
+        "connectedHosts": false,
+        "hostMultiplexing": false,
+        "terminalChunkedReplay": false,
+        "binaryChunkingV1": true,
+        "providersSnapshot": true,
+        "providersSnapshotCwd": true,
+        "providerOptionControls": true,
+        "speechSettings": true,
+        "daemonStatusRpc": true,
+        "daemonConfigReload": true,
+        "directorySync": true,
+        "workspaceSetupRun": true,
+        "workspaceSetupObservation": true,
+        "creationLifecycle": true,
+        "backgroundWorkspaces": true,
+        "workspaceSortTimes": true,
+        "workspacePinning": true,
+        "workspaceLabels": true,
+        "skillManagement": true
+    });
+    if let Some(obj) = features.as_object_mut() {
+        for key in [
+            "projectAdd",
+            "stableProjectIdentity",
+            "projectGithubClone",
+            "workspaceGithubRepositorySearch",
+            "projectCreateDirectory",
+            "projectList",
+            "projectRemove",
+            "workspaceMultiplicity",
+            "wholeTurnTimeline",
+            "kernelTelemetry",
+            "kernelAst",
+            "kernelCrdt",
+            "kernelIoRing",
+            "kernelShm",
+            "kernelSpeech",
+            "agentHistorySearch",
+            "providerUsageList",
+            "usageSources",
+            "usageSetting",
+        ] {
+            obj.insert(key.to_string(), Value::Bool(true));
+        }
+    }
     serde_json::json!({
         "status": "server_info",
         "protocolVersion": 1,
         "serverId": server_id,
-        "hostname": "localhost",
+        "hostname": hostname,
         "version": env!("CARGO_PKG_VERSION"),
         "desktopManaged": true,
-        "features": {
-            "connectedHosts": false,
-            "hostMultiplexing": false,
-            "terminalChunkedReplay": false,
-            "binaryChunkingV1": true,
-            "providersSnapshot": true,
-            "providersSnapshotCwd": true,
-            "directorySync": true,
-            "workspaceSetupRun": true,
-            "workspaceSetupObservation": true,
-            "creationLifecycle": true,
-            "backgroundWorkspaces": true,
-            "workspaceSortTimes": true,
-            "workspacePinning": true,
-            "workspaceLabels": true,
-            "skillManagement": true,
-            "projectAdd": true,
-            "stableProjectIdentity": true,
-            "projectGithubClone": true,
-            "workspaceGithubRepositorySearch": true,
-            "projectCreateDirectory": true,
-            "projectList": true,
-            "projectRemove": true,
-            "workspaceMultiplicity": true,
-            "wholeTurnTimeline": true,
-            "kernelTelemetry": true,
-            "kernelAst": true,
-            "kernelCrdt": true,
-            "kernelIoRing": true,
-            "kernelShm": true,
-            "kernelSpeech": true,
-            "agentHistorySearch": true,
-            "providerUsageList": true,
-            "usageSources": true,
-            "usageSetting": true
-        }
+        "capabilities": capabilities,
+        "features": features
     })
 }
 

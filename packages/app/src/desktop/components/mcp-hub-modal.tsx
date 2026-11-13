@@ -235,7 +235,7 @@ export const McpHubModal = memo(function McpHubModal({ visible, onClose }: McpHu
 
           {tab === "servers" ? (
             <ScrollView style={styles.serversBody}>
-              <McpServersCard />
+              <McpServersCard onServersSynced={loadTools} />
             </ScrollView>
           ) : (
             <View style={styles.splitBody}>

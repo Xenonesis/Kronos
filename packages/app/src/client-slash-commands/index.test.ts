@@ -87,6 +87,11 @@ describe("resolveClientSlashCommand", () => {
       ["diagram", ["arch", "dependencies", "dep-graph"], "immediate"],
       ["db", ["sql", "sqlite", "database"], "immediate"],
       ["compare", ["arena", "ab-test"], "immediate"],
+      ["env", ["secrets", "vault", "dotenv"], "immediate"],
+      ["memories", ["memory", "remember"], "immediate"],
+      ["deps", ["modules", "callers", "imports"], "immediate"],
+      ["tunnel", ["share", "public-url"], "immediate"],
+      ["checklist", ["tasks", "todos"], "immediate"],
     ]);
   });
 

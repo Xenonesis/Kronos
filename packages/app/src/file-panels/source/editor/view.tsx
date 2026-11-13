@@ -7,6 +7,7 @@ import type { FileEditorModel } from "./model";
 export function FileEditorView(_props: {
   model: FileEditorModel;
   filename: string;
+  cwd?: string;
   location: WorkspaceFileLocation;
   navigationRevision: number;
   vimEnabled: boolean;

@@ -432,11 +432,206 @@ pub fn dispatch_agent_prompt(prompt: &str, provider: Option<&str>, port: u16) ->
     dispatch_agent_prompt_to(prompt, provider, port, std::io::stdout())
 }
 
+fn dispatch_prompt_over_ws(
+    prompt: &str,
+    provider: Option<&str>,
+    port: u16,
+    local_credential: Option<&str>,
+) -> Result<String, String> {
+    let prompt = prompt.to_string();
+    let provider = provider.unwrap_or("claude").to_string();
+    let credential = local_credential
+        .map(|s| s.to_string())
+        .or_else(|| crate::kernel::auth::read_local_credential(&crate::get_data_dir()));
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("Failed creating runtime: {e}"))?;
+        rt.block_on(async move {
+            use futures_util::{SinkExt, StreamExt};
+            use tokio_tungstenite::tungstenite::Message;
+
+            let url = format!("ws://127.0.0.1:{port}/ws");
+            let (mut ws, _) = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                tokio_tungstenite::connect_async(&url),
+            )
+            .await
+            .map_err(|_| format!("Timed out connecting to {url}"))?
+            .map_err(|e| format!("WebSocket connect error: {e}"))?;
+
+            let mut hello = serde_json::json!({
+                "type": "hello",
+                "clientId": format!("kronos-cli-{}", std::process::id()),
+                "clientType": "cli",
+                "protocolVersion": 1,
+            });
+            if let Some(token) = credential {
+                hello["auth"] = serde_json::json!({
+                    "kind": "localCredential",
+                    "token": token,
+                });
+            }
+            ws.send(Message::Text(hello.to_string().into()))
+                .await
+                .map_err(|e| format!("Failed sending hello: {e}"))?;
+
+            // Wait for server_info status message
+            let mut admitted = false;
+            for _ in 0..8 {
+                let frame = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
+                    .await
+                    .map_err(|_| "Timed out awaiting server_info".to_string())?;
+                match frame {
+                    Some(Ok(Message::Text(txt))) => {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&txt) {
+                            if val.get("type").and_then(|v| v.as_str()) == Some("hello.rejected") {
+                                let reason = val.get("reason").and_then(|v| v.as_str()).unwrap_or("rejected");
+                                return Err(format!("Daemon rejected connection: {reason}"));
+                            }
+                            if val
+                                .pointer("/message/payload/status")
+                                .and_then(|v| v.as_str())
+                                == Some("server_info")
+                            {
+                                admitted = true;
+                                break;
+                            }
+                        }
+                    }
+                    Some(Ok(_)) => continue,
+                    _ => break,
+                }
+            }
+            if !admitted {
+                return Err("Did not receive server_info from daemon".to_string());
+            }
+
+            let cwd = std::env::current_dir()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| ".".to_string());
+            let create_req_id = format!("cli-create-{}", std::process::id());
+            let create_msg = serde_json::json!({
+                "type": "session",
+                "message": {
+                    "type": "agent/create",
+                    "requestId": create_req_id,
+                    "provider": provider,
+                    "cwd": cwd,
+                }
+            });
+            ws.send(Message::Text(create_msg.to_string().into()))
+                .await
+                .map_err(|e| format!("Failed sending agent/create: {e}"))?;
+
+            let mut created_agent_id: Option<String> = None;
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+            while tokio::time::Instant::now() < deadline {
+                let rem = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let Ok(frame) = tokio::time::timeout(rem, ws.next()).await else {
+                    break;
+                };
+                match frame {
+                    Some(Ok(Message::Text(txt))) => {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&txt) {
+                            let inner = val.get("message").unwrap_or(&val);
+                            if inner.get("type").and_then(|v| v.as_str()) == Some("agent/create/response")
+                                && inner.get("requestId").and_then(|v| v.as_str()) == Some(create_req_id.as_str())
+                            {
+                                if inner.get("success").and_then(|v| v.as_bool()) == Some(false) {
+                                    let err = inner
+                                        .get("error")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("Unknown create_agent error");
+                                    return Err(err.to_string());
+                                }
+                                created_agent_id = inner
+                                    .pointer("/agent/id")
+                                    .or_else(|| inner.pointer("/payload/id"))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
+                                break;
+                            }
+                        }
+                    }
+                    Some(Ok(_)) => continue,
+                    _ => break,
+                }
+            }
+
+            let agent_id = created_agent_id.ok_or_else(|| "Daemon did not return agent ID".to_string())?;
+            let send_req_id = format!("cli-send-{}", std::process::id());
+            let send_msg = serde_json::json!({
+                "type": "session",
+                "message": {
+                    "type": "send_agent_message_request",
+                    "requestId": send_req_id,
+                    "agentId": agent_id,
+                    "text": prompt,
+                }
+            });
+            ws.send(Message::Text(send_msg.to_string().into()))
+                .await
+                .map_err(|e| format!("Failed sending prompt: {e}"))?;
+
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+            while tokio::time::Instant::now() < deadline {
+                let rem = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let Ok(frame) = tokio::time::timeout(rem, ws.next()).await else {
+                    break;
+                };
+                match frame {
+                    Some(Ok(Message::Text(txt))) => {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&txt) {
+                            let inner = val.get("message").unwrap_or(&val);
+                            if inner.get("type").and_then(|v| v.as_str())
+                                == Some("send_agent_message_response")
+                                && inner.get("requestId").and_then(|v| v.as_str())
+                                    == Some(send_req_id.as_str())
+                            {
+                                let accepted = inner
+                                    .pointer("/payload/accepted")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                                if !accepted {
+                                    let err = inner
+                                        .pointer("/payload/error")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("Daemon rejected prompt");
+                                    return Err(err.to_string());
+                                }
+                                let _ = ws.close(None).await;
+                                return Ok(agent_id);
+                            }
+                        }
+                    }
+                    Some(Ok(_)) => continue,
+                    _ => break,
+                }
+            }
+            Err("Timed out awaiting send_agent_message_response".to_string())
+        })
+    })
+    .join()
+    .map_err(|_| "WS dispatch thread panicked".to_string())?
+}
+
 /// Core agent dispatch implementation writing status logs and instructions to an arbitrary writer.
 pub fn dispatch_agent_prompt_to<W: std::io::Write>(
     prompt: &str,
     provider: Option<&str>,
     port: u16,
+    writer: W,
+) -> i32 {
+    dispatch_agent_prompt_with_credential_to(prompt, provider, port, None, writer)
+}
+
+pub(crate) fn dispatch_agent_prompt_with_credential_to<W: std::io::Write>(
+    prompt: &str,
+    provider: Option<&str>,
+    port: u16,
+    local_credential: Option<&str>,
     mut writer: W,
 ) -> i32 {
     let prov = provider.unwrap_or("default");
@@ -445,11 +640,27 @@ pub fn dispatch_agent_prompt_to<W: std::io::Write>(
             writer,
             "[Kernel CLI] Connected to live daemon on 127.0.0.1:{port} (health check ok)"
         );
-        let _ = writeln!(
-            writer,
-            "[Kernel CLI] Agent prompt dispatched for provider [{prov}]: \"{prompt}\""
-        );
-        let _ = writeln!(writer, "[Kernel CLI] Dispatch successful (exit 0)");
+        match dispatch_prompt_over_ws(prompt, provider, port, local_credential) {
+            Ok(agent_id) => {
+                let _ = writeln!(
+                    writer,
+                    "[Kernel CLI] Created agent [{agent_id}] via WS RPC"
+                );
+                let _ = writeln!(
+                    writer,
+                    "[Kernel CLI] Agent prompt dispatched for provider [{prov}]: \"{prompt}\""
+                );
+                let _ = writeln!(writer, "[Kernel CLI] Dispatch successful (exit 0)");
+                0
+            }
+            Err(err) => {
+                let _ = writeln!(
+                    writer,
+                    "[Kernel CLI] Failed to dispatch prompt to daemon: {err}"
+                );
+                1
+            }
+        }
     } else {
         let _ = writeln!(
             writer,
@@ -464,8 +675,8 @@ pub fn dispatch_agent_prompt_to<W: std::io::Write>(
             "[Kernel CLI] Action required: Run 'kronos daemon --port {port}' to start the background kernel, or configure an external agent CLI"
         );
         let _ = writeln!(writer, "[Kernel CLI] Dry-run dispatch completed (exit 0)");
+        0
     }
-    0
 }
 
 /// Dispatches the search command across the current working directory, printing to stdout.
@@ -876,12 +1087,34 @@ pub fn dispatch(args: CliArgs) -> Option<i32> {
             println!("Version: {}", env!("CARGO_PKG_VERSION"));
             println!("OS: {} ({})", std::env::consts::OS, std::env::consts::ARCH);
             println!("Git CLI: {}", if crate::agent::registry::is_command_available("git") { "AVAILABLE" } else { "NOT FOUND" });
+            println!(
+                "Daemon Health (127.0.0.1:6767): {}",
+                if probe_daemon_health(6767) { "RUNNING" } else { "OFFLINE" }
+            );
+            let speech_ready = crate::kernel::speech::SpeechEngine::new(None)
+                .map(|e| e.is_model_loaded())
+                .unwrap_or(false);
             #[cfg(feature = "local-whisper")]
-            println!("Whisper Voice Engine: EMBEDDED (C++/Rust whisper.cpp)");
+            println!(
+                "Whisper Voice Engine: EMBEDDED (C++/Rust whisper.cpp, model {})",
+                if speech_ready { "ON DISK" } else { "NOT DOWNLOADED" }
+            );
             #[cfg(not(feature = "local-whisper"))]
-            println!("Whisper Voice Engine: DISABLED (Cloud-only voice engine)");
-            println!("IoRing Engine: AVAILABLE (Windows 11 Kernel IORING)");
-            println!("Memory Telemetry: AVAILABLE (Win32 PSAPI)");
+            {
+                let _ = speech_ready;
+                println!("Whisper Voice Engine: DISABLED (Cloud-only voice engine)");
+            }
+            println!(
+                "IoRing Engine: {}",
+                if cfg!(windows) {
+                    "AVAILABLE (Windows Kernel IORING)"
+                } else {
+                    "UNSUPPORTED (Windows-only; using tokio::fs)"
+                }
+            );
+            let (ws_bytes, _, _) = crate::kernel::telemetry::query_process_memory();
+            let mem_mb = ws_bytes as f64 / (1024.0 * 1024.0);
+            println!("Memory Telemetry: {:.2} MB Working Set", mem_mb);
             Some(0)
         }
     }

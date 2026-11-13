@@ -12,6 +12,7 @@ import {
   Check,
 } from "lucide-react-native";
 import { useToast } from "@/contexts/toast-context";
+import { invokeTauri } from "@/utils/tauri-invoke";
 
 export type CloudProviderId = "vercel" | "netlify" | "cloudflare";
 
@@ -38,54 +39,86 @@ export const CloudDeploymentModal = memo(function CloudDeploymentModal({
   const toast = useToast();
 
   useEffect(() => {
-    if (visible) {
-      setName(projectName);
-      setDeployedUrl(null);
-      setIsDeploying(false);
-      setLogs([
-        "Ready to deploy project.",
-        `Workspace directory: ${cwd}`,
-        "Detected framework: Vite React (dist)",
-      ]);
-    }
+    if (!visible) return;
+    let cancelled = false;
+    setName(projectName);
+    setDeployedUrl(null);
+    setIsDeploying(false);
+    setLogs([`Workspace directory: ${cwd}`, "Detecting framework and build output directory..."]);
+
+    void (async () => {
+      try {
+        const detected = await invokeTauri<{ framework: string; outputDir: string }>(
+          "detect_cloud_project",
+          { cwd },
+        );
+        if (!cancelled && detected) {
+          setOutputDir(detected.outputDir);
+          setLogs([
+            `Workspace directory: ${cwd}`,
+            `Detected framework: ${detected.framework} (${detected.outputDir})`,
+            "Ready to run real CLI deployment.",
+          ]);
+        }
+      } catch {
+        // Keep default dir if detection fails outside Tauri
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [visible, projectName, cwd]);
 
   const handleDeploy = useCallback(async () => {
     setIsDeploying(true);
-    setLogs((prev) => [...prev, `Spawning ${provider} build pipeline...`]);
+    setDeployedUrl(null);
+    setLogs((prev) => [...prev, `Running real ${provider} CLI deployment from ${cwd}...`]);
 
     try {
-      // Simulate build steps and return URL
-      await new Promise((r) => setTimeout(r, 600));
-      setLogs((prev) => [
-        ...prev,
-        "Optimizing bundle chunks...",
-        "Uploading static assets...",
-        "Configuring edge routing...",
-      ]);
-
-      await new Promise((r) => setTimeout(r, 800));
-      const targetDomain =
+      const rustProvider =
         provider === "vercel"
-          ? `${name.toLowerCase()}.vercel.app`
+          ? "vercel"
           : provider === "netlify"
-            ? `${name.toLowerCase()}.netlify.app`
-            : `${name.toLowerCase()}.pages.dev`;
+            ? "netlify"
+            : "cloudflarePages";
+      const result = await invokeTauri<{
+        success: boolean;
+        liveUrl?: string | null;
+        buildLogs: string;
+        message: string;
+      }>("deploy_cloud_project", {
+        req: {
+          cwd,
+          provider: rustProvider,
+          projectName: name.trim() || null,
+          outputDir: outputDir.trim() || null,
+        },
+      });
+      if (!result) {
+        setLogs((prev) => [...prev, "Cloud deploy requires Kronos desktop runtime."]);
+        toast.show("Cloud deploy requires desktop runtime", { variant: "error" });
+        return;
+      }
 
-      const finalUrl = `https://${targetDomain}`;
-      setDeployedUrl(finalUrl);
-      setLogs((prev) => [
-        ...prev,
-        `✓ Production deployment succeeded!`,
-        `Live URL: ${finalUrl}`,
-      ]);
-      toast.show(`Successfully deployed to ${provider}!`, { variant: "success" });
-    } catch {
-      toast.show("Deployment failed", { variant: "error" });
+      const logLines = result.buildLogs
+        .split(/\r?\n/)
+        .map((l) => l.trimEnd())
+        .filter((l) => l.length > 0);
+      setLogs((prev) => [...prev, ...logLines, result.message]);
+
+      if (result.liveUrl) {
+        setDeployedUrl(result.liveUrl);
+      }
+      toast.show(result.message, { variant: result.success ? "success" : "error" });
+    } catch (err) {
+      const errMsg = `Deployment error: ${String(err)}`;
+      setLogs((prev) => [...prev, errMsg]);
+      toast.show(errMsg, { variant: "error" });
     } finally {
       setIsDeploying(false);
     }
-  }, [provider, name, toast]);
+  }, [provider, name, outputDir, cwd, toast]);
 
   const handleCopy = useCallback(() => {
     if (!deployedUrl) return;

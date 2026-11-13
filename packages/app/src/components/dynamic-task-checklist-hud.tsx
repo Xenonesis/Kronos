@@ -1,16 +1,25 @@
-import React, { memo, useState, useEffect } from "react";
-import { View, Text, Pressable, ScrollView, TextInput } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import {
-  CheckSquare,
-  Square,
-  Clock,
-  Plus,
-  ChevronDown,
-  ChevronUp,
-  Sparkles,
-  X,
-} from "lucide-react-native";
+import React, { memo, useCallback, useState } from "react";
+import { View, Text, ScrollView } from "react-native";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { CheckSquare, Square, Plus, ChevronUp, ChevronDown, Clock, X } from "lucide-react-native";
+import { AdaptiveTextInput } from "@/components/adaptive-text-input";
+import { PressHighlight } from "@/components/ui/press-highlight";
+import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
+import { Button } from "@/components/ui/button";
+
+const ThemedCheckIcon = withUnistyles(CheckSquare, (theme) => ({ color: theme.colors.accent }));
+const ThemedSquareIcon = withUnistyles(Square, (theme) => ({
+  color: theme.colors.foregroundMuted,
+}));
+const ThemedPlusIcon = withUnistyles(Plus, (theme) => ({ color: theme.colors.foregroundMuted }));
+const ThemedChevronUpIcon = withUnistyles(ChevronUp, (theme) => ({
+  color: theme.colors.foregroundMuted,
+}));
+const ThemedChevronDownIcon = withUnistyles(ChevronDown, (theme) => ({
+  color: theme.colors.foregroundMuted,
+}));
+const ThemedClockIcon = withUnistyles(Clock, (theme) => ({ color: theme.colors.foregroundMuted }));
+const ThemedCloseIcon = withUnistyles(X, (theme) => ({ color: theme.colors.foregroundMuted }));
 
 export interface TaskChecklistItem {
   id: string;
@@ -20,180 +29,163 @@ export interface TaskChecklistItem {
 }
 
 export interface DynamicTaskChecklistHudProps {
-  visible: boolean;
+  title?: string;
   tasks?: TaskChecklistItem[];
-  onTasksChange?: (tasks: TaskChecklistItem[]) => void;
+  onToggleTask?: (taskId: string) => void;
+  onAddTask?: (title: string) => void;
   onClose?: () => void;
 }
 
-const DEFAULT_TASKS: TaskChecklistItem[] = [
-  {
-    id: "task-1",
-    title: "Analyze repository dependencies & architecture",
-    status: "completed",
-    durationSeconds: 12,
-  },
-  {
-    id: "task-2",
-    title: "Implement core business logic & edge case guards",
-    status: "in_progress",
-    durationSeconds: 45,
-  },
-  { id: "task-3", title: "Generate unit tests and verify full suite passes", status: "pending" },
-  {
-    id: "task-4",
-    title: "Format code and verify zero TypeScript diagnostic errors",
-    status: "pending",
-  },
-];
+const ChecklistRow = memo(function ChecklistRow({
+  task,
+  onToggle,
+}: {
+  task: TaskChecklistItem;
+  onToggle: (id: string) => void;
+}) {
+  const isDone = task.status === "completed";
+  const isInProgress = task.status === "in_progress";
+  const handlePress = useCallback(() => {
+    onToggle(task.id);
+  }, [onToggle, task.id]);
+
+  return (
+    <PressHighlight onPress={handlePress} style={[styles.taskRow, isDone && styles.taskRowDone]}>
+      {isDone ? <ThemedCheckIcon size={14} /> : <ThemedSquareIcon size={14} />}
+      <Text
+        style={[
+          styles.taskText,
+          isDone && styles.taskTextDone,
+          isInProgress && styles.taskTextInProgress,
+        ]}
+        numberOfLines={2}
+      >
+        {task.title}
+      </Text>
+      {task.durationSeconds ? (
+        <View style={styles.timerBadge}>
+          <ThemedClockIcon size={10} />
+          <Text style={styles.timerText}>{task.durationSeconds}s</Text>
+        </View>
+      ) : null}
+    </PressHighlight>
+  );
+});
+
+function toggleTaskItemStatus(prev: TaskChecklistItem[], id: string): TaskChecklistItem[] {
+  return prev.map((t) =>
+    t.id === id ? { ...t, status: t.status === "completed" ? "pending" : "completed" } : t,
+  );
+}
 
 export const DynamicTaskChecklistHud = memo(function DynamicTaskChecklistHud({
-  visible,
-  tasks: initialTasks = DEFAULT_TASKS,
-  onTasksChange,
+  title = "Agent Execution Checklist",
+  tasks: externalTasks,
+  onToggleTask,
+  onAddTask,
   onClose,
 }: DynamicTaskChecklistHudProps) {
-  const { theme } = useUnistyles();
-  const [tasks, setTasks] = useState<TaskChecklistItem[]>(initialTasks);
+  const [internalTasks, setInternalTasks] = useState<TaskChecklistItem[]>([]);
   const [collapsed, setCollapsed] = useState(false);
-  const [newTaskTitle, setNewTaskTitle] = useState("");
   const [isAdding, setIsAdding] = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [inputResetKey, setInputResetKey] = useState(0);
 
-  // Live timer tick for active in_progress task
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTasks((prevTasks) =>
-        prevTasks.map((t) =>
-          t.status === "in_progress" ? { ...t, durationSeconds: (t.durationSeconds ?? 0) + 1 } : t,
-        ),
-      );
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  if (!visible) return null;
-
-  const toggleTaskStatus = (id: string) => {
-    const updated: TaskChecklistItem[] = tasks.map((t) => {
-      if (t.id === id) {
-        const nextStatus: "completed" | "in_progress" | "pending" =
-          t.status === "completed" ? "pending" : "completed";
-        return { ...t, status: nextStatus };
-      }
-      return t;
-    });
-    setTasks(updated);
-    onTasksChange?.(updated);
-  };
-
-  const handleAddTask = () => {
-    if (!newTaskTitle.trim()) return;
-    const newTask: TaskChecklistItem = {
-      id: `task-${Date.now()}`,
-      title: newTaskTitle.trim(),
-      status: "pending",
-    };
-    const updated = [...tasks, newTask];
-    setTasks(updated);
-    onTasksChange?.(updated);
-    setNewTaskTitle("");
-    setIsAdding(false);
-  };
-
+  const tasks = externalTasks ?? internalTasks;
   const completedCount = tasks.filter((t) => t.status === "completed").length;
-  const progressPercent = tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
+  const progressPercent =
+    tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
+
+  const toggleCollapsed = useCallback(() => setCollapsed((prev) => !prev), []);
+  const startAdding = useCallback(() => setIsAdding(true), []);
+
+  const toggleTaskStatus = useCallback(
+    (id: string) => {
+      if (onToggleTask) {
+        onToggleTask(id);
+        return;
+      }
+      setInternalTasks((prev) => toggleTaskItemStatus(prev, id));
+    },
+    [onToggleTask],
+  );
+
+  const handleAddTask = useCallback(() => {
+    if (!newTaskTitle.trim()) return;
+    if (onAddTask) {
+      onAddTask(newTaskTitle.trim());
+    } else {
+      setInternalTasks((prev) => [
+        ...prev,
+        {
+          id: `t-${Date.now()}`,
+          title: newTaskTitle.trim(),
+          status: "pending",
+        },
+      ]);
+    }
+    setNewTaskTitle("");
+    setInputResetKey((k) => k + 1);
+    setIsAdding(false);
+  }, [newTaskTitle, onAddTask]);
 
   return (
     <View style={styles.hudCard} data-testid="dynamic-task-checklist-hud">
-      {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerTitleRow}>
-          <Sparkles size={14} color={theme.colors.accent} />
-          <Text style={styles.headerTitle}>Task Plan & Decomposition</Text>
-          <Text style={styles.progressBadge}>{progressPercent}% Done</Text>
+          <ThemedCheckIcon size={16} />
+          <Text style={styles.headerTitle}>{title}</Text>
+          <Text style={styles.progressBadge}>
+            {completedCount}/{tasks.length} ({progressPercent}%)
+          </Text>
         </View>
         <View style={styles.headerControls}>
-          <Pressable onPress={() => setCollapsed(!collapsed)} style={styles.iconButton}>
-            {collapsed ? (
-              <ChevronDown size={14} color={theme.colors.foregroundMuted} />
-            ) : (
-              <ChevronUp size={14} color={theme.colors.foregroundMuted} />
-            )}
-          </Pressable>
+          <ToolbarButton label="Toggle checklist" onPress={toggleCollapsed} style={styles.iconButton}>
+            {collapsed ? <ThemedChevronDownIcon size={14} /> : <ThemedChevronUpIcon size={14} />}
+          </ToolbarButton>
           {onClose ? (
-            <Pressable onPress={onClose} style={styles.iconButton}>
-              <X size={14} color={theme.colors.foregroundMuted} />
-            </Pressable>
+            <ToolbarButton label="Close checklist" onPress={onClose} style={styles.iconButton}>
+              <ThemedCloseIcon size={14} />
+            </ToolbarButton>
           ) : null}
         </View>
       </View>
 
       {!collapsed ? (
         <>
-          {/* Progress bar */}
           <View style={styles.progressBarTrack}>
             <View style={[styles.progressBarFill, { width: `${progressPercent}%` }]} />
           </View>
 
-          {/* Task Items */}
           <ScrollView style={styles.tasksList}>
-            {tasks.map((task) => {
-              const isDone = task.status === "completed";
-              const isInProgress = task.status === "in_progress";
-
-              return (
-                <Pressable
-                  key={task.id}
-                  onPress={() => toggleTaskStatus(task.id)}
-                  style={[styles.taskRow, isDone && styles.taskRowDone]}
-                >
-                  {isDone ? (
-                    <CheckSquare size={14} color={theme.colors.accent} />
-                  ) : (
-                    <Square size={14} color={theme.colors.foregroundMuted} />
-                  )}
-                  <Text
-                    style={[
-                      styles.taskText,
-                      isDone && styles.taskTextDone,
-                      isInProgress && styles.taskTextInProgress,
-                    ]}
-                    numberOfLines={2}
-                  >
-                    {task.title}
-                  </Text>
-                  {task.durationSeconds ? (
-                    <View style={styles.timerBadge}>
-                      <Clock size={10} color={theme.colors.foregroundMuted} />
-                      <Text style={styles.timerText}>{task.durationSeconds}s</Text>
-                    </View>
-                  ) : null}
-                </Pressable>
-              );
-            })}
+            {tasks.length === 0 ? (
+              <Text style={styles.emptyText}>No active tasks recorded.</Text>
+            ) : (
+              tasks.map((task) => (
+                <ChecklistRow key={task.id} task={task} onToggle={toggleTaskStatus} />
+              ))
+            )}
           </ScrollView>
 
-          {/* Add Task Block */}
           {isAdding ? (
             <View style={styles.addTaskInputRow}>
-              <TextInput
+              <AdaptiveTextInput
                 style={styles.addInput}
-                value={newTaskTitle}
+                initialValue={newTaskTitle}
+                resetKey={inputResetKey}
                 onChangeText={setNewTaskTitle}
                 placeholder="New subtask title..."
-                placeholderTextColor={theme.colors.foregroundMuted}
-                autoFocus
                 onSubmitEditing={handleAddTask}
               />
-              <Pressable onPress={handleAddTask} style={styles.saveAddButton}>
+              <Button size="sm" variant="default" onPress={handleAddTask} style={styles.saveAddButton}>
                 <Text style={styles.saveAddButtonText}>Add</Text>
-              </Pressable>
+              </Button>
             </View>
           ) : (
-            <Pressable onPress={() => setIsAdding(true)} style={styles.addStepButton}>
-              <Plus size={12} color={theme.colors.foregroundMuted} />
+            <PressHighlight onPress={startAdding} style={styles.addStepButton}>
+              <ThemedPlusIcon size={12} />
               <Text style={styles.addStepText}>Add Subtask</Text>
-            </Pressable>
+            </PressHighlight>
           )}
         </>
       ) : null}
@@ -257,16 +249,19 @@ const styles = StyleSheet.create((theme) => ({
   tasksList: {
     maxHeight: 180,
   },
+  emptyText: {
+    fontSize: 11,
+    color: theme.colors.foregroundMuted,
+    paddingVertical: 4,
+  },
   taskRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    paddingVertical: 5,
-    paddingHorizontal: 4,
-    borderRadius: 4,
+    paddingVertical: 4,
   },
   taskRowDone: {
-    opacity: 0.6,
+    opacity: 0.65,
   },
   taskText: {
     flex: 1,
@@ -278,22 +273,18 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
   },
   taskTextInProgress: {
+    fontWeight: "600",
     color: theme.colors.accent,
-    fontWeight: "500",
   },
   timerBadge: {
     flexDirection: "row",
     alignItems: "center",
     gap: 3,
-    backgroundColor: "rgba(0,0,0,0.2)",
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-    borderRadius: 3,
   },
   timerText: {
     fontSize: 10,
-    fontFamily: "monospace",
     color: theme.colors.foregroundMuted,
+    fontFamily: "monospace",
   },
   addStepButton: {
     flexDirection: "row",
@@ -307,24 +298,25 @@ const styles = StyleSheet.create((theme) => ({
   },
   addTaskInputRow: {
     flexDirection: "row",
+    alignItems: "center",
     gap: 6,
-    paddingTop: 6,
+    marginTop: 6,
   },
   addInput: {
     flex: 1,
+    fontSize: 12,
+    color: theme.colors.foreground,
     backgroundColor: theme.colors.surface0,
-    borderRadius: 4,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    borderRadius: 4,
     paddingHorizontal: 8,
     paddingVertical: 4,
-    fontSize: 11,
-    color: theme.colors.foreground,
   },
   saveAddButton: {
     backgroundColor: theme.colors.accent,
     paddingHorizontal: 10,
-    justifyContent: "center",
+    paddingVertical: 5,
     borderRadius: 4,
   },
   saveAddButtonText: {

@@ -1,4 +1,4 @@
-import { memo } from "react";
+import React, { memo } from "react";
 import { Text } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Coins, AlertTriangle } from "lucide-react-native";
@@ -58,6 +58,14 @@ export const CostBudgetPill = memo(function CostBudgetPill({
 }: CostBudgetPillProps) {
   const entry = useCostBudgetStore((state) => state.usageByAgent[agentId]);
   const budgetLimitUsd = useCostBudgetStore((state) => state.budgetLimitUsd);
+  const openCostModal = useCostBudgetStore((state) => state.openCostModal);
+  const handlePillPress = React.useCallback(() => {
+    if (onPress) {
+      onPress();
+    } else {
+      openCostModal(agentId);
+    }
+  }, [agentId, onPress, openCostModal]);
   const liveAgentUsage = useSessionStore((state) => {
     if (!serverId) return null;
     return state.sessions[serverId]?.agents.get(agentId)?.lastUsage ?? null;
@@ -89,7 +97,7 @@ export const CostBudgetPill = memo(function CostBudgetPill({
 
   return (
     <PressHighlight
-      onPress={onPress}
+      onPress={handlePillPress}
       style={[styles.pill, isOverBudget && styles.pillOverBudget]}
       accessibilityLabel="Open token and USD cost budget HUD"
       testID="cost-budget-pill"

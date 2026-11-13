@@ -1,7 +1,12 @@
 import { memo, useCallback } from "react";
-import { View, Text, Pressable } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import { Text } from "react-native";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Compass, Check } from "lucide-react-native";
+import { PressHighlight } from "@/components/ui/press-highlight";
+
+const MutedCompassIcon = withUnistyles(Compass, (theme) => ({
+  color: theme.colors.foregroundMuted,
+}));
 
 export interface ArchitectModeToggleProps {
   enabled: boolean;
@@ -12,22 +17,24 @@ export const ArchitectModeToggle = memo(function ArchitectModeToggle({
   enabled,
   onToggle,
 }: ArchitectModeToggleProps) {
-  const { theme } = useUnistyles();
-
   const handlePress = useCallback(() => {
     onToggle(!enabled);
   }, [enabled, onToggle]);
 
   return (
-    <Pressable
+    <PressHighlight
       onPress={handlePress}
       style={[styles.toggleBtn, enabled && styles.toggleBtnActive]}
       accessibilityLabel="Toggle Two-Stage Architect Mode"
     >
-      <Compass size={13} color={enabled ? "#ffffff" : theme.colors.foregroundMuted} />
+      {enabled ? (
+        <Compass size={13} color="#ffffff" />
+      ) : (
+        <MutedCompassIcon size={13} />
+      )}
       <Text style={[styles.btnText, enabled && styles.btnTextActive]}>Architect Mode</Text>
       {enabled && <Check size={11} color="#ffffff" />}
-    </Pressable>
+    </PressHighlight>
   );
 });
 

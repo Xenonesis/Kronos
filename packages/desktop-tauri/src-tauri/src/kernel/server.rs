@@ -10,6 +10,9 @@ use tokio::sync::{broadcast, Mutex};
 
 use crate::kernel::protocol::{RpcEnvelope, RpcResponse};
 
+#[path = "rpc_helpers.rs"]
+mod rpc_helpers;
+
 static PROVIDER_SNAPSHOT_CACHE: std::sync::LazyLock<
     tokio::sync::Mutex<Option<(Instant, String, Vec<serde_json::Value>)>>,
 > = std::sync::LazyLock::new(|| tokio::sync::Mutex::new(None));
@@ -31,7 +34,7 @@ static WATCHER_ENGINE: std::sync::LazyLock<crate::kernel::watcher::WatcherEngine
         if let Ok(index) = crate::kernel::search::WorkspaceSearchIndex::new_in_memory() {
             engine.bind_search_index(Arc::new(index));
         }
-        engine.bind_shadow_vfs(Arc::new(crate::kernel::vfs::ShadowVfs::new()));
+        engine.bind_shadow_vfs(crate::kernel::vfs::get_global_shadow_vfs());
         engine
     });
 
@@ -46,11 +49,78 @@ pub fn get_crdt_engine() -> &'static crate::kernel::crdt::CrdtEngine {
     &CRDT_ENGINE
 }
 
+static SUBSCRIPTION_REGISTRY: std::sync::OnceLock<
+    std::sync::RwLock<std::collections::HashMap<String, String>>,
+> = std::sync::OnceLock::new();
+static BROWSER_HOSTS: std::sync::OnceLock<
+    std::sync::RwLock<std::collections::HashMap<String, serde_json::Value>>,
+> = std::sync::OnceLock::new();
+static CREATION_SNAPSHOTS: std::sync::OnceLock<
+    std::sync::RwLock<std::collections::HashMap<String, serde_json::Value>>,
+> = std::sync::OnceLock::new();
+
+fn register_subscription(id: String, kind: &str) -> String {
+    let map = SUBSCRIPTION_REGISTRY.get_or_init(|| std::sync::RwLock::new(Default::default()));
+    let mut guard = map.write().unwrap_or_else(|e| e.into_inner());
+    if guard.len() > 512 {
+        guard.clear();
+    }
+    guard.insert(id.clone(), kind.to_string());
+    id
+}
+
+fn release_subscription(id: &str) -> bool {
+    let Some(map) = SUBSCRIPTION_REGISTRY.get() else {
+        return false;
+    };
+    map.write()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(id)
+        .is_some()
+}
+
+pub fn get_registered_browser_hosts() -> Vec<serde_json::Value> {
+    let Some(map) = BROWSER_HOSTS.get() else {
+        return Vec::new();
+    };
+    map.read()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .cloned()
+        .collect()
+}
+
+fn discover_default_whisper_model() -> Option<std::path::PathBuf> {
+    let mut dirs_to_check = vec![crate::get_data_dir().join("models")];
+    if let Some(home) = dirs::home_dir() {
+        dirs_to_check.push(home.join(".paseo").join("models"));
+        dirs_to_check.push(home.join(".kronos").join("models"));
+    }
+    if let Some(local) = dirs::data_local_dir() {
+        dirs_to_check.push(local.join("Kronos").join("models"));
+    }
+    for dir in dirs_to_check {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if path.is_file() && name.starts_with("ggml-") && name.ends_with(".bin") {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
+}
+
 static SPEECH_ENGINE: std::sync::LazyLock<
     std::sync::Arc<tokio::sync::RwLock<crate::kernel::speech::SpeechEngine>>,
 > = std::sync::LazyLock::new(|| {
-    let engine = crate::kernel::speech::SpeechEngine::new(None)
-        .unwrap_or_else(|_| crate::kernel::speech::SpeechEngine::new_mock());
+    let model_path = discover_default_whisper_model();
+    let engine = match crate::kernel::speech::SpeechEngine::new(model_path.as_deref()) {
+        Ok(engine) => engine,
+        Err(err) => crate::kernel::speech::SpeechEngine::unavailable(err),
+    };
     std::sync::Arc::new(tokio::sync::RwLock::new(engine))
 });
 
@@ -234,21 +304,70 @@ pub async fn handle_omp_sessions_list_http(
 
 pub async fn handle_omp_session_inspect_http(
     axum::extract::Path(id): axum::extract::Path<String>,
-) -> axum::response::Json<serde_json::Value> {
-    axum::response::Json(serde_json::json!({
-        "ok": true,
-        "session": {
-            "id": id,
-            "title": "Inspected Session",
-            "turns": [],
-            "fileDiffs": [],
-            "stats": {
-                "totalTurns": 0,
-                "totalToolCalls": 0,
-                "filesModified": 0
-            }
-        }
-    }))
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    if let Some(session) = crate::agent::sessions::inspect_omp_session(&id) {
+        return (
+            StatusCode::OK,
+            axum::response::Json(serde_json::json!({
+                "ok": true,
+                "session": session
+            })),
+        )
+            .into_response();
+    }
+
+    let mgr = get_agent_manager();
+    if let Some(rec) = mgr.get_agent(&id) {
+        let items = mgr.get_timeline(&id);
+        let turns: Vec<serde_json::Value> = items
+            .iter()
+            .filter_map(|item| match item {
+                crate::agent::types::AgentTimelineItem::UserMessage { text, timestamp, .. } => {
+                    Some(serde_json::json!({ "role": "user", "text": text, "toolCalls": [], "timestamp": timestamp }))
+                }
+                crate::agent::types::AgentTimelineItem::AssistantMessage { text, timestamp, .. } => {
+                    Some(serde_json::json!({ "role": "assistant", "text": text, "toolCalls": [], "timestamp": timestamp }))
+                }
+                _ => None,
+            })
+            .collect();
+        let total_tool_calls = items
+            .iter()
+            .filter(|i| matches!(i, crate::agent::types::AgentTimelineItem::ToolCall { .. }))
+            .count();
+        let total_turns = turns.len();
+        return (
+            StatusCode::OK,
+            axum::response::Json(serde_json::json!({
+                "ok": true,
+                "session": {
+                    "id": rec.id,
+                    "title": rec.title.unwrap_or_else(|| "Agent Session".to_string()),
+                    "cwd": rec.cwd,
+                    "turns": turns,
+                    "fileDiffs": [],
+                    "stats": {
+                        "totalTurns": total_turns,
+                        "totalToolCalls": total_tool_calls,
+                        "filesModified": 0
+                    }
+                }
+            })),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::NOT_FOUND,
+        axum::response::Json(serde_json::json!({
+            "ok": false,
+            "error": format!("Session {id} not found")
+        })),
+    )
+        .into_response()
 }
 pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
     match envelope.msg_type.as_str() {
@@ -983,6 +1102,105 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                 Err(e) => RpcResponse::err(&envelope.id, "shm/poll/response", e),
             }
         }
+        "vfs/write_virtual" => {
+            let path_str = envelope
+                .payload
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let content_str = envelope
+                .payload
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if path_str.is_empty() {
+                RpcResponse::err(&envelope.id, "vfs/write_virtual/response", "Missing 'path' parameter")
+            } else {
+                let vfs = crate::kernel::vfs::get_global_shadow_vfs();
+                match vfs.write_virtual(path_str, content_str.as_bytes()) {
+                    Ok(()) => RpcResponse::ok(
+                        &envelope.id,
+                        "vfs/write_virtual/response",
+                        Some(serde_json::json!({
+                            "success": true,
+                            "path": path_str,
+                            "dirtyCount": vfs.len(),
+                        })),
+                    ),
+                    Err(e) => RpcResponse::err(&envelope.id, "vfs/write_virtual/response", e.to_string()),
+                }
+            }
+        }
+        "vfs/read_cow" => {
+            let path_str = envelope
+                .payload
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if path_str.is_empty() {
+                RpcResponse::err(&envelope.id, "vfs/read_cow/response", "Missing 'path' parameter")
+            } else {
+                let vfs = crate::kernel::vfs::get_global_shadow_vfs();
+                let path = std::path::Path::new(path_str);
+                let is_virtual = vfs.is_virtual(path);
+                match vfs.read_file_cow(path) {
+                    Ok(bytes) => {
+                        let content = String::from_utf8_lossy(&bytes).to_string();
+                        RpcResponse::ok(
+                            &envelope.id,
+                            "vfs/read_cow/response",
+                            Some(serde_json::json!({
+                                "path": path_str,
+                                "isVirtual": is_virtual,
+                                "content": content,
+                                "size": bytes.len(),
+                            })),
+                        )
+                    }
+                    Err(e) => RpcResponse::err(&envelope.id, "vfs/read_cow/response", e.to_string()),
+                }
+            }
+        }
+        "vfs/flush" => {
+            let vfs = crate::kernel::vfs::get_global_shadow_vfs();
+            let paths = vfs.list_virtual();
+            let mut flushed = 0usize;
+            for p in &paths {
+                if vfs.flush_to_disk(p, p).is_ok() {
+                    let _ = vfs.remove_virtual(p);
+                    flushed += 1;
+                }
+            }
+            if vfs.is_empty() {
+                let _ = vfs.clear();
+            }
+            RpcResponse::ok(
+                &envelope.id,
+                "vfs/flush/response",
+                Some(serde_json::json!({
+                    "success": true,
+                    "flushedCount": flushed,
+                    "dirtyCount": vfs.len(),
+                })),
+            )
+        }
+        "vfs/status" => {
+            let vfs = crate::kernel::vfs::get_global_shadow_vfs();
+            let dirty: Vec<String> = vfs
+                .list_virtual()
+                .into_iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect();
+            RpcResponse::ok(
+                &envelope.id,
+                "vfs/status/response",
+                Some(serde_json::json!({
+                    "dirtyCount": dirty.len(),
+                    "isEmpty": vfs.is_empty(),
+                    "dirtyPaths": dirty,
+                })),
+            )
+        }
         other => RpcResponse::err(
             envelope.id,
             other,
@@ -1002,6 +1220,16 @@ fn canonicalize_path(path: &std::path::Path) -> std::path::PathBuf {
         }
         Err(_) => path.to_path_buf(),
     }
+}
+
+fn default_available_modes() -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({ "id": "build", "label": "Build", "description": "Standard coding execution mode" }),
+        serde_json::json!({ "id": "architect", "label": "Architect", "description": "Deep architectural analysis & planning" }),
+        serde_json::json!({ "id": "plan", "label": "Plan", "description": "Read-only exploration and structured planning" }),
+        serde_json::json!({ "id": "review", "label": "Review", "description": "Code review, audit, and bug hunting" }),
+        serde_json::json!({ "id": "yolo", "label": "Autonomous", "description": "Fast autonomous execution with guardrails" }),
+    ]
 }
 
 pub fn agent_record_to_snapshot(
@@ -1029,13 +1257,13 @@ pub fn agent_record_to_snapshot(
             "canSpawnTerminals": true,
             "supportsStreaming": true,
             "supportsSessionPersistence": matches!(record.provider.as_str(), "omp" | "pi" | "opencode" | "codex" | "claude"),
-            "supportsDynamicModes": false,
+            "supportsDynamicModes": true,
             "supportsMcpServers": true,
             "supportsReasoningStream": matches!(record.provider.as_str(), "omp" | "pi" | "opencode" | "codex" | "claude"),
             "supportsToolInvocations": true
         },
-        "currentModeId": null,
-        "availableModes": [],
+        "currentModeId": serde_json::Value::Null,
+        "availableModes": default_available_modes(),
         "pendingPermissions": [],
         "persistence": null,
         "title": record.title,
@@ -1043,6 +1271,9 @@ pub fn agent_record_to_snapshot(
     });
     if let Some(ref usage) = record.last_usage {
         val["lastUsage"] = usage.clone();
+    }
+    if let Some(ref err) = record.last_error {
+        val["lastError"] = serde_json::json!(err);
     }
     if let Some(ref ws_id) = record.workspace_id {
         val["workspaceId"] = serde_json::json!(ws_id);
@@ -1053,6 +1284,26 @@ pub fn agent_record_to_snapshot(
         }
         if let Some(thinking) = cfg.get("thinkingOptionId") {
             val["thinkingOptionId"] = thinking.clone();
+        }
+        if let Some(mode) = cfg.get("modeId").or_else(|| cfg.get("persona")) {
+            if !mode.is_null() {
+                val["currentModeId"] = mode.clone();
+            }
+        }
+        if let Some(archived) = cfg.get("archivedAt").filter(|v| !v.is_null()) {
+            val["archivedAt"] = archived.clone();
+        }
+        if let Some(att) = cfg.get("requiresAttention").and_then(|v| v.as_bool()) {
+            val["requiresAttention"] = serde_json::json!(att);
+        }
+        if let Some(reason) = cfg.get("attentionReason").filter(|v| !v.is_null()) {
+            val["attentionReason"] = reason.clone();
+        }
+        if let Some(meta) = cfg.get("metadata").filter(|v| v.is_object()) {
+            val["metadata"] = meta.clone();
+        }
+        if let Some(opts) = cfg.get("options").filter(|v| v.is_object()) {
+            val["options"] = opts.clone();
         }
     }
     let handle = record
@@ -1861,14 +2112,34 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("terminalId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let strip_ansi = msg
+                .get("stripAnsi")
+                .or_else(|| payload.and_then(|p| p.get("stripAnsi")))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let start = msg
+                .get("start")
+                .or_else(|| payload.and_then(|p| p.get("start")))
+                .and_then(|v| v.as_i64());
+            let end = msg
+                .get("end")
+                .or_else(|| payload.and_then(|p| p.get("end")))
+                .and_then(|v| v.as_i64());
+
+            let (lines, total_lines) = match crate::native_pty::get_pty_manager()
+                .capture_terminal_lines(terminal_id, strip_ansi, start, end)
+            {
+                Ok(res) => res,
+                Err(_) => (Vec::new(), 0),
+            };
 
             serde_json::json!({
                 "type": "capture_terminal_response",
                 "requestId": request_id,
                 "payload": {
                     "terminalId": terminal_id,
-                    "lines": Vec::<String>::new(),
-                    "totalLines": 0,
+                    "lines": lines,
+                    "totalLines": total_lines,
                     "requestId": request_id
                 }
             })
@@ -2952,6 +3223,14 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 creation_obj["agentId"] = serde_json::json!(agent_id);
                 creation_obj["agent"] = agent_snap.clone();
             }
+            {
+                let map = CREATION_SNAPSHOTS.get_or_init(|| std::sync::RwLock::new(Default::default()));
+                let mut guard = map.write().unwrap_or_else(|e| e.into_inner());
+                if guard.len() > 128 {
+                    guard.clear();
+                }
+                guard.insert(idempotency_key.to_string(), creation_obj.clone());
+            }
             resp_payload["creation"] = creation_obj;
 
             serde_json::json!({
@@ -3257,12 +3536,14 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("subscriptionId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let released = release_subscription(sub_id);
             serde_json::json!({
                 "type": "subscription.release.response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
-                    "subscriptionId": sub_id
+                    "subscriptionId": sub_id,
+                    "released": released
                 }
             })
         }
@@ -3271,12 +3552,13 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             let sub_id = if msg.get("subscribe").is_some()
                 || payload.and_then(|p| p.get("subscribe")).is_some()
             {
-                Some(format!("sub-agents-{}", request_id))
+                Some(register_subscription(format!("sub-agents-{}", request_id), "agents"))
             } else {
                 None
             };
             let mgr = get_agent_manager();
             let agents = mgr.list_agents();
+            let mut placement_cache = std::collections::HashMap::new();
             let entries: Vec<serde_json::Value> = agents
                 .into_iter()
                 .map(|rec| {
@@ -3285,22 +3567,14 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     } else {
                         rec.cwd.clone()
                     };
+                    let project = rpc_helpers::inspect_project_placement(
+                        &cwd,
+                        rec.workspace_id.as_deref(),
+                        &mut placement_cache,
+                    );
                     serde_json::json!({
                         "agent": agent_record_to_snapshot(&rec),
-                        "project": {
-                            "projectKey": "local",
-                            "projectName": "Local Project",
-                            "workspaceName": null,
-                            "checkout": {
-                                "cwd": cwd,
-                                "isGit": false,
-                                "currentBranch": null,
-                                "remoteUrl": null,
-                                "worktreeRoot": null,
-                                "isPaseoOwnedWorktree": false,
-                                "mainRepoRoot": null
-                            }
-                        }
+                        "project": project
                     })
                 })
                 .collect();
@@ -3474,18 +3748,41 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let delete_worktree = msg
+                .get("deleteWorktreeFromDisk")
+                .or_else(|| payload.and_then(|p| p.get("deleteWorktreeFromDisk")))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             let now_iso = crate::agent::types::now_iso();
-
-            serde_json::json!({
-                "type": "agent_archived",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "agentId": agent_id,
-                    "archivedAt": now_iso
+            let mgr = get_agent_manager();
+            match mgr.archive_agent(agent_id, &now_iso) {
+                Ok(_) => {
+                    if delete_worktree {
+                        let _ = mgr.remove_agent_worktree(agent_id).await;
+                    }
+                    crate::agent::runner::broadcast_agent_status_update(agent_id);
+                    serde_json::json!({
+                        "type": "agent_archived",
+                        "requestId": request_id,
+                        "payload": {
+                            "requestId": request_id,
+                            "agentId": agent_id,
+                            "archivedAt": now_iso
+                        }
+                    })
                 }
-            })
+                Err(error) => serde_json::json!({
+                    "type": "rpc_error",
+                    "requestId": request_id,
+                    "payload": {
+                        "requestId": request_id,
+                        "requestType": "archive_agent_request",
+                        "error": error,
+                        "code": "archive_failed"
+                    }
+                }),
+            }
         }
         "fetch_recent_provider_sessions_request" => {
             let payload = msg.get("payload");
@@ -3715,6 +4012,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 None
             };
 
+            let mut placement_cache = std::collections::HashMap::new();
             let entries: Vec<serde_json::Value> = page_slice
                 .iter()
                 .map(|rec| {
@@ -3723,22 +4021,14 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                     } else {
                         rec.cwd.clone()
                     };
+                    let project = rpc_helpers::inspect_project_placement(
+                        &cwd,
+                        rec.workspace_id.as_deref(),
+                        &mut placement_cache,
+                    );
                     serde_json::json!({
                         "agent": agent_record_to_snapshot(rec),
-                        "project": {
-                            "projectKey": "local",
-                            "projectName": "Local Project",
-                            "workspaceName": null,
-                            "checkout": {
-                                "cwd": cwd,
-                                "isGit": false,
-                                "currentBranch": null,
-                                "remoteUrl": null,
-                                "worktreeRoot": null,
-                                "isPaseoOwnedWorktree": false,
-                                "mainRepoRoot": null
-                            }
-                        }
+                        "project": project
                     })
                 })
                 .collect();
@@ -4080,13 +4370,18 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let mgr = get_agent_manager();
+            let res = mgr.clear_agent_attention(agent_id);
+            if res.is_ok() {
+                crate::agent::runner::broadcast_agent_status_update(agent_id);
+            }
             serde_json::json!({
                 "type": "clear_agent_attention_response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
                     "agentId": agent_id,
-                    "cleared": true
+                    "cleared": res.is_ok()
                 }
             })
         }
@@ -4134,14 +4429,23 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let mode_id = msg
+                .get("modeId")
+                .or_else(|| payload.and_then(|p| p.get("modeId")))
+                .and_then(|v| v.as_str());
+            let mgr = get_agent_manager();
+            let res = mgr.set_agent_mode(agent_id, mode_id);
+            if res.is_ok() {
+                crate::agent::runner::broadcast_agent_status_update(agent_id);
+            }
             serde_json::json!({
                 "type": "set_agent_mode_response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
                     "agentId": agent_id,
-                    "accepted": true,
-                    "error": null,
+                    "accepted": res.is_ok(),
+                    "error": res.err(),
                     "notice": null
                 }
             })
@@ -4195,14 +4499,29 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let feature_id = msg
+                .get("featureId")
+                .or_else(|| payload.and_then(|p| p.get("featureId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let value = msg
+                .get("value")
+                .or_else(|| payload.and_then(|p| p.get("value")))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let mgr = get_agent_manager();
+            let res = mgr.set_agent_feature(agent_id, feature_id, value);
+            if res.is_ok() {
+                crate::agent::runner::broadcast_agent_status_update(agent_id);
+            }
             serde_json::json!({
                 "type": "set_agent_feature_response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
                     "agentId": agent_id,
-                    "accepted": true,
-                    "error": null,
+                    "accepted": res.is_ok(),
+                    "error": res.err(),
                     "notice": null
                 }
             })
@@ -4252,6 +4571,45 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let mgr = get_agent_manager();
+            if let Some(mut agent) = mgr.get_agent(agent_id) {
+                let mode_id = payload
+                    .and_then(|p| p.get("modeId"))
+                    .or_else(|| msg.get("modeId"))
+                    .and_then(|v| v.as_str());
+                let model = payload
+                    .and_then(|p| p.get("model"))
+                    .or_else(|| msg.get("model"))
+                    .and_then(|v| v.as_str());
+                let thinking = payload
+                    .and_then(|p| p.get("thinkingOptionId"))
+                    .or_else(|| msg.get("thinkingOptionId"))
+                    .and_then(|v| v.as_str());
+                let title = payload
+                    .and_then(|p| p.get("title"))
+                    .or_else(|| msg.get("title"))
+                    .and_then(|v| v.as_str());
+
+                let mut cfg = agent.config.unwrap_or_else(|| serde_json::json!({}));
+                if let Some(obj) = cfg.as_object_mut() {
+                    if let Some(mode) = mode_id {
+                        obj.insert("modeId".to_string(), serde_json::json!(mode));
+                        obj.insert("persona".to_string(), serde_json::json!(mode));
+                    }
+                    if let Some(m) = model {
+                        obj.insert("model".to_string(), serde_json::json!(m));
+                    }
+                    if let Some(t) = thinking {
+                        obj.insert("thinkingOptionId".to_string(), serde_json::json!(t));
+                    }
+                }
+                agent.config = Some(cfg);
+                if let Some(ttl) = title {
+                    agent.title = Some(ttl.to_string());
+                }
+                let _ = mgr.storage().save_record(agent);
+                crate::agent::runner::broadcast_agent_status_update(agent_id);
+            }
             serde_json::json!({
                 "type": "update_agent_response",
                 "requestId": request_id,
@@ -4271,14 +4629,19 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("agentId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let mgr = get_agent_manager();
+            let res = mgr.detach_agent(agent_id);
+            if res.is_ok() {
+                crate::agent::runner::broadcast_agent_status_update(agent_id);
+            }
             serde_json::json!({
                 "type": "agent.detach.response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
                     "agentId": agent_id,
-                    "accepted": true,
-                    "error": null,
+                    "accepted": res.is_ok(),
+                    "error": res.err(),
                     "notice": null
                 }
             })
@@ -4331,59 +4694,34 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             })
         }
         "agent.skills.get_status.request" => {
-            serde_json::json!({
-                "type": "agent.skills.get_status.response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "skills": []
-                }
-            })
+            rpc_helpers::handle_agent_skills_rpc("get_status", msg, &request_id)
         }
         "agent.skills.reconcile.request" => {
-            serde_json::json!({
-                "type": "agent.skills.reconcile.response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "success": true
-                }
-            })
+            rpc_helpers::handle_agent_skills_rpc("reconcile", msg, &request_id)
         }
         "agent.skills.uninstall.request" => {
-            serde_json::json!({
-                "type": "agent.skills.uninstall.response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "success": true
-                }
-            })
+            rpc_helpers::handle_agent_skills_rpc("uninstall", msg, &request_id)
+        }
+        "agent.skills.save_selection.request" => {
+            rpc_helpers::handle_agent_skills_rpc("save_selection", msg, &request_id)
+        }
+        "agent.skills.import_legacy_selection.request" => {
+            rpc_helpers::handle_agent_skills_rpc("import_legacy", msg, &request_id)
         }
         "workspace.label.list.request" => {
-            let payload = msg.get("payload");
-            let sub_id = if msg.get("subscribe").is_some()
-                || payload.and_then(|p| p.get("subscribe")).is_some()
-            {
-                Some(format!("sub-labels-{}", request_id))
-            } else {
-                None
-            };
-            serde_json::json!({
-                "type": "workspace.label.list.response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "subscriptionId": sub_id,
-                    "labels": [],
-                    "sync": {
-                        "mode": "snapshot",
-                        "generation": "gen-1",
-                        "headSeq": 0,
-                        "removals": []
-                    }
-                }
-            })
+            rpc_helpers::handle_workspace_label_list(msg, &request_id)
+        }
+        "workspace.label.assignment.set.request" => {
+            rpc_helpers::handle_workspace_label_assignment_set(msg, &request_id)
+        }
+        "workspace.label.update.request" => {
+            rpc_helpers::handle_workspace_label_update(msg, &request_id)
+        }
+        "workspace.label.delete.request" => {
+            rpc_helpers::handle_workspace_label_delete(msg, &request_id)
+        }
+        "workspace.label.delete.inspect.request" => {
+            rpc_helpers::handle_workspace_label_delete_inspect(msg, &request_id)
         }
         "workspace.setup.subscribe.request" => {
             let payload = msg.get("payload");
@@ -4392,16 +4730,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            serde_json::json!({
-                "type": "workspace.setup.subscribe.response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "subscriptionId": format!("sub-ws-setup-{}", request_id),
-                    "workspaceId": ws_id,
-                    "snapshot": null
-                }
-            })
+            rpc_helpers::handle_workspace_setup_subscribe(ws_id, &request_id)
         }
         "workspace_setup_status_request" | "workspace.setup.status.request" => {
             let payload = msg.get("payload");
@@ -4410,16 +4739,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            serde_json::json!({
-                "type": "workspace_setup_status_response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "workspaceId": ws_id,
-                    "status": null,
-                    "step": null
-                }
-            })
+            rpc_helpers::handle_workspace_setup_status(ws_id, &request_id)
         }
         "agent.timeline.set_subscription.request" => {
             let payload = msg.get("payload");
@@ -4439,13 +4759,25 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             })
         }
         "creation.subscribe.request" => {
+            let payload = msg.get("payload");
+            let key = msg
+                .get("idempotencyKey")
+                .or_else(|| payload.and_then(|p| p.get("idempotencyKey")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let snapshot = CREATION_SNAPSHOTS
+                .get()
+                .and_then(|m| m.read().ok())
+                .and_then(|m| m.get(key).cloned())
+                .unwrap_or(serde_json::Value::Null);
+            let sub_id = register_subscription(format!("sub-create-{}", request_id), "creation");
             serde_json::json!({
                 "type": "creation.subscribe.response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
-                    "subscriptionId": format!("sub-create-{}", request_id),
-                    "snapshot": null,
+                    "subscriptionId": sub_id,
+                    "snapshot": snapshot,
                     "error": null
                 }
             })
@@ -4457,17 +4789,16 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
-            serde_json::json!({
-                "type": "subscribe_checkout_diff_response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "subscriptionId": format!("sub-diff-{}", request_id),
-                    "cwd": cwd_str,
-                    "files": [],
-                    "error": null
-                }
-            })
+            rpc_helpers::handle_subscribe_checkout_diff(cwd_str, &request_id)
+        }
+        "checkout.diff.get.request" => {
+            let payload = msg.get("payload");
+            let cwd_str = msg
+                .get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            rpc_helpers::handle_checkout_diff_get(cwd_str, &request_id)
         }
         "unsubscribe_checkout_diff_request" => {
             serde_json::json!({
@@ -4538,95 +4869,45 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("provider")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("codex");
-            serde_json::json!({
-                "type": "provider_diagnostic_response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "provider": provider,
-                    "diagnostic": "Provider ready"
-                }
-            })
+            rpc_helpers::handle_provider_diagnostic(provider, &request_id)
         }
         "browser.host.register.request" => {
+            let sub_id = register_subscription(format!("sub-browser-{}", request_id), "browser_host");
+            let entry = msg.get("payload").cloned().unwrap_or_else(|| msg.clone());
+            let map = BROWSER_HOSTS.get_or_init(|| std::sync::RwLock::new(Default::default()));
+            {
+                let mut guard = map.write().unwrap_or_else(|e| e.into_inner());
+                if guard.len() > 64 {
+                    guard.clear();
+                }
+                guard.insert(sub_id.clone(), entry);
+            }
             serde_json::json!({
                 "type": "browser.host.register.response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
-                    "subscriptionId": format!("sub-browser-{}", request_id)
+                    "subscriptionId": sub_id
                 }
             })
         }
-        "get_daemon_config_request" => {
-            let store = crate::kernel::config_store::get_config_store();
-            let cfg = store.get_config();
+        "browser.automation.execute.request" => {
+            let payload = crate::browser_automation::execute_command_direct(msg).await;
             serde_json::json!({
-                "type": "get_daemon_config_response",
+                "type": "browser.automation.execute.response",
                 "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "config": {
-                        "mcp": {
-                            "enabled": cfg.mcp_enabled,
-                            "injectIntoAgents": false
-                        },
-                        "relay": {
-                            "enabled": cfg.relay_enabled,
-                            "endpoint": cfg.relay_endpoint
-                        },
-                        "providers": {},
-                        "autoArchiveAfterMerge": false,
-                        "enableTerminalAgentHooks": false
-                    }
-                }
+                "payload": payload
             })
         }
-        "daemon.get_status.request" => {
-            let server_id = crate::get_or_create_server_id();
-            serde_json::json!({
-                "type": "daemon.get_status.response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "serverId": server_id,
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "pid": std::process::id(),
-                    "nodePath": "rust-embedded",
-                    "listen": "127.0.0.1:6767",
-                    "providers": []
-                }
-            })
-        }
-        "plugin.catalog.get.request" => {
-            serde_json::json!({
-                "type": "plugin.catalog.get.response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "plugins": []
-                }
-            })
-        }
-        "plugin.list.request" => {
-            serde_json::json!({
-                "type": "plugin.list.response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "plugins": []
-                }
-            })
-        }
+        "get_daemon_config_request" => rpc_helpers::handle_get_daemon_config(&request_id),
+        "set_daemon_config_request" => rpc_helpers::handle_set_daemon_config(msg, &request_id),
+        "daemon.get_status.request" => rpc_helpers::handle_daemon_get_status(&request_id),
+        "plugin.catalog.get.request" => rpc_helpers::handle_plugin_list_or_catalog(true, &request_id),
+        "plugin.list.request" => rpc_helpers::handle_plugin_list_or_catalog(false, &request_id),
         "diagnostics.request" => {
-            serde_json::json!({
-                "type": "diagnostics.response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "diagnostic": "ok"
-                }
-            })
+            let agent_count = get_agent_manager().list_agents().len();
+            let speech_loaded = get_speech_engine().read().await.is_model_loaded();
+            rpc_helpers::handle_diagnostics_request(agent_count, speech_loaded, &request_id)
         }
         "workspace.script.list.request" => {
             let payload = msg.get("payload");
@@ -4635,16 +4916,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            serde_json::json!({
-                "type": "workspace.script.list.response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "workspaceId": ws_id,
-                    "scripts": [],
-                    "error": null
-                }
-            })
+            rpc_helpers::handle_workspace_script_list(ws_id, &request_id)
         }
         "checkout_status_request" => {
             let payload = msg.get("payload");
@@ -4653,26 +4925,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
-            serde_json::json!({
-                "type": "checkout_status_response",
-                "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "cwd": cwd_str,
-                    "error": null,
-                    "isGit": false,
-                    "isPaseoOwnedWorktree": false,
-                    "repoRoot": null,
-                    "currentBranch": null,
-                    "isDirty": null,
-                    "baseRef": null,
-                    "aheadBehind": null,
-                    "aheadOfOrigin": null,
-                    "behindOfOrigin": null,
-                    "hasRemote": false,
-                    "remoteUrl": null
-                }
-            })
+            rpc_helpers::handle_checkout_status(cwd_str, &request_id)
         }
         "fs.file.subscribe.request" => {
             let payload = msg.get("payload");
@@ -4686,19 +4939,11 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("path")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            serde_json::json!({
-                "type": "fs.file.subscribe.response",
-                "requestId": request_id,
-                "payload": {
-                    "subscriptionId": format!("sub-file-{}", request_id),
-                    "initial": {
-                        "status": "missing",
-                        "cwd": cwd_str,
-                        "path": path_str
-                    },
-                    "requestId": request_id
-                }
-            })
+            let sub_opt = msg
+                .get("subscriptionId")
+                .or_else(|| payload.and_then(|p| p.get("subscriptionId")))
+                .and_then(|v| v.as_str());
+            rpc_helpers::handle_file_subscribe(cwd_str, path_str, sub_opt, &request_id)
         }
         "fs.file.unsubscribe.request" => {
             let payload = msg.get("payload");
@@ -4918,7 +5163,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                         }
                     })
                 } else {
-                    match std::fs::read(&full_path) {
+                    match crate::kernel::vfs::get_global_shadow_vfs().read_file_cow(&full_path) {
                         Ok(bytes) => {
                             let size = bytes.len() as u64;
                             let modified_at = meta
@@ -5053,6 +5298,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             let cwd = std::path::Path::new(cwd_str);
             match crate::kernel::file_service::write_file(cwd, rel_path, content_str.as_bytes()) {
                 Ok(()) => {
+                    let _ = crate::kernel::vfs::get_global_shadow_vfs().remove_virtual(&cwd.join(rel_path));
                     serde_json::json!({
                         "type": "fs.file.write.response",
                         "requestId": request_id,
@@ -5379,7 +5625,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
             if msg_type.starts_with("crdt/")
                 || msg_type.starts_with("ioring/")
                 || msg_type.starts_with("speech/")
-                || msg_type.starts_with("shm/") =>
+                || msg_type.starts_with("shm/")
+                || msg_type.starts_with("vfs/") =>
         {
             let env = RpcEnvelope::new(
                 request_id,
@@ -5423,31 +5670,356 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 });
                 let _ = push_tx.send(serde_json::to_string(&update).unwrap_or_default());
             });
+            let sub_id = register_subscription(format!("sub-providers-{}", request_id), "providers");
             serde_json::json!({
                 "type": "subscribe_providers_response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
-                    "subscriptionId": format!("sub-providers-{}", request_id),
+                    "subscriptionId": sub_id,
                     "error": null
                 }
             })
         }
-        msg_type if msg_type.contains("subscribe") || msg_type.contains("set_subscription") => {
-            let resp_type = if msg_type.ends_with(".request") {
-                format!("{}.response", &msg_type[..msg_type.len() - 8])
-            } else if msg_type.ends_with("_request") {
-                format!("{}_response", &msg_type[..msg_type.len() - 8])
+        "workspace.setup.run.request" => {
+            let ws_id = rpc_helpers::msg_str(msg, "workspaceId");
+            rpc_helpers::handle_workspace_setup_run(ws_id, &request_id)
+        }
+        "checkout.refresh.request" => {
+            let cwd_str = rpc_helpers::msg_str(msg, "cwd");
+            rpc_helpers::handle_checkout_status(cwd_str, &request_id)
+        }
+        "checkout_commit_request" => rpc_helpers::handle_checkout_commit(msg, &request_id),
+        "checkout_pull_request" => rpc_helpers::handle_checkout_pull(msg, &request_id),
+        "checkout_push_request" => rpc_helpers::handle_checkout_push(msg, &request_id),
+        "checkout_merge_request" => rpc_helpers::handle_checkout_merge(msg, &request_id, false),
+        "checkout_merge_from_base_request" => {
+            rpc_helpers::handle_checkout_merge(msg, &request_id, true)
+        }
+        "checkout.discard_changes.request" => {
+            rpc_helpers::handle_checkout_discard_changes(msg, &request_id)
+        }
+        "checkout_switch_branch_request" => {
+            rpc_helpers::handle_checkout_switch_branch(msg, &request_id)
+        }
+        "checkout.rename_branch.request" => {
+            rpc_helpers::handle_checkout_rename_branch(msg, &request_id)
+        }
+        "checkout.commits.list.request" => {
+            rpc_helpers::handle_checkout_commits_list(msg, &request_id)
+        }
+        "checkout.commits.file_diff.request" => {
+            rpc_helpers::handle_checkout_commit_file_diff(msg, &request_id)
+        }
+        "stash_save_request" => rpc_helpers::handle_stash_save(msg, &request_id),
+        "stash_pop_request" => rpc_helpers::handle_stash_pop(msg, &request_id),
+        "stash_list_request" => rpc_helpers::handle_stash_list(msg, &request_id),
+        "validate_branch_request" => rpc_helpers::handle_validate_branch(msg, &request_id),
+        "branch_suggestions_request" => rpc_helpers::handle_branch_suggestions(msg, &request_id),
+        "checkout_pr_status_request" => rpc_helpers::handle_checkout_pr_status(msg, &request_id),
+        "checkout_pr_create_request" => rpc_helpers::handle_checkout_pr_create(msg, &request_id),
+        "checkout_pr_merge_request" => rpc_helpers::handle_checkout_pr_merge(msg, &request_id),
+        "archive_workspace_request" => {
+            rpc_helpers::handle_workspace_meta_mutation("archive", msg, &request_id)
+        }
+        "workspace.title.set.request" => {
+            rpc_helpers::handle_workspace_meta_mutation("title", msg, &request_id)
+        }
+        "workspace.pin.set.request" => {
+            rpc_helpers::handle_workspace_meta_mutation("pin", msg, &request_id)
+        }
+        "workspace.clear_attention.request" => {
+            rpc_helpers::handle_workspace_meta_mutation("clear_attention", msg, &request_id)
+        }
+        "workspace.mark_unread.request" => {
+            rpc_helpers::handle_workspace_meta_mutation("mark_unread", msg, &request_id)
+        }
+        "workspace.base_branch.set.request" => {
+            rpc_helpers::handle_workspace_meta_mutation("base_branch", msg, &request_id)
+        }
+        "workspace.metadata.update.request" => {
+            rpc_helpers::handle_workspace_meta_mutation("metadata", msg, &request_id)
+        }
+        "project.rename.request" => rpc_helpers::handle_project_rename(msg, &request_id),
+        "read_project_config_request" => {
+            rpc_helpers::handle_read_project_config(msg, &request_id)
+        }
+        "write_project_config_request" => {
+            rpc_helpers::handle_write_project_config(msg, &request_id)
+        }
+        "project.suggestions.request" => {
+            rpc_helpers::handle_directory_suggestions(msg, &request_id, true)
+        }
+        "refresh_agent_request" => {
+            let agent_id = rpc_helpers::msg_str(msg, "agentId");
+            let mgr = get_agent_manager();
+            if let Some(rec) = mgr.get_agent(agent_id) {
+                crate::agent::runner::broadcast_agent_status_update(agent_id);
+                let mut cache = std::collections::HashMap::new();
+                let cwd = if rec.cwd.is_empty() { "." } else { &rec.cwd };
+                let project = rpc_helpers::inspect_project_placement(
+                    cwd,
+                    rec.workspace_id.as_deref(),
+                    &mut cache,
+                );
+                serde_json::json!({
+                    "type": "refresh_agent_response",
+                    "requestId": request_id,
+                    "payload": {
+                        "requestId": request_id,
+                        "agent": agent_record_to_snapshot(&rec),
+                        "project": project,
+                        "error": null
+                    }
+                })
             } else {
-                format!("{}_response", msg_type)
-            };
+                serde_json::json!({
+                    "type": "refresh_agent_response",
+                    "requestId": request_id,
+                    "payload": {
+                        "requestId": request_id,
+                        "agent": null,
+                        "error": format!("Agent {agent_id} not found")
+                    }
+                })
+            }
+        }
+        "abort_request" => {
+            let agent_id = rpc_helpers::msg_str(msg, "agentId");
+            let res = get_agent_manager().cancel_agent(agent_id);
             serde_json::json!({
-                "type": resp_type,
+                "type": "abort_response",
                 "requestId": request_id,
                 "payload": {
                     "requestId": request_id,
-                    "subscriptionId": format!("sub-gen-{}", request_id),
+                    "agentId": agent_id,
+                    "accepted": res.is_ok(),
+                    "error": res.err()
+                }
+            })
+        }
+        "wait_for_finish_request" => {
+            let agent_id = rpc_helpers::msg_str(msg, "agentId").to_string();
+            let timeout_ms = msg
+                .get("timeoutMs")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("timeoutMs")))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(30_000)
+                .min(120_000);
+            let mgr = get_agent_manager();
+            let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+            loop {
+                let is_running = mgr
+                    .get_agent(&agent_id)
+                    .is_some_and(|r| r.last_status == crate::agent::types::AgentStatus::Running);
+                if !is_running || Instant::now() >= deadline {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            let final_rec = mgr.get_agent(&agent_id);
+            serde_json::json!({
+                "type": "wait_for_finish_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "agentId": agent_id,
+                    "agent": final_rec.as_ref().map(agent_record_to_snapshot),
+                    "error": if final_rec.is_none() { serde_json::json!(format!("Agent {agent_id} not found")) } else { serde_json::Value::Null }
+                }
+            })
+        }
+        "agent.metadata.update.request" => {
+            let agent_id = rpc_helpers::msg_str(msg, "agentId");
+            let patch = msg
+                .get("metadata")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("metadata")))
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            let res = get_agent_manager().update_agent_metadata(agent_id, patch);
+            if res.is_ok() {
+                crate::agent::runner::broadcast_agent_status_update(agent_id);
+            }
+            let metadata = res
+                .as_ref()
+                .ok()
+                .and_then(|r| r.config.as_ref())
+                .and_then(|c| c.get("metadata"))
+                .cloned();
+            serde_json::json!({
+                "type": "agent.metadata.update.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "agentId": agent_id,
+                    "accepted": res.is_ok(),
+                    "metadata": metadata,
+                    "error": res.err()
+                }
+            })
+        }
+        "agent.timeline.search.request" => {
+            let agent_id = rpc_helpers::msg_str(msg, "agentId");
+            let query = rpc_helpers::msg_str(msg, "query").to_ascii_lowercase();
+            let mgr = get_agent_manager();
+            let locations: Vec<serde_json::Value> = mgr
+                .get_timeline(agent_id)
+                .into_iter()
+                .enumerate()
+                .filter_map(|(seq, item)| {
+                    let (role, text) = match &item {
+                        crate::agent::types::AgentTimelineItem::UserMessage { text, .. } => {
+                            ("user", text.as_str())
+                        }
+                        crate::agent::types::AgentTimelineItem::AssistantMessage { text, .. } => {
+                            ("assistant", text.as_str())
+                        }
+                        _ => return None,
+                    };
+                    if query.is_empty() {
+                        return None;
+                    }
+                    let count = text.to_ascii_lowercase().matches(&query).count();
+                    (count > 0).then(|| serde_json::json!({ "seq": seq, "role": role, "count": count }))
+                })
+                .collect();
+            serde_json::json!({
+                "type": "agent.timeline.search.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "agentId": agent_id,
+                    "epoch": "v1",
+                    "locations": locations,
+                    "nextCursor": null,
                     "error": null
+                }
+            })
+        }
+        "agent.timeline.list_prompts.request" => {
+            let agent_id = rpc_helpers::msg_str(msg, "agentId");
+            let mgr = get_agent_manager();
+            let prompts: Vec<serde_json::Value> = mgr
+                .get_timeline(agent_id)
+                .into_iter()
+                .enumerate()
+                .filter_map(|(seq, item)| match item {
+                    crate::agent::types::AgentTimelineItem::UserMessage {
+                        text, timestamp, ..
+                    } => {
+                        let preview: String = text.trim().chars().take(120).collect();
+                        Some(serde_json::json!({
+                            "seq": seq,
+                            "timestamp": timestamp,
+                            "preview": preview
+                        }))
+                    }
+                    _ => None,
+                })
+                .collect();
+            serde_json::json!({
+                "type": "agent.timeline.list_prompts.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "agentId": agent_id,
+                    "epoch": "v1",
+                    "prompts": prompts,
+                    "error": null
+                }
+            })
+        }
+        "agent.timeline.append.request" => {
+            let agent_id = rpc_helpers::msg_str(msg, "agentId");
+            let text = rpc_helpers::msg_str(msg, "text");
+            let role = rpc_helpers::msg_str(msg, "role");
+            let mgr = get_agent_manager();
+            let res = if role == "thinking" {
+                mgr.append_thinking(agent_id, text)
+            } else {
+                mgr.append_assistant_message(agent_id, text)
+            };
+            serde_json::json!({
+                "type": "agent.timeline.append.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "agentId": agent_id,
+                    "accepted": res.is_ok(),
+                    "error": res.err()
+                }
+            })
+        }
+        "list_provider_models_request" => {
+            let provider = rpc_helpers::msg_str(msg, "provider");
+            let cwd = rpc_helpers::msg_str(msg, "cwd");
+            let cwd_eff = if cwd.trim().is_empty() { "." } else { cwd };
+            let entries = get_provider_snapshot_entries(cwd_eff).await;
+            let models = entries
+                .into_iter()
+                .find(|e| e.get("provider").and_then(|p| p.as_str()) == Some(provider))
+                .and_then(|e| e.get("models").cloned())
+                .unwrap_or_else(|| serde_json::json!([]));
+            serde_json::json!({
+                "type": "list_provider_models_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "provider": provider,
+                    "models": models,
+                    "fetchedAt": crate::agent::types::now_iso(),
+                    "error": null
+                }
+            })
+        }
+        "list_provider_modes_request" => {
+            let provider = rpc_helpers::msg_str(msg, "provider");
+            serde_json::json!({
+                "type": "list_provider_modes_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "provider": provider,
+                    "modes": default_available_modes(),
+                    "fetchedAt": crate::agent::types::now_iso(),
+                    "error": null
+                }
+            })
+        }
+        "list_provider_features_request" => {
+            rpc_helpers::handle_list_provider_features(msg, &request_id)
+        }
+        "provider.controls.list.request" => {
+            rpc_helpers::handle_provider_controls_list(msg, &request_id)
+        }
+        "daemon.get_pairing_offer.request" => {
+            rpc_helpers::handle_daemon_get_pairing_offer(&request_id)
+        }
+        "dictation_stream_start" => {
+            rpc_helpers::handle_dictation_stream_start(msg)
+        }
+        "dictation_stream_chunk" => {
+            rpc_helpers::handle_dictation_stream_chunk(msg)
+        }
+        "dictation_stream_finish" => {
+            rpc_helpers::handle_dictation_stream_finish(msg).await
+        }
+        "dictation_stream_cancel" => {
+            rpc_helpers::handle_dictation_stream_cancel(msg)
+        }
+        "set_voice_mode" => {
+            rpc_helpers::handle_set_voice_mode(msg, &request_id)
+        }
+        "voice_audio_chunk" => {
+            rpc_helpers::handle_voice_audio_chunk(msg, &request_id).await
+        }
+        "audio_played" => {
+            serde_json::json!({
+                "type": "status",
+                "requestId": request_id,
+                "payload": {
+                    "status": "acknowledged",
+                    "requestId": request_id
                 }
             })
         }
@@ -6708,23 +7280,14 @@ pub(crate) async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
     } else {
         cwd
     };
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::process::Command;
 
     let discovery = async {
-        let mut cmd = Command::new(&binary);
-        cmd.arg("app-server")
-            .current_dir(safe_cwd)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true);
-        #[cfg(windows)]
-        cmd.creation_flags(0x08000000);
-        let mut child = cmd.spawn().ok()?;
-        let mut stdin = child.stdin.take()?;
-        let stdout = child.stdout.take()?;
-        let mut lines = BufReader::new(stdout).lines();
+        let mut client = crate::agent::providers::codex::CodexAppServerClient::spawn_with_bin(
+            &binary,
+            std::path::Path::new(safe_cwd),
+        )
+        .await
+        .ok()?;
 
         let initialize = serde_json::json!({
             "jsonrpc": "2.0",
@@ -6738,22 +7301,15 @@ pub(crate) async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
                 }
             }
         });
-        if stdin
-            .write_all(format!("{initialize}\n").as_bytes())
-            .await
-            .is_err()
-        {
-            let _ = child.kill().await;
+        if client.send_json(&initialize).await.is_err() {
+            let _ = client.kill().await;
             return None;
         }
-        let _ = stdin.flush().await;
 
         let initialized = tokio::time::timeout(Duration::from_secs(4), async {
-            while let Ok(Some(line)) = lines.next_line().await {
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
-                    if value.get("id") == Some(&serde_json::json!(1)) {
-                        return Some(());
-                    }
+            while let Ok(Some(value)) = client.read_json().await {
+                if value.get("id") == Some(&serde_json::json!(1)) {
+                    return Some(());
                 }
             }
             None
@@ -6764,7 +7320,7 @@ pub(crate) async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
         .is_some();
 
         if !initialized {
-            let _ = child.kill().await;
+            let _ = client.kill().await;
             return None;
         }
 
@@ -6779,22 +7335,17 @@ pub(crate) async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
             "method": "model/list",
             "params": {}
         });
-        if stdin
-            .write_all(format!("{notification}\n{request}\n").as_bytes())
-            .await
-            .is_err()
+        if client.send_json(&notification).await.is_err()
+            || client.send_json(&request).await.is_err()
         {
-            let _ = child.kill().await;
+            let _ = client.kill().await;
             return None;
         }
-        let _ = stdin.flush().await;
 
         let response = tokio::time::timeout(Duration::from_secs(4), async {
-            while let Ok(Some(line)) = lines.next_line().await {
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
-                    if value.get("id") == Some(&serde_json::json!(2)) {
-                        return Some(value);
-                    }
+            while let Ok(Some(value)) = client.read_json().await {
+                if value.get("id") == Some(&serde_json::json!(2)) {
+                    return Some(value);
                 }
             }
             None
@@ -6802,7 +7353,7 @@ pub(crate) async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
         .await
         .ok()
         .flatten();
-        let _ = child.kill().await;
+        let _ = client.kill().await;
         Some(
             response
                 .map(|value| codex_models_from_response(&value))

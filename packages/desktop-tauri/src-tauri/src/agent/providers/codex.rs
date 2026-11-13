@@ -11,14 +11,20 @@ pub struct CodexAppServerClient {
 }
 
 impl CodexAppServerClient {
-    /// Spawns the codex app-server child process.
+    /// Spawns the codex app-server child process using default `codex` binary.
     pub async fn spawn(cwd: &Path) -> Result<Self, String> {
-        let mut cmd = Command::new("codex");
+        Self::spawn_with_bin(Path::new("codex"), cwd).await
+    }
+
+    /// Spawns the codex app-server child process with an explicit resolved binary path.
+    pub async fn spawn_with_bin(bin: &Path, cwd: &Path) -> Result<Self, String> {
+        let mut cmd = Command::new(bin);
         cmd.arg("app-server")
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
         #[cfg(windows)]
         cmd.creation_flags(0x08000000);
 

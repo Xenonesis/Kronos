@@ -148,3 +148,12 @@ impl ShadowVfs {
         Ok(())
     }
 }
+
+static GLOBAL_SHADOW_VFS: std::sync::OnceLock<Arc<ShadowVfs>> = std::sync::OnceLock::new();
+
+/// Returns the shared process-wide Copy-on-Write ShadowVfs instance.
+pub fn get_global_shadow_vfs() -> Arc<ShadowVfs> {
+    GLOBAL_SHADOW_VFS
+        .get_or_init(|| Arc::new(ShadowVfs::new()))
+        .clone()
+}

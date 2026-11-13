@@ -41,6 +41,10 @@ impl Default for SpeechAudioConfig {
 }
 
 enum SpeechEngineBackend {
+    Unavailable {
+        reason: String,
+    },
+    #[cfg(test)]
     Mock {
         mock_transcript: Option<String>,
     },
@@ -64,7 +68,17 @@ impl std::fmt::Debug for SpeechEngine {
 }
 
 impl SpeechEngine {
-    /// Creates a mock SpeechEngine for test environments or offline fallbacks.
+    /// Creates an engine in Unavailable state when no Whisper model is present on disk.
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        Self {
+            backend: Arc::new(SpeechEngineBackend::Unavailable {
+                reason: reason.into(),
+            }),
+        }
+    }
+
+    /// Creates a mock SpeechEngine strictly for unit tests.
+    #[cfg(test)]
     pub fn new_mock() -> Self {
         Self {
             backend: Arc::new(SpeechEngineBackend::Mock {
@@ -73,7 +87,8 @@ impl SpeechEngine {
         }
     }
 
-    /// Creates a mock SpeechEngine with a customized default transcription.
+    /// Creates a mock SpeechEngine with a customized default transcription strictly for unit tests.
+    #[cfg(test)]
     pub fn new_mock_with_transcript(transcript: impl Into<String>) -> Self {
         Self {
             backend: Arc::new(SpeechEngineBackend::Mock {
@@ -82,11 +97,13 @@ impl SpeechEngine {
         }
     }
 
-    /// Creates a SpeechEngine. If model_path is None, falls back to clean mock mode.
+    /// Creates a SpeechEngine. If model_path is None, enters Unavailable mode without returning fake transcripts.
     /// If model_path is provided, loads the Whisper model context from disk.
     pub fn new(model_path: Option<&Path>) -> Result<Self, String> {
         match model_path {
-            None => Ok(Self::new_mock()),
+            None => Ok(Self::unavailable(
+                "No local Whisper GGML model found in ~/.paseo/models or ~/.kronos/models (expected ggml-*.bin)",
+            )),
             Some(_path) => {
                 #[cfg(feature = "local-whisper")]
                 {
@@ -273,6 +290,8 @@ impl SpeechEngine {
         }
 
         match &*self.backend {
+            SpeechEngineBackend::Unavailable { reason } => Err(reason.clone()),
+            #[cfg(test)]
             SpeechEngineBackend::Mock { mock_transcript } => {
                 if Self::is_silence(samples, 1e-4) {
                     Ok(String::new())

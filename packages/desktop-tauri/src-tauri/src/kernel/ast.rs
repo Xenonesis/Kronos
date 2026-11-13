@@ -145,6 +145,13 @@ impl AstEngine {
         let language = match Self::get_language_for_ext(ext) {
             Some(lang) => lang,
             None => {
+                if let Some(poly) = parse_polyglot_analysis(source, ext) {
+                    return Ok(AstSummary {
+                        root_kind: poly.root_kind,
+                        node_count: poly.node_count,
+                        declarations: poly.declarations,
+                    });
+                }
                 return Ok(AstSummary {
                     root_kind: "unsupported".to_string(),
                     node_count: 0,
@@ -180,6 +187,9 @@ impl AstEngine {
         let language = match Self::get_language_for_ext(ext) {
             Some(lang) => lang,
             None => {
+                if let Some(poly) = parse_polyglot_analysis(source, ext) {
+                    return Ok(poly);
+                }
                 return Ok(AstAnalysisResult {
                     root_kind: "unsupported".to_string(),
                     node_count: 0,
@@ -939,5 +949,285 @@ fn collect_names_from_pattern(pattern_node: Node, source_bytes: &[u8], declarati
                 }
             }
         }
+    }
+}
+
+fn line_range(line_idx: usize, offset: usize, len: usize) -> SourceRange {
+    let line = line_idx + 1;
+    SourceRange {
+        start_line: line,
+        start_col: 1,
+        end_line: line,
+        end_col: len.max(1),
+        start_byte: offset,
+        end_byte: offset + len,
+    }
+}
+
+fn extract_ident_after(s: &str, keyword: &str) -> Option<String> {
+    let after = s.strip_prefix(keyword)?.trim_start();
+    let ident: String = after
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+    if ident.is_empty() {
+        None
+    } else {
+        Some(ident)
+    }
+}
+
+fn parse_polyglot_analysis(source: &str, ext: &str) -> Option<AstAnalysisResult> {
+    let clean = ext.trim_start_matches('.').to_lowercase();
+    let root_kind = match clean.as_str() {
+        "rs" => "rust_source_file",
+        "py" => "python_module",
+        "go" => "go_source_file",
+        "css" | "scss" => "css_stylesheet",
+        "html" | "htm" => "html_document",
+        _ => return None,
+    };
+
+    let mut declarations = Vec::new();
+    let mut symbols = Vec::new();
+    let mut imports = Vec::new();
+    let mut offset = 0usize;
+    let lines: Vec<&str> = source.lines().collect();
+
+    for (idx, raw_line) in lines.iter().enumerate() {
+        let line_len = raw_line.len();
+        let trimmed = raw_line.trim();
+        let range = line_range(idx, offset, line_len);
+        offset += line_len + 1;
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        match clean.as_str() {
+            "rs" => {
+                if trimmed.starts_with("use ") || trimmed.starts_with("pub use ") {
+                    let src = trimmed
+                        .trim_start_matches("pub ")
+                        .trim_start_matches("use ")
+                        .trim_end_matches(';')
+                        .trim()
+                        .to_string();
+                    imports.push(AstImport {
+                        source: src,
+                        specifiers: Vec::new(),
+                        is_default: false,
+                        is_type_only: false,
+                        range,
+                    });
+                    continue;
+                }
+                let exported = trimmed.starts_with("pub ");
+                let body = trimmed
+                    .trim_start_matches("pub(crate) ")
+                    .trim_start_matches("pub(super) ")
+                    .trim_start_matches("pub ")
+                    .trim_start_matches("async ");
+                let (kind, kw) = if body.starts_with("fn ") {
+                    (
+                        if trimmed.contains("async fn ") {
+                            AstSymbolKind::AsyncFunction
+                        } else {
+                            AstSymbolKind::Function
+                        },
+                        "fn ",
+                    )
+                } else if body.starts_with("struct ") {
+                    (AstSymbolKind::Class, "struct ")
+                } else if body.starts_with("enum ") {
+                    (AstSymbolKind::Enum, "enum ")
+                } else if body.starts_with("trait ") {
+                    (AstSymbolKind::Interface, "trait ")
+                } else if body.starts_with("type ") {
+                    (AstSymbolKind::TypeAlias, "type ")
+                } else if body.starts_with("const ") {
+                    (AstSymbolKind::Constant, "const ")
+                } else {
+                    continue;
+                };
+                if let Some(name) = extract_ident_after(body, kw) {
+                    declarations.push(name.clone());
+                    symbols.push(AstSymbol {
+                        name,
+                        kind,
+                        range,
+                        exported,
+                        signature: Some(trimmed.to_string()),
+                        doc_comment: None,
+                        children: Vec::new(),
+                    });
+                }
+            }
+            "py" => {
+                if trimmed.starts_with("import ") || trimmed.starts_with("from ") {
+                    imports.push(AstImport {
+                        source: trimmed.to_string(),
+                        specifiers: Vec::new(),
+                        is_default: false,
+                        is_type_only: false,
+                        range,
+                    });
+                    continue;
+                }
+                let body = trimmed.trim_start_matches("async ");
+                let (kind, kw) = if body.starts_with("def ") {
+                    (
+                        if trimmed.starts_with("async def ") {
+                            AstSymbolKind::AsyncFunction
+                        } else {
+                            AstSymbolKind::Function
+                        },
+                        "def ",
+                    )
+                } else if body.starts_with("class ") {
+                    (AstSymbolKind::Class, "class ")
+                } else {
+                    continue;
+                };
+                if let Some(name) = extract_ident_after(body, kw) {
+                    let exported = !name.starts_with('_');
+                    declarations.push(name.clone());
+                    symbols.push(AstSymbol {
+                        name,
+                        kind,
+                        range,
+                        exported,
+                        signature: Some(trimmed.to_string()),
+                        doc_comment: None,
+                        children: Vec::new(),
+                    });
+                }
+            }
+            "go" => {
+                if trimmed.starts_with("import ") {
+                    let src = trimmed
+                        .trim_start_matches("import ")
+                        .trim_matches('"')
+                        .to_string();
+                    imports.push(AstImport {
+                        source: src,
+                        specifiers: Vec::new(),
+                        is_default: false,
+                        is_type_only: false,
+                        range,
+                    });
+                    continue;
+                }
+                if trimmed.starts_with("func ") {
+                    let after = trimmed.trim_start_matches("func ").trim_start();
+                    let fn_part = if let Some(close) = after.strip_prefix('(').and_then(|s| s.find(')')) {
+                        after[close + 2..].trim_start()
+                    } else {
+                        after
+                    };
+                    let name: String = fn_part
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    if !name.is_empty() {
+                        let exported = name.chars().next().is_some_and(|c| c.is_uppercase());
+                        declarations.push(name.clone());
+                        symbols.push(AstSymbol {
+                            name,
+                            kind: AstSymbolKind::Function,
+                            range,
+                            exported,
+                            signature: Some(trimmed.to_string()),
+                            doc_comment: None,
+                            children: Vec::new(),
+                        });
+                    }
+                } else if trimmed.starts_with("type ") {
+                    if let Some(name) = extract_ident_after(trimmed, "type ") {
+                        let exported = name.chars().next().is_some_and(|c| c.is_uppercase());
+                        declarations.push(name.clone());
+                        symbols.push(AstSymbol {
+                            name,
+                            kind: AstSymbolKind::Interface,
+                            range,
+                            exported,
+                            signature: Some(trimmed.to_string()),
+                            doc_comment: None,
+                            children: Vec::new(),
+                        });
+                    }
+                }
+            }
+            "css" | "scss" => {
+                if trimmed.ends_with('{') && !trimmed.starts_with('@') {
+                    let selector = trimmed.trim_end_matches('{').trim().to_string();
+                    if !selector.is_empty() {
+                        declarations.push(selector.clone());
+                        symbols.push(AstSymbol {
+                            name: selector,
+                            kind: AstSymbolKind::Property,
+                            range,
+                            exported: true,
+                            signature: None,
+                            doc_comment: None,
+                            children: Vec::new(),
+                        });
+                    }
+                }
+            }
+            "html" | "htm" => {
+                if let Some(id_pos) = trimmed.find("id=\"") {
+                    let rest = &trimmed[id_pos + 4..];
+                    if let Some(end_q) = rest.find('"') {
+                        let id_name = rest[..end_q].to_string();
+                        if !id_name.is_empty() {
+                            declarations.push(id_name.clone());
+                            symbols.push(AstSymbol {
+                                name: id_name,
+                                kind: AstSymbolKind::Variable,
+                                range,
+                                exported: true,
+                                signature: Some(trimmed.to_string()),
+                                doc_comment: None,
+                                children: Vec::new(),
+                            });
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Some(AstAnalysisResult {
+        root_kind: root_kind.to_string(),
+        node_count: lines.len().max(1),
+        declarations,
+        symbols,
+        imports,
+        errors: Vec::new(),
+    })
+}
+
+#[cfg(test)]
+mod polyglot_tests {
+    use super::*;
+
+    #[test]
+    fn parses_rust_python_and_go_symbols() {
+        let engine = AstEngine::new();
+        let rs = engine
+            .analyze("use std::io;\npub struct Server {\n  port: u16\n}\npub async fn start() {}\n", "rs")
+            .expect("rust ast");
+        assert_eq!(rs.root_kind, "rust_source_file");
+        assert_eq!(rs.imports.len(), 1);
+        assert!(rs.declarations.contains(&"Server".to_string()));
+        assert!(rs.declarations.contains(&"start".to_string()));
+
+        let py = engine
+            .analyze("import os\nclass Worker:\n    pass\ndef run_task():\n    pass\n", "py")
+            .expect("python ast");
+        assert_eq!(py.root_kind, "python_module");
+        assert!(py.declarations.contains(&"Worker".to_string()));
+        assert!(py.declarations.contains(&"run_task".to_string()));
     }
 }

@@ -147,17 +147,18 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_cli_dispatch_agent_prompt_with_active_daemon() {
-        use crate::kernel::cli::dispatch_agent_prompt_to;
+        use crate::kernel::cli::dispatch_agent_prompt_with_credential_to;
         use crate::kernel::server::EmbeddedDaemon;
 
         let daemon = EmbeddedDaemon::start_test(0).await.expect("Failed to start test daemon");
         let active_port = daemon.port;
 
         let mut output = Vec::new();
-        let exit_code = dispatch_agent_prompt_to(
+        let exit_code = dispatch_agent_prompt_with_credential_to(
             "SIMD acceleration for tree-sitter",
             Some("openai"),
             active_port,
+            Some(&daemon.access.local_credential),
             &mut output,
         );
         assert_eq!(exit_code, 0);

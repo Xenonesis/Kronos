@@ -84,18 +84,11 @@ export const WebSearchModal = memo(function WebSearchModal({
           limit: 8,
         })) as SearchResultItem[];
         setSearchResults(results);
+        toast.show("Web search completed", { variant: "success" });
       } else {
-        // Fallback for web sandbox / dev mode
-        await new Promise((r) => setTimeout(r, 600));
-        setSearchResults([
-          {
-            title: `Documentation & Results for ${q}`,
-            url: `https://duckduckgo.com/?q=${encodeURIComponent(q)}`,
-            snippet: `Live search query executed for '${q}'. Latest official documentation, releases, and guides retrieved.`,
-          },
-        ]);
+        setSearchResults([]);
+        toast.show("Live web search requires Kronos desktop runtime", { variant: "error" });
       }
-      toast.show("Web search completed", { variant: "success" });
     } catch (err) {
       toast.show(`Search failed: ${String(err)}`, { variant: "error" });
     } finally {
@@ -120,17 +113,11 @@ export const WebSearchModal = memo(function WebSearchModal({
           maxChars: 15000,
         })) as WebFetchItem;
         setFetchResult(result);
+        toast.show("URL scraped successfully", { variant: "success" });
       } else {
-        await new Promise((r) => setTimeout(r, 600));
-        setFetchResult({
-          url: targetUrl,
-          title: "Scraped Web Documentation",
-          contentMarkdown: `# Web Content from ${targetUrl}\n\nSuccessfully retrieved clean Markdown content.\n\n- Zero script or advertisement bloat\n- Token-efficient structured Markdown`,
-          characterCount: 180,
-          statusCode: 200,
-        });
+        setFetchResult(null);
+        toast.show("Live web scraping requires Kronos desktop runtime", { variant: "error" });
       }
-      toast.show("URL scraped successfully", { variant: "success" });
     } catch (err) {
       toast.show(`Fetch failed: ${String(err)}`, { variant: "error" });
     } finally {

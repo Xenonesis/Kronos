@@ -219,13 +219,35 @@ export function createGhostTextExtension(filename: string): Extension {
       const suffix = update.state.doc.sliceString(head, line.to);
 
       debounceTimer = setTimeout(() => {
-        const prediction = predictSmartCompletion(prefix, suffix, filename);
-        if (prediction) {
+        const heuristic = predictSmartCompletion(prefix, suffix, filename);
+        if (heuristic) {
           update.view.dispatch({
-            effects: setGhostTextEffect.of({ text: prediction, pos: head }),
+            effects: setGhostTextEffect.of({ text: heuristic, pos: head }),
           });
         }
-      }, 250);
+
+        const contextPrefix = update.state.doc.sliceString(Math.max(0, head - 1600), head);
+        if (contextPrefix.trim().length < 8) return;
+
+        void import("@/utils/tauri-invoke")
+          .then(({ invokeTauri }) =>
+            invokeTauri<string>("run_inline_completion", {
+              filename,
+              prefix: contextPrefix,
+            }),
+          )
+          .then((completion) => {
+            if (!completion) return;
+            const latestHead = update.view.state.selection.main.head;
+            if (latestHead !== head) return;
+            update.view.dispatch({
+              effects: setGhostTextEffect.of({ text: completion, pos: head }),
+            });
+          })
+          .catch(() => {
+            // Keep heuristic suggestion when local LLM is offline
+          });
+      }, 280);
     }
   });
 

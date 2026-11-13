@@ -146,22 +146,29 @@ const DocsSidebar = memo(function DocsSidebar({
 
 const DocsEditorPane = memo(function DocsEditorPane({
   selectedPath,
+  crdtStatus,
   editorText,
   editorResetKey,
   onChangeText,
+  onSyncCrdt,
   onSave,
   onInject,
 }: {
   selectedPath: string;
+  crdtStatus: string;
   editorText: string;
   editorResetKey: number;
   onChangeText: (text: string) => void;
+  onSyncCrdt: () => void;
   onSave: () => void;
   onInject: () => void;
 }) {
   return (
     <View style={styles.editorPane}>
-      <Text style={styles.pathHeader}>{selectedPath}</Text>
+      <View style={styles.pathRow}>
+        <Text style={styles.pathHeader}>{selectedPath}</Text>
+        <Text style={styles.crdtBadge}>{crdtStatus}</Text>
+      </View>
       <AdaptiveTextInput
         initialValue={editorText}
         resetKey={editorResetKey}
@@ -170,6 +177,9 @@ const DocsEditorPane = memo(function DocsEditorPane({
         style={styles.editorInput}
       />
       <View style={styles.footer}>
+        <Button size="sm" variant="outline" onPress={onSyncCrdt}>
+          <Text style={styles.outlineBtnText}>Sync CRDT</Text>
+        </Button>
         <Button size="sm" variant="outline" onPress={onSave}>
           <ThemedSaveIcon size={13} />
           <Text style={styles.outlineBtnText}>Save to .kronos</Text>
@@ -213,6 +223,39 @@ export const WorkspaceDocsModal = memo(function WorkspaceDocsModal({
   const [editorResetKey, setEditorResetKey] = useState(0);
   const [newName, setNewName] = useState("");
   const [newNameResetKey, setNewNameResetKey] = useState(0);
+  const [crdtStatus, setCrdtStatus] = useState("CRDT: local");
+
+  const crdtRoomFor = useCallback((docPath: string) => `docs:${cwd}:${docPath}`, [cwd]);
+
+  const hydrateCrdtRoom = useCallback(
+    async (docPath: string, diskContent: string) => {
+      try {
+        const room = crdtRoomFor(docPath);
+        const state = await invokeTauri<{ text: string; length: number }>("crdt_doc_action", {
+          room,
+          action: "get_text",
+        });
+        if (state && state.length > 0 && state.text !== diskContent) {
+          setEditorText(state.text);
+          setEditorResetKey((k) => k + 1);
+          setCrdtStatus(`CRDT Room Synced (${state.length} chars)`);
+          return;
+        }
+        if (state && state.length === 0 && diskContent.length > 0) {
+          await invokeTauri("crdt_doc_action", {
+            room,
+            action: "insert",
+            index: 0,
+            text: diskContent,
+          });
+        }
+        setCrdtStatus(`CRDT Live (${diskContent.length} chars)`);
+      } catch {
+        setCrdtStatus("CRDT: local");
+      }
+    },
+    [crdtRoomFor],
+  );
 
   const loadDocs = useCallback(async () => {
     try {
@@ -233,23 +276,25 @@ export const WorkspaceDocsModal = memo(function WorkspaceDocsModal({
       if (match) {
         setSelectedPath(match.relativePath);
         setEditorText(match.content);
+        void hydrateCrdtRoom(match.relativePath, match.content);
       } else {
-        setSelectedPath(
+        const fallbackPath =
           activeTab === "command"
             ? ".kronos/commands/custom-review.md"
-            : ".kronos/notepads/architecture.md",
-        );
-        setEditorText(
+            : ".kronos/notepads/architecture.md";
+        const fallbackText =
           activeTab === "command"
             ? "---\nname: custom-review\ndescription: Custom workflow\n---\nReview $ACTIVE_FILE:\n$SELECTION"
-            : "# Context Notepad\n\nAdd persistent architectural notes to reuse via @notepad.",
-        );
+            : "# Context Notepad\n\nAdd persistent architectural notes to reuse via @notepad.";
+        setSelectedPath(fallbackPath);
+        setEditorText(fallbackText);
+        void hydrateCrdtRoom(fallbackPath, fallbackText);
       }
       setEditorResetKey((k) => k + 1);
     } catch (err) {
       toast.show(`Failed to scan .kronos docs: ${String(err)}`, { variant: "error" });
     }
-  }, [activeTab, cwd, toast]);
+  }, [activeTab, cwd, hydrateCrdtRoom, toast]);
 
   useEffect(() => {
     if (visible) {
@@ -291,11 +336,74 @@ export const WorkspaceDocsModal = memo(function WorkspaceDocsModal({
     setNewNameResetKey((k) => k + 1);
   }, [activeTab, newName]);
 
-  const handleSelectDoc = useCallback((doc: KronosWorkspaceDoc) => {
-    setSelectedPath(doc.relativePath);
-    setEditorText(doc.content);
-    setEditorResetKey((k) => k + 1);
-  }, []);
+  const handleSelectDoc = useCallback(
+    (doc: KronosWorkspaceDoc) => {
+      setSelectedPath(doc.relativePath);
+      setEditorText(doc.content);
+      setEditorResetKey((k) => k + 1);
+      void hydrateCrdtRoom(doc.relativePath, doc.content);
+    },
+    [hydrateCrdtRoom],
+  );
+
+  const handleChangeEditorText = useCallback(
+    (nextText: string) => {
+      setEditorText(nextText);
+      const room = crdtRoomFor(selectedPath);
+      void (async () => {
+        try {
+          const cur = await invokeTauri<{ length: number }>("crdt_doc_action", {
+            room,
+            action: "get_text",
+          });
+          if (cur && cur.length > 0) {
+            await invokeTauri("crdt_doc_action", {
+              room,
+              action: "delete",
+              index: 0,
+              length: cur.length,
+            });
+          }
+          if (nextText.length > 0) {
+            await invokeTauri("crdt_doc_action", {
+              room,
+              action: "insert",
+              index: 0,
+              text: nextText,
+            });
+          }
+          setCrdtStatus(`CRDT Live (${nextText.length} chars)`);
+        } catch {
+          // Non-desktop runtime fallback
+        }
+      })();
+    },
+    [crdtRoomFor, selectedPath],
+  );
+
+function bumpCounter(value: number): number {
+  return value + 1;
+}
+
+  const handleManualSyncCrdt = useCallback(() => {
+    void (async () => {
+      try {
+        const room = crdtRoomFor(selectedPath);
+        const state = await invokeTauri<{ text: string; length: number }>("crdt_doc_action", {
+          room,
+          action: "get_text",
+        });
+        if (state && typeof state.text === "string") {
+          setEditorText(state.text);
+          setEditorResetKey(bumpCounter);
+          setCrdtStatus(`CRDT Room Synced (${state.length} chars)`);
+          toast.show(`Synced live CRDT state (${state.length} chars)`, { variant: "success" });
+        }
+      } catch (err) {
+        toast.show(`CRDT sync failed: ${String(err)}`, { variant: "error" });
+      }
+    })();
+  }, [crdtRoomFor, selectedPath, toast]);
 
   const handleInjectToComposer = useCallback(() => {
     const activeFile = useCascadeFlowStore.getState().activeFile ?? "";
@@ -357,9 +465,11 @@ export const WorkspaceDocsModal = memo(function WorkspaceDocsModal({
 
             <DocsEditorPane
               selectedPath={selectedPath}
+              crdtStatus={crdtStatus}
               editorText={editorText}
               editorResetKey={editorResetKey}
-              onChangeText={setEditorText}
+              onChangeText={handleChangeEditorText}
+              onSyncCrdt={handleManualSyncCrdt}
               onSave={handleSavePress}
               onInject={handleInjectToComposer}
             />
@@ -453,7 +563,19 @@ const styles = StyleSheet.create((theme) => ({
   docNameActive: { color: theme.colors.accent },
   docPath: { fontSize: 10, color: theme.colors.foregroundMuted, fontFamily: "monospace" },
   editorPane: { flex: 1, padding: theme.spacing[4], gap: 10 },
+  pathRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
   pathHeader: { fontSize: 12, fontFamily: "monospace", color: theme.colors.foregroundMuted },
+  crdtBadge: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: theme.colors.accent,
+    fontFamily: "monospace",
+  },
   editorInput: {
     flex: 1,
     backgroundColor: theme.colors.surface0,

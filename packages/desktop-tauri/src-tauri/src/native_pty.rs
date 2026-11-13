@@ -507,6 +507,88 @@ impl NativePtyManager {
         }
         Ok(())
     }
+
+    pub fn capture_terminal_lines(
+        &self,
+        id: &str,
+        strip_ansi: bool,
+        start: Option<i64>,
+        end: Option<i64>,
+    ) -> Result<(Vec<String>, usize), String> {
+        let raw_bytes = {
+            let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            let term = sessions
+                .get(id)
+                .ok_or_else(|| format!("Terminal session {id} not found"))?;
+            let guard = term.output_backlog.lock().unwrap_or_else(|e| e.into_inner());
+            guard.clone()
+        };
+        let raw_text = String::from_utf8_lossy(&raw_bytes);
+        let processed = if strip_ansi {
+            std::borrow::Cow::Owned(strip_ansi_escape_sequences(&raw_text))
+        } else {
+            raw_text
+        };
+        let mut lines: Vec<String> = processed
+            .split('\n')
+            .map(|l| l.trim_end_matches('\r').to_string())
+            .collect();
+        if lines.last().is_some_and(|l| l.is_empty()) && lines.len() > 1 {
+            lines.pop();
+        }
+        let total_lines = lines.len();
+        if total_lines == 0 {
+            return Ok((Vec::new(), 0));
+        }
+        let resolve_idx = |idx: i64| -> usize {
+            if idx < 0 {
+                (total_lines as i64 + idx).max(0) as usize
+            } else {
+                (idx as usize).min(total_lines)
+            }
+        };
+        let start_idx = start.map(resolve_idx).unwrap_or(0);
+        let end_idx = end.map(resolve_idx).unwrap_or(total_lines).max(start_idx);
+        Ok((lines[start_idx..end_idx].to_vec(), total_lines))
+    }
+}
+
+fn strip_ansi_escape_sequences(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            match chars.peek().copied() {
+                Some('[') => {
+                    chars.next();
+                    for ch in chars.by_ref() {
+                        if ('@'..='~').contains(&ch) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    chars.next();
+                    while let Some(ch) = chars.next() {
+                        if ch == '\x07' {
+                            break;
+                        }
+                        if ch == '\x1b' && chars.peek() == Some(&'\\') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                Some(_) => {
+                    chars.next();
+                }
+                None => {}
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 static PTY_MANAGER: std::sync::OnceLock<NativePtyManager> = std::sync::OnceLock::new();
@@ -749,5 +831,17 @@ mod tests {
         );
 
         assert!(manager.kill_terminal(&session_id).is_ok());
+    }
+
+    #[test]
+    fn test_strip_ansi_escape_sequences_and_capture() {
+        let stripped = strip_ansi_escape_sequences("\x1b[32mhello\x1b[0m \x1b]0;title\x07world\r\n");
+        assert_eq!(stripped, "hello world\r\n");
+
+        let manager = NativePtyManager::new();
+        let err = manager
+            .capture_terminal_lines("missing-term", true, None, None)
+            .unwrap_err();
+        assert!(err.contains("not found"));
     }
 }

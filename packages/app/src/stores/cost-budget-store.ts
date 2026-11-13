@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { invokeDesktopCommand } from "@/desktop/electron/invoke";
 
 /**
  * FEAT-22: Live Token Usage & USD Cost Budget Tracker Store (Claude Code parity)
@@ -79,6 +80,7 @@ export interface AgentTokenBudgetEntry {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
+  cacheWriteTokens?: number;
   costUsd: number;
   turns: number;
   modelId: string | null;
@@ -87,14 +89,21 @@ export interface AgentTokenBudgetEntry {
 interface CostBudgetState {
   budgetLimitUsd: number;
   usageByAgent: Record<string, AgentTokenBudgetEntry>;
+  recordedTurnKeys: Record<string, boolean>;
+  requestedModalAgentId: string | null;
   setBudgetLimitUsd: (limitUsd: number) => void;
   recordUsage: (input: {
     agentId: string;
+    turnId?: string;
     modelId?: string | null;
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+    totalCostUsd?: number;
   }) => void;
+  openCostModal: (agentId: string) => void;
+  clearCostModalRequest: () => void;
   resetAgentUsage: (agentId: string) => void;
   getTotalSessionCostUsd: () => number;
 }
@@ -102,29 +111,64 @@ interface CostBudgetState {
 export const useCostBudgetStore = create<CostBudgetState>((set, get) => ({
   budgetLimitUsd: 5.0,
   usageByAgent: {},
+  recordedTurnKeys: {},
+  requestedModalAgentId: null,
 
   setBudgetLimitUsd: (limitUsd) => {
-    set({ budgetLimitUsd: Math.max(0.1, Number.isFinite(limitUsd) ? limitUsd : 5.0) });
+    const safeLimit = Math.max(0.1, Number.isFinite(limitUsd) ? limitUsd : 5.0);
+    set({ budgetLimitUsd: safeLimit });
+    void invokeDesktopCommand("set_budget_policy", {
+      policy: { maxTokens: null, maxCostUsd: safeLimit },
+    }).catch(() => undefined);
   },
 
-  recordUsage: ({ agentId, modelId = null, inputTokens, outputTokens, cacheReadTokens = 0 }) => {
-    const turnCost = calculateCostUsd({ modelId, inputTokens, outputTokens, cacheReadTokens });
+  openCostModal: (agentId) => {
+    set({ requestedModalAgentId: agentId });
+  },
+
+  clearCostModalRequest: () => {
+    set({ requestedModalAgentId: null });
+  },
+
+  recordUsage: ({
+    agentId,
+    turnId,
+    modelId = null,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens = 0,
+    cacheWriteTokens = 0,
+    totalCostUsd,
+  }) => {
+    if (turnId && get().recordedTurnKeys[`${agentId}:${turnId}`]) {
+      return;
+    }
+    const turnCost =
+      typeof totalCostUsd === "number" && totalCostUsd > 0
+        ? totalCostUsd
+        : calculateCostUsd({ modelId, inputTokens, outputTokens, cacheReadTokens });
     set((state) => {
       const prev = state.usageByAgent[agentId] ?? {
         inputTokens: 0,
         outputTokens: 0,
         cacheReadTokens: 0,
+        cacheWriteTokens: 0,
         costUsd: 0,
         turns: 0,
         modelId,
       };
+      const nextRecorded = turnId
+        ? { ...state.recordedTurnKeys, [`${agentId}:${turnId}`]: true }
+        : state.recordedTurnKeys;
       return {
+        recordedTurnKeys: nextRecorded,
         usageByAgent: {
           ...state.usageByAgent,
           [agentId]: {
             inputTokens: prev.inputTokens + inputTokens,
             outputTokens: prev.outputTokens + outputTokens,
             cacheReadTokens: prev.cacheReadTokens + cacheReadTokens,
+            cacheWriteTokens: (prev.cacheWriteTokens ?? 0) + cacheWriteTokens,
             costUsd: prev.costUsd + turnCost,
             turns: prev.turns + 1,
             modelId: modelId ?? prev.modelId,
@@ -140,6 +184,7 @@ export const useCostBudgetStore = create<CostBudgetState>((set, get) => ({
       delete next[agentId];
       return { usageByAgent: next };
     });
+    void invokeDesktopCommand("reset_agent_budget_usage", { agentId }).catch(() => undefined);
   },
 
   getTotalSessionCostUsd: () => {

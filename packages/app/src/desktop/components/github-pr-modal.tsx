@@ -10,6 +10,23 @@ import {
   Loader2,
 } from "lucide-react-native";
 import { useToast } from "@/contexts/toast-context";
+import { invokeTauri } from "@/utils/tauri-invoke";
+
+interface PrDraftInfo {
+  currentBranch: string;
+  baseBranch: string;
+  repoUrl?: string | null;
+  suggestedTitle: string;
+  suggestedBody: string;
+  hasRemote: boolean;
+}
+
+interface CreatePrResult {
+  success: boolean;
+  prUrl: string;
+  method: string;
+  message: string;
+}
 
 export interface GitHubPrModalProps {
   visible: boolean;
@@ -31,38 +48,95 @@ export const GitHubPrModal = memo(function GitHubPrModal({
   const [autoPush, setAutoPush] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createdUrl, setCreatedUrl] = useState<string | null>(null);
+  const [createdMethod, setCreatedMethod] = useState<string | null>(null);
+  const [repoRemoteUrl, setRepoRemoteUrl] = useState<string | null>(null);
   const toast = useToast();
 
   useEffect(() => {
-    if (visible) {
-      setHeadBranch(currentBranch);
-      setTitle(`feat: implement updates on ${currentBranch.replace(/^feat\//, "")}`);
-      setBody(
-        `## Summary\nAutonomous updates and feature implementation created with Kronos.\n\n## Key Changes\n- Implemented verified updates and enhancements\n- Clean typechecks and passing test suite\n\n## Test Plan\n- [x] Unit test execution verified\n- [x] Monorepo typecheck passed`,
-      );
-      setCreatedUrl(null);
-      setIsSubmitting(false);
-    }
-  }, [visible, currentBranch]);
+    if (!visible) return;
+    let cancelled = false;
+    setCreatedUrl(null);
+    setCreatedMethod(null);
+    setIsSubmitting(false);
+
+    void (async () => {
+      try {
+        const draft = await invokeTauri<PrDraftInfo>("get_github_pr_draft", { cwd });
+        if (!cancelled && draft) {
+          setBaseBranch(draft.baseBranch);
+          setHeadBranch(draft.currentBranch);
+          setTitle(draft.suggestedTitle);
+          setBody(draft.suggestedBody);
+          setRepoRemoteUrl(draft.repoUrl ?? null);
+          return;
+        }
+      } catch (err) {
+        if (!cancelled) {
+          toast.show(`Git branch metadata error: ${String(err)}`, { variant: "error" });
+        }
+      }
+      if (!cancelled) {
+        setHeadBranch(currentBranch);
+        setTitle(`feat: updates on ${currentBranch.replace(/^feat\//, "")}`);
+        setBody("## Summary\nChanges prepared in Kronos workspace.");
+        setRepoRemoteUrl(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, cwd, currentBranch, toast]);
 
   const handleCreatePr = useCallback(async () => {
     if (!title.trim() || isSubmitting) return;
 
     setIsSubmitting(true);
     try {
-      // Direct IPC call or fallback web compare URL
+      const result = await invokeTauri<CreatePrResult>("create_github_pr", {
+        req: {
+          cwd,
+          title: title.trim(),
+          body: body.trim(),
+          baseBranch: baseBranch.trim() || "main",
+          headBranch: headBranch.trim() || currentBranch,
+          autoPush,
+        },
+      });
+      if (result) {
+        setCreatedUrl(result.prUrl);
+        setCreatedMethod(result.method);
+        toast.show(result.message, { variant: "success" });
+        return;
+      }
+
+      if (!repoRemoteUrl) {
+        toast.show("No Tauri desktop runtime or GitHub remote URL available", { variant: "error" });
+        return;
+      }
       const encodedTitle = encodeURIComponent(title.trim());
       const encodedBody = encodeURIComponent(body.trim());
-      const fallbackUrl = `https://github.com/compare/${baseBranch}...${headBranch}?expand=1&title=${encodedTitle}&body=${encodedBody}`;
-
-      setCreatedUrl(fallbackUrl);
-      toast.show("GitHub Pull Request prepared!", { variant: "success" });
-    } catch {
-      toast.show("Failed to create GitHub pull request", { variant: "error" });
+      const webUrl = `${repoRemoteUrl}/compare/${baseBranch}...${headBranch}?expand=1&title=${encodedTitle}&body=${encodedBody}`;
+      setCreatedUrl(webUrl);
+      setCreatedMethod("web_fallback");
+      toast.show("GitHub comparison URL prepared", { variant: "success" });
+    } catch (err) {
+      toast.show(`PR creation failed: ${String(err)}`, { variant: "error" });
     } finally {
       setIsSubmitting(false);
     }
-  }, [title, body, baseBranch, headBranch, isSubmitting, toast]);
+  }, [
+    title,
+    body,
+    baseBranch,
+    headBranch,
+    currentBranch,
+    autoPush,
+    cwd,
+    repoRemoteUrl,
+    isSubmitting,
+    toast,
+  ]);
 
   if (!visible) return null;
 

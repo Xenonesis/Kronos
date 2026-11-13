@@ -145,7 +145,7 @@ async function handleBrowserAutomationRequest(params: {
   if (request.command.command === "resize") {
     client.sendBrowserAutomationExecuteResponse({
       type: "browser.automation.execute.response",
-      payload: resizeBrowserTabForRequest({ request, serverId }),
+      payload: await resizeBrowserTabForRequest({ request, serverId, browserHost }),
     });
     return;
   }
@@ -195,11 +195,12 @@ async function handleBrowserAutomationRequest(params: {
   }
 }
 
-function resizeBrowserTabForRequest(params: {
+async function resizeBrowserTabForRequest(params: {
   request: BrowserAutomationExecuteRequest;
   serverId?: string;
-}): BrowserAutomationResponsePayload {
-  const { request, serverId } = params;
+  browserHost: DesktopHostBridge["browser"] | undefined;
+}): Promise<BrowserAutomationResponsePayload> {
+  const { request, serverId, browserHost } = params;
   const command = request.command as Extract<
     BrowserAutomationExecuteRequest["command"],
     { command: "resize" }
@@ -220,6 +221,30 @@ function resizeBrowserTabForRequest(params: {
       code: "browser_tab_not_found",
       message: `No browser tab found for ID: ${browserId}`,
     });
+  }
+
+  if (
+    typeof window !== "undefined" &&
+    "__TAURI_INTERNALS__" in window &&
+    browserHost?.executeAutomationCommand
+  ) {
+    await browserHost.executeAutomationCommand(request);
+    useBrowserStore
+      .getState()
+      .setBrowserViewport(
+        browserId,
+        createFixedBrowserViewport(command.args.width, command.args.height),
+      );
+    return {
+      requestId: request.requestId,
+      ok: true,
+      result: {
+        command: "resize",
+        browserId,
+        width: command.args.width,
+        height: command.args.height,
+      },
+    };
   }
 
   const dimensions = resizeResidentBrowserWebview({
@@ -364,6 +389,21 @@ async function openBrowserTabForRequest(params: {
   });
 
   if (browserHost?.executeAutomationCommand) {
+    const isTauriRuntime = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    if (isTauriRuntime) {
+      await browserHost.executeAutomationCommand({
+        ...request,
+        command: {
+          command: "new_tab",
+          args: { ...command.args, browserId } as typeof command.args,
+        },
+      });
+      return {
+        requestId: request.requestId,
+        ok: true,
+        result: { command: "new_tab", browserId, workspaceId, url: normalizedUrl },
+      };
+    }
     ensureResidentBrowserWebview({ browserId, workspaceId, url: normalizedUrl });
     const registered = await waitForBrowserRegistration({
       request,

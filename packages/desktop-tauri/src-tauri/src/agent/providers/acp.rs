@@ -94,6 +94,29 @@ impl AcpAgentClient {
         Ok(Some(resp))
     }
 
+    /// Reads the next JSON-RPC line from the ACP agent as a raw Value (handles notifications and responses).
+    pub async fn read_message(&mut self) -> Result<Option<Value>, String> {
+        let mut line = String::new();
+        let bytes_read = self
+            .reader
+            .read_line(&mut line)
+            .await
+            .map_err(|e| format!("Failed reading from ACP stdout: {e}"))?;
+
+        if bytes_read == 0 {
+            return Ok(None);
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+
+        serde_json::from_str::<Value>(trimmed)
+            .map(Some)
+            .map_err(|e| format!("Invalid JSON-RPC from ACP agent: {e} (line: {trimmed})"))
+    }
+
     pub async fn kill(&mut self) -> Result<(), String> {
         self.child
             .kill()

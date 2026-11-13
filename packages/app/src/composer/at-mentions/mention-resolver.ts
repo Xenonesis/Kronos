@@ -37,7 +37,9 @@ export function hasMentions(text: string): boolean {
     text.includes("@git:status") ||
     text.includes("@terminal:last-output") ||
     text.includes("@file:") ||
-    text.includes("@folder:")
+    text.includes("@folder:") ||
+    text.includes("@notepad") ||
+    text.includes("@playbook")
   );
 }
 
@@ -146,11 +148,63 @@ async function resolveFolderMentions(
   return resolved;
 }
 
+async function resolveKronosDocsMentions(
+  text: string,
+  options: ResolveMentionsOptions,
+): Promise<string> {
+  if (!options.cwd || (!text.includes("@notepad") && !text.includes("@playbook"))) {
+    return text;
+  }
+
+  let resolved = text;
+  try {
+    const { invokeTauri } = await import("@/utils/tauri-invoke");
+    const docs = await invokeTauri<
+      Array<{ kind: string; name: string; relativePath: string; content: string }>
+    >("scan_kronos_workspace_docs", { cwd: options.cwd });
+
+    if (!docs || docs.length === 0) return resolved;
+
+    const notepadRegex = /@notepad(?::([a-zA-Z0-9_.-]+))?/g;
+    resolved = resolved.replace(notepadRegex, (full, targetName: string | undefined) => {
+      const notepads = docs.filter((d) => d.kind === "notepad");
+      if (notepads.length === 0) return full;
+      const picked = targetName
+        ? notepads.filter((d) => d.name.toLowerCase() === targetName.toLowerCase())
+        : notepads;
+      if (picked.length === 0) return full;
+      return picked
+        .map(
+          (d) =>
+            `\n\n[Attached Context: ${d.relativePath}]\n\`\`\`markdown\n${d.content.trim()}\n\`\`\`\n`,
+        )
+        .join("\n");
+    });
+
+    if (resolved.includes("@playbook")) {
+      const playbooks = docs.filter((d) => d.kind === "playbook");
+      if (playbooks.length > 0) {
+        const block = playbooks
+          .map(
+            (d) =>
+              `\n\n[Attached Context: ${d.relativePath}]\n\`\`\`markdown\n${d.content.trim()}\n\`\`\`\n`,
+          )
+          .join("\n");
+        resolved = resolved.replace(/@playbook\b/g, block);
+      }
+    }
+  } catch {
+    // Preserve raw mention outside desktop runtime
+  }
+  return resolved;
+}
+
 export async function resolvePromptMentionsAsync(
   prompt: string,
   options: ResolveMentionsOptions = {},
 ): Promise<string> {
   const resolvedSync = resolvePromptMentions(prompt, options.payloads);
   const resolvedFiles = await resolveFileMentions(resolvedSync, options);
-  return resolveFolderMentions(resolvedFiles, options);
+  const resolvedFolders = await resolveFolderMentions(resolvedFiles, options);
+  return resolveKronosDocsMentions(resolvedFolders, options);
 }

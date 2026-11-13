@@ -582,3 +582,36 @@ impl ShmRingBuffer {
         }
     }
 }
+
+/// Global production Shared-Memory Ring Buffer for zero-copy kernel/daemon throughput telemetry.
+fn global_telemetry_shm() -> Option<&'static ShmRingBuffer> {
+    static GLOBAL_SHM: std::sync::OnceLock<Option<ShmRingBuffer>> = std::sync::OnceLock::new();
+    GLOBAL_SHM
+        .get_or_init(|| ShmRingBuffer::new("kronos_production_telemetry_ring", 64 * 1024).ok())
+        .as_ref()
+}
+
+/// Appends a compact 16-byte binary telemetry frame (`[timestamp_ms: u64, bytes: u32, items: u32]`)
+/// into the production OS Shared-Memory Ring Buffer.
+pub fn record_global_shm_metric(bytes_processed: u32, items_processed: u32) {
+    if let Some(ring) = global_telemetry_shm() {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let mut frame = [0u8; 16];
+        frame[0..8].copy_from_slice(&now_ms.to_le_bytes());
+        frame[8..12].copy_from_slice(&bytes_processed.to_le_bytes());
+        frame[12..16].copy_from_slice(&items_processed.to_le_bytes());
+        let _ = ring.write(&frame);
+    }
+}
+
+/// Returns `(sequence_count, write_head_offset, capacity_bytes)` from the global production ShmRingBuffer.
+pub fn get_global_shm_stats() -> (u64, u64, usize) {
+    if let Some(ring) = global_telemetry_shm() {
+        (ring.sequence(), ring.write_head(), ring.capacity())
+    } else {
+        (0, 0, 0)
+    }
+}

@@ -1,80 +1,86 @@
-import React, { memo, useState } from "react";
-import { View, Text, Pressable } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { Zap, DollarSign, TrendingDown, ChevronDown, ChevronUp } from "lucide-react-native";
+import React, { memo, useCallback, useState } from "react";
+import { View, Text } from "react-native";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { DatabaseZap, TrendingDown, ChevronDown, ChevronUp } from "lucide-react-native";
+import { PressHighlight } from "@/components/ui/press-highlight";
+
+const ThemedDatabaseZapIcon = withUnistyles(DatabaseZap, () => ({ color: "#10b981" }));
+const ThemedTrendingDownIcon = withUnistyles(TrendingDown, () => ({ color: "#10b981" }));
+const ThemedChevronDownIcon = withUnistyles(ChevronDown, (theme) => ({
+  color: theme.colors.foregroundMuted,
+}));
+const ThemedChevronUpIcon = withUnistyles(ChevronUp, (theme) => ({
+  color: theme.colors.foregroundMuted,
+}));
 
 export interface PromptCachingMetrics {
-  cacheHitRate: number; // 0 - 100%
+  inputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
-  totalTokens: number;
-  estimatedCostUsd: number;
-  dollarsSavedUsd: number;
+  outputTokens: number;
+  estimatedSavingsUsd: number;
+  netCostUsd: number;
 }
 
 export interface PromptCachingAnalyticsHudProps {
-  metrics?: PromptCachingMetrics;
-  visible?: boolean;
+  metrics?: PromptCachingMetrics | null;
 }
 
-const DEFAULT_METRICS: PromptCachingMetrics = {
-  cacheHitRate: 88.5,
-  cacheReadTokens: 42_800,
-  cacheWriteTokens: 5_200,
-  totalTokens: 58_400,
-  estimatedCostUsd: 0.052,
-  dollarsSavedUsd: 1.48,
-};
-
 export const PromptCachingAnalyticsHud = memo(function PromptCachingAnalyticsHud({
-  metrics = DEFAULT_METRICS,
-  visible = true,
+  metrics,
 }: PromptCachingAnalyticsHudProps) {
-  const { theme } = useUnistyles();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
 
-  if (!visible) return null;
+  const toggleExpanded = useCallback(() => {
+    setExpanded((prev) => !prev);
+  }, []);
+
+  if (
+    !metrics ||
+    (metrics.inputTokens <= 0 &&
+      metrics.cacheReadTokens <= 0 &&
+      metrics.cacheWriteTokens <= 0 &&
+      metrics.outputTokens <= 0)
+  ) {
+    return null;
+  }
+
+  const totalInput = metrics.inputTokens + metrics.cacheReadTokens;
+  const hitRate = totalInput > 0 ? Math.round((metrics.cacheReadTokens / totalInput) * 100) : 0;
 
   return (
     <View style={styles.container} data-testid="prompt-caching-analytics-hud">
-      <Pressable onPress={() => setExpanded(!expanded)} style={styles.statusBar}>
-        <View style={styles.leftGroup}>
-          <Zap size={12} color="#10b981" />
-          <Text style={styles.metricText}>
-            Cache Hit: <Text style={styles.highlightText}>{metrics.cacheHitRate.toFixed(1)}%</Text>
-          </Text>
+      <PressHighlight onPress={toggleExpanded} style={styles.headerPill}>
+        <ThemedDatabaseZapIcon size={12} />
+        <Text style={styles.pillText}>Cache Hit: {hitRate}%</Text>
+        <View style={styles.savingsBadge}>
+          <ThemedTrendingDownIcon size={10} />
+          <Text style={styles.savingsText}>Saved ${metrics.estimatedSavingsUsd.toFixed(4)}</Text>
         </View>
-
-        <View style={styles.rightGroup}>
-          <View style={styles.savingsPill}>
-            <TrendingDown size={10} color="#10b981" />
-            <Text style={styles.savingsText}>+${metrics.dollarsSavedUsd.toFixed(2)} saved</Text>
-          </View>
-          {expanded ? (
-            <ChevronUp size={12} color={theme.colors.foregroundMuted} />
-          ) : (
-            <ChevronDown size={12} color={theme.colors.foregroundMuted} />
-          )}
-        </View>
-      </Pressable>
+        {expanded ? <ThemedChevronUpIcon size={12} /> : <ThemedChevronDownIcon size={12} />}
+      </PressHighlight>
 
       {expanded ? (
         <View style={styles.expandedCard}>
           <View style={styles.row}>
-            <Text style={styles.label}>Cache Read Tokens:</Text>
+            <Text style={styles.label}>Prompt Cache Read Tokens</Text>
             <Text style={styles.value}>{metrics.cacheReadTokens.toLocaleString()}</Text>
           </View>
           <View style={styles.row}>
-            <Text style={styles.label}>Cache Write Tokens:</Text>
+            <Text style={styles.label}>Uncached Input Tokens</Text>
+            <Text style={styles.value}>{metrics.inputTokens.toLocaleString()}</Text>
+          </View>
+          <View style={styles.row}>
+            <Text style={styles.label}>Cache Write Tokens</Text>
             <Text style={styles.value}>{metrics.cacheWriteTokens.toLocaleString()}</Text>
           </View>
           <View style={styles.row}>
-            <Text style={styles.label}>Total Turn Tokens:</Text>
-            <Text style={styles.value}>{metrics.totalTokens.toLocaleString()}</Text>
+            <Text style={styles.label}>Output Tokens</Text>
+            <Text style={styles.value}>{metrics.outputTokens.toLocaleString()}</Text>
           </View>
           <View style={[styles.row, styles.totalRow]}>
-            <Text style={styles.totalLabel}>Session Cost:</Text>
-            <Text style={styles.totalValue}>${metrics.estimatedCostUsd.toFixed(4)}</Text>
+            <Text style={styles.totalLabel}>Net Session Cost</Text>
+            <Text style={styles.totalValue}>${metrics.netCostUsd.toFixed(4)}</Text>
           </View>
         </View>
       ) : null}
@@ -84,40 +90,26 @@ export const PromptCachingAnalyticsHud = memo(function PromptCachingAnalyticsHud
 
 const styles = StyleSheet.create((theme) => ({
   container: {
-    marginVertical: 4,
-    borderRadius: 6,
-    overflow: "hidden",
+    marginVertical: 8,
   },
-  statusBar: {
+  headerPill: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: theme.colors.surface1,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
+    justifyContent: "space-between",
+    gap: 6,
+    backgroundColor: theme.colors.surface0,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
   },
-  leftGroup: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  metricText: {
+  pillText: {
     fontSize: 11,
-    color: theme.colors.foregroundMuted,
+    fontWeight: "600",
+    color: theme.colors.foreground,
   },
-  highlightText: {
-    color: "#10b981",
-    fontWeight: "700",
-  },
-  rightGroup: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  savingsPill: {
+  savingsBadge: {
     flexDirection: "row",
     alignItems: "center",
     gap: 3,

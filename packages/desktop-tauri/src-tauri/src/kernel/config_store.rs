@@ -1,3 +1,4 @@
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -13,13 +14,126 @@ pub struct DaemonConfig {
     #[serde(default = "default_true")]
     pub mcp_enabled: bool,
     #[serde(default = "default_false")]
+    pub inject_into_agents: bool,
+    #[serde(default = "default_false")]
     pub relay_enabled: bool,
     #[serde(default = "default_relay_endpoint")]
     pub relay_endpoint: String,
     #[serde(default)]
     pub password_hash: Option<String>,
+    #[serde(default = "default_false")]
+    pub auto_archive_after_merge: bool,
+    #[serde(default = "default_false")]
+    pub enable_terminal_agent_hooks: bool,
+    #[serde(default = "default_empty_object")]
+    pub providers_config: Value,
     #[serde(default)]
     pub custom_settings: HashMap<String, Value>,
+}
+
+fn default_empty_object() -> Value {
+    serde_json::json!({})
+}
+
+fn default_release_channel() -> String {
+    "stable".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopNotificationSettings {
+    #[serde(default = "default_true")]
+    pub play_sound: bool,
+}
+
+impl Default for DesktopNotificationSettings {
+    fn default() -> Self {
+        Self { play_sound: true }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopDaemonSettings {
+    #[serde(default = "default_true")]
+    pub manage_built_in_daemon: bool,
+    #[serde(default = "default_false")]
+    pub keep_running_after_quit: bool,
+}
+
+impl Default for DesktopDaemonSettings {
+    fn default() -> Self {
+        Self {
+            manage_built_in_daemon: true,
+            keep_running_after_quit: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopSettingsConfig {
+    #[serde(default = "default_release_channel")]
+    pub release_channel: String,
+    #[serde(default)]
+    pub notifications: DesktopNotificationSettings,
+    #[serde(default)]
+    pub daemon: DesktopDaemonSettings,
+}
+
+impl Default for DesktopSettingsConfig {
+    fn default() -> Self {
+        Self {
+            release_channel: default_release_channel(),
+            notifications: DesktopNotificationSettings::default(),
+            daemon: DesktopDaemonSettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceLabelRecord {
+    pub name: String,
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceLabelRemoval {
+    pub name: String,
+    pub seq: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedLabelCatalog {
+    #[serde(default = "default_label_generation")]
+    pub generation: String,
+    #[serde(default)]
+    pub head_seq: u64,
+    #[serde(default)]
+    pub labels: Vec<WorkspaceLabelRecord>,
+    #[serde(default)]
+    pub removals: Vec<WorkspaceLabelRemoval>,
+    #[serde(default)]
+    pub assignments: HashMap<String, Vec<String>>,
+}
+
+fn default_label_generation() -> String {
+    "kronos-labels-v1".to_string()
+}
+
+impl Default for PersistedLabelCatalog {
+    fn default() -> Self {
+        Self {
+            generation: default_label_generation(),
+            head_seq: 0,
+            labels: Vec::new(),
+            removals: Vec::new(),
+            assignments: HashMap::new(),
+        }
+    }
 }
 
 fn default_port() -> u16 {
@@ -43,9 +157,13 @@ impl Default for DaemonConfig {
         Self {
             port: default_port(),
             mcp_enabled: default_true(),
+            inject_into_agents: default_false(),
             relay_enabled: default_false(),
             relay_endpoint: default_relay_endpoint(),
             password_hash: None,
+            auto_archive_after_merge: default_false(),
+            enable_terminal_agent_hooks: default_false(),
+            providers_config: default_empty_object(),
             custom_settings: HashMap::new(),
         }
     }
@@ -106,6 +224,183 @@ impl DaemonConfigStore {
         update_fn(&mut cfg);
         Self::save_config_atomic(&self.home_dir, &cfg)?;
         Ok(cfg.clone())
+    }
+
+    pub fn home_dir(&self) -> &Path {
+        &self.home_dir
+    }
+
+    pub fn get_custom_setting<T: DeserializeOwned>(&self, key: &str) -> Option<T> {
+        let cfg = self.config.read().unwrap_or_else(|e| e.into_inner());
+        cfg.custom_settings
+            .get(key)
+            .and_then(|val| serde_json::from_value::<T>(val.clone()).ok())
+    }
+
+    pub fn set_custom_setting<T: Serialize>(&self, key: &str, val: &T) -> std::io::Result<()> {
+        let serialized = serde_json::to_value(val)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        self.update_config(|cfg| {
+            cfg.custom_settings.insert(key.to_string(), serialized);
+        })?;
+        Ok(())
+    }
+
+    pub fn get_desktop_settings(&self) -> DesktopSettingsConfig {
+        self.get_custom_setting::<DesktopSettingsConfig>("desktopSettings")
+            .unwrap_or_default()
+    }
+
+    pub fn patch_desktop_settings(&self, patch: Value) -> std::io::Result<DesktopSettingsConfig> {
+        let mut current = self.get_desktop_settings();
+        if let Some(channel) = patch.get("releaseChannel").and_then(|v| v.as_str()) {
+            if channel == "stable" || channel == "beta" {
+                current.release_channel = channel.to_string();
+            }
+        }
+        if let Some(notif) = patch.get("notifications") {
+            if let Some(play_sound) = notif.get("playSound").and_then(|v| v.as_bool()) {
+                current.notifications.play_sound = play_sound;
+            }
+        }
+        if let Some(daemon) = patch.get("daemon") {
+            if let Some(manage) = daemon.get("manageBuiltInDaemon").and_then(|v| v.as_bool()) {
+                current.daemon.manage_built_in_daemon = manage;
+            }
+            if let Some(keep) = daemon.get("keepRunningAfterQuit").and_then(|v| v.as_bool()) {
+                current.daemon.keep_running_after_quit = keep;
+            }
+        }
+        self.set_custom_setting("desktopSettings", &current)?;
+        Ok(current)
+    }
+
+    pub fn get_labels_catalog(&self) -> PersistedLabelCatalog {
+        let file = self.home_dir.join("labels.json");
+        fs::read_to_string(file)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_labels_catalog(&self, catalog: &PersistedLabelCatalog) -> std::io::Result<()> {
+        let target = self.home_dir.join("labels.json");
+        let json = serde_json::to_string_pretty(catalog)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        atomic_write(&target, json.as_bytes())
+    }
+
+    pub fn set_workspace_label_assignment(
+        &self,
+        workspace_id: &str,
+        label: WorkspaceLabelRecord,
+        assigned: bool,
+    ) -> std::io::Result<(PersistedLabelCatalog, Vec<String>)> {
+        let mut catalog = self.get_labels_catalog();
+        if !catalog.labels.iter().any(|l| l.name == label.name) {
+            catalog.labels.push(label.clone());
+            catalog.head_seq += 1;
+            catalog.removals.retain(|r| r.name != label.name);
+        } else if let Some(existing) = catalog.labels.iter_mut().find(|l| l.name == label.name) {
+            if existing.color != label.color {
+                existing.color = label.color.clone();
+                catalog.head_seq += 1;
+            }
+        }
+        let entry = catalog
+            .assignments
+            .entry(workspace_id.to_string())
+            .or_default();
+        if assigned {
+            if !entry.contains(&label.name) {
+                entry.push(label.name.clone());
+            }
+        } else {
+            entry.retain(|name| name != &label.name);
+        }
+        let ws_labels = entry.clone();
+        self.save_labels_catalog(&catalog)?;
+        Ok((catalog, ws_labels))
+    }
+
+    pub fn update_label_definition(
+        &self,
+        name: &str,
+        new_name: Option<&str>,
+        color: Option<&str>,
+    ) -> std::io::Result<Option<(WorkspaceLabelRecord, usize, PersistedLabelCatalog)>> {
+        let mut catalog = self.get_labels_catalog();
+        let Some(pos) = catalog.labels.iter().position(|l| l.name == name) else {
+            return Ok(None);
+        };
+        let target_name = new_name.unwrap_or(name).to_string();
+        if target_name != name {
+            catalog.labels[pos].name = target_name.clone();
+        }
+        if let Some(c) = color {
+            catalog.labels[pos].color = c.to_string();
+        }
+        let updated = catalog.labels[pos].clone();
+        let mut affected = 0usize;
+        if target_name != name {
+            for list in catalog.assignments.values_mut() {
+                let mut changed = false;
+                for item in list.iter_mut() {
+                    if item == name {
+                        *item = target_name.clone();
+                        changed = true;
+                    }
+                }
+                if changed {
+                    affected += 1;
+                }
+            }
+        } else {
+            affected = catalog
+                .assignments
+                .values()
+                .filter(|list| list.iter().any(|item| item == name))
+                .count();
+        }
+        catalog.head_seq += 1;
+        self.save_labels_catalog(&catalog)?;
+        Ok(Some((updated, affected, catalog)))
+    }
+
+    pub fn inspect_label_delete(&self, name: &str) -> usize {
+        let catalog = self.get_labels_catalog();
+        catalog
+            .assignments
+            .values()
+            .filter(|list| list.iter().any(|item| item == name))
+            .count()
+    }
+
+    pub fn delete_label_definition(
+        &self,
+        name: &str,
+    ) -> std::io::Result<(usize, PersistedLabelCatalog)> {
+        let mut catalog = self.get_labels_catalog();
+        let before = catalog.labels.len();
+        catalog.labels.retain(|l| l.name != name);
+        let mut affected = 0usize;
+        for list in catalog.assignments.values_mut() {
+            let prev = list.len();
+            list.retain(|item| item != name);
+            if list.len() != prev {
+                affected += 1;
+            }
+        }
+        if catalog.labels.len() != before || affected > 0 {
+            catalog.head_seq += 1;
+            let seq = catalog.head_seq;
+            catalog.removals.push(WorkspaceLabelRemoval {
+                name: name.to_string(),
+                seq,
+            });
+            self.save_labels_catalog(&catalog)?;
+        }
+        Ok((affected, catalog))
     }
 
     pub fn add_project(&self, project: ProjectRecord) -> std::io::Result<()> {
@@ -377,5 +672,46 @@ mod tests {
 
         store.add_workspace(wks.clone()).expect("Add workspace");
         assert_eq!(store.get_workspace("wks_default"), Some(wks));
+    }
+
+    #[test]
+    fn test_desktop_settings_and_labels_persist_across_reloads() {
+        let dir = tempdir().unwrap();
+        let store = DaemonConfigStore::new(dir.path());
+        let patched = store
+            .patch_desktop_settings(serde_json::json!({
+                "releaseChannel": "beta",
+                "notifications": { "playSound": false },
+                "daemon": { "keepRunningAfterQuit": true }
+            }))
+            .expect("patch settings");
+        assert_eq!(patched.release_channel, "beta");
+        assert!(!patched.notifications.play_sound);
+        assert!(patched.daemon.keep_running_after_quit);
+
+        store
+            .set_workspace_label_assignment(
+                "wks_1",
+                WorkspaceLabelRecord {
+                    name: "urgent".to_string(),
+                    color: "red".to_string(),
+                },
+                true,
+            )
+            .expect("assign label");
+
+        let reloaded = DaemonConfigStore::new(dir.path());
+        let settings = reloaded.get_desktop_settings();
+        assert_eq!(settings.release_channel, "beta");
+        assert!(!settings.notifications.play_sound);
+        assert!(settings.daemon.keep_running_after_quit);
+
+        let catalog = reloaded.get_labels_catalog();
+        assert_eq!(catalog.labels.len(), 1);
+        assert_eq!(catalog.labels[0].name, "urgent");
+        assert_eq!(
+            catalog.assignments.get("wks_1").cloned().unwrap_or_default(),
+            vec!["urgent".to_string()]
+        );
     }
 }

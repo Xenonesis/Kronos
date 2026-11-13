@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo } from "react";
 import { View, Text } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Shield, Zap, Volume2 } from "lucide-react-native";
@@ -7,6 +7,7 @@ import { SegmentedControl, type SegmentedControlOption } from "@/components/ui/s
 import { Button } from "@/components/ui/button";
 import { useAppSettings } from "@/hooks/use-settings";
 import { playTaskSuccessSound } from "@/audio/audio-suite";
+import { invokeTauri } from "@/utils/tauri-invoke";
 
 const ThemedShield = withUnistyles(Shield);
 const ThemedZap = withUnistyles(Zap);
@@ -48,6 +49,28 @@ export const PermissionsMatrixCard = memo(function PermissionsMatrixCard() {
 
   const executionMode = settings.executionMode ?? "guarded";
   const isYolo = executionMode === "yolo";
+
+  useEffect(() => {
+    void invokeTauri("set_permission_policy", {
+      policy: {
+        executionMode,
+        autoApproveReadFiles: settings.autoApproveReadFiles ?? true,
+        autoApproveTerminalSafe: settings.autoApproveTerminalSafe ?? true,
+        autoApproveFileEdits: settings.autoApproveFileEdits ?? false,
+        autoApproveWebSearch: settings.autoApproveWebSearch ?? true,
+        autoApproveMcp: settings.autoApproveMcp ?? false,
+      },
+    }).catch(() => {
+      // Ignore outside desktop runtime
+    });
+  }, [
+    executionMode,
+    settings.autoApproveReadFiles,
+    settings.autoApproveTerminalSafe,
+    settings.autoApproveFileEdits,
+    settings.autoApproveWebSearch,
+    settings.autoApproveMcp,
+  ]);
 
   const handleModeChange = useCallback(
     (mode: "guarded" | "yolo") => {

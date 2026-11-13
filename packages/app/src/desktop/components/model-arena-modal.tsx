@@ -1,11 +1,12 @@
-import React, { memo, useState, useCallback } from "react";
+import React, { memo, useState, useCallback, useEffect } from "react";
 import { View, Text, Modal, ScrollView } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Columns2, Sparkles, Check, X, Clock } from "lucide-react-native";
 import { AdaptiveTextInput } from "@/components/adaptive-text-input";
 import { Button } from "@/components/ui/button";
 import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
-import { calculateCostUsd } from "@/stores/cost-budget-store";
+import { useToast } from "@/contexts/toast-context";
+import { invokeTauri } from "@/utils/tauri-invoke";
 
 const ThemedArenaIcon = withUnistyles(Columns2, (theme) => ({ color: theme.colors.accent }));
 const ThemedCloseIcon = withUnistyles(X, (theme) => ({ color: theme.colors.foregroundMuted }));
@@ -13,11 +14,35 @@ const ThemedClockIcon = withUnistyles(Clock, (theme) => ({ color: theme.colors.f
 
 interface ArenaCandidate {
   id: string;
+  provider: string;
   label: string;
   modelId: string;
   latencyMs: number;
+  tokensPerSecond: number;
+  totalTokens: number;
   estimatedCostUsd: number;
   response: string;
+  error?: string | null;
+}
+
+interface AvailableAiModel {
+  id: string;
+  provider: string;
+  model: string;
+  displayName: string;
+}
+
+interface ArenaComparisonResult {
+  id: string;
+  provider: string;
+  model: string;
+  displayName: string;
+  response: string;
+  latencyMs: number;
+  tokensPerSecond: number;
+  totalTokens: number;
+  costUsd: number;
+  error?: string | null;
 }
 
 const ArenaCandidatePane = memo(function ArenaCandidatePane({
@@ -38,15 +63,18 @@ const ArenaCandidatePane = memo(function ArenaCandidatePane({
         <View style={styles.stats}>
           <ThemedClockIcon size={11} />
           <Text style={styles.statText}>
-            {cand.latencyMs}ms • ${cand.estimatedCostUsd.toFixed(4)}
+            {cand.latencyMs}ms • {cand.tokensPerSecond.toFixed(1)} t/s • $
+            {cand.estimatedCostUsd.toFixed(4)}
           </Text>
         </View>
       </View>
 
       <ScrollView style={styles.responseScroll}>
         <Text style={styles.responseText}>
-          {cand.response ||
-            "Enter a prompt above to compare latency, cost, and dispatch a side-by-side run."}
+          {cand.error
+            ? `Provider error (${cand.provider}): ${cand.error}`
+            : cand.response ||
+              "Enter a prompt above and click Benchmark Pair to run both models in parallel."}
         </Text>
       </ScrollView>
 
@@ -60,24 +88,31 @@ const ArenaCandidatePane = memo(function ArenaCandidatePane({
 
 export interface ModelArenaModalProps {
   visible: boolean;
+  cwd?: string;
   onClose: () => void;
   onPickWinner: (prompt: string, winningModelId: string) => void;
 }
 
-const DEFAULT_CANDIDATES: ArenaCandidate[] = [
+const FALLBACK_CANDIDATES: ArenaCandidate[] = [
   {
-    id: "left",
-    label: "Claude Sonnet 4",
-    modelId: "claude-sonnet-4",
+    id: "cand-0",
+    provider: "claude",
+    label: "Claude CLI",
+    modelId: "claude",
     latencyMs: 0,
+    tokensPerSecond: 0,
+    totalTokens: 0,
     estimatedCostUsd: 0,
     response: "",
   },
   {
-    id: "right",
-    label: "GPT-4o / Codex",
+    id: "cand-1",
+    provider: "codex",
+    label: "Codex CLI",
     modelId: "codex",
     latencyMs: 0,
+    tokensPerSecond: 0,
+    totalTokens: 0,
     estimatedCostUsd: 0,
     response: "",
   },
@@ -85,34 +120,90 @@ const DEFAULT_CANDIDATES: ArenaCandidate[] = [
 
 export const ModelArenaModal = memo(function ModelArenaModal({
   visible,
+  cwd,
   onClose,
   onPickWinner,
 }: ModelArenaModalProps) {
+  const toast = useToast();
   const [prompt, setPrompt] = useState("");
-  const [candidates, setCandidates] = useState<ArenaCandidate[]>(DEFAULT_CANDIDATES);
+  const [candidates, setCandidates] = useState<ArenaCandidate[]>(FALLBACK_CANDIDATES);
   const [isComparing, setIsComparing] = useState(false);
 
-  const handlePrepareComparison = useCallback(() => {
+  useEffect(() => {
+    if (!visible) return;
+    let cancelled = false;
+    async function loadModels() {
+      try {
+        const models = await invokeTauri<AvailableAiModel[]>("list_available_ai_models");
+        if (cancelled || !models || models.length === 0) return;
+        const picked = models.slice(0, 2);
+        if (picked.length === 1) picked.push(models[0]!);
+        const mapped: ArenaCandidate[] = [];
+        for (let idx = 0; idx < picked.length; idx++) {
+          const m = picked[idx]!;
+          mapped.push({
+            id: `cand-${idx}`,
+            provider: m.provider,
+            label: m.displayName || `${m.provider}: ${m.model}`,
+            modelId: m.model || m.id,
+            latencyMs: 0,
+            tokensPerSecond: 0,
+            totalTokens: 0,
+            estimatedCostUsd: 0,
+            response: "",
+          });
+        }
+        setCandidates(mapped);
+      } catch {
+        // Keep default CLI candidates if probe fails
+      }
+    }
+    void loadModels();
+    return () => {
+      cancelled = true;
+    };
+  }, [visible]);
+
+  const handlePrepareComparison = useCallback(async () => {
     const clean = prompt.trim();
-    if (!clean) return;
+    if (!clean || isComparing) return;
     setIsComparing(true);
-    const simulated = candidates.map((c, idx) => {
-      const estInputTokens = Math.max(400, clean.length * 2);
-      const estOutputTokens = 320 + idx * 80;
-      return {
-        ...c,
-        latencyMs: 850 + idx * 340,
-        estimatedCostUsd: calculateCostUsd({
-          modelId: c.modelId,
-          inputTokens: estInputTokens,
-          outputTokens: estOutputTokens,
-        }),
-        response: `Ready to dispatch parallel Arena benchmark for [${c.label}] on prompt:\n"${clean}"\n\nClick "Dispatch & Adopt ${c.label}" below to spawn an isolated agent turn pinned to ${c.modelId}.`,
-      };
-    });
-    setCandidates(simulated);
-    setIsComparing(false);
-  }, [candidates, prompt]);
+    try {
+      const results = await invokeTauri<ArenaComparisonResult[]>("run_model_arena_comparison", {
+        prompt: clean,
+        cwd,
+        candidates: candidates.map((c) => ({
+          provider: c.provider,
+          model: c.modelId,
+          displayName: c.label,
+        })),
+      });
+      if (results && results.length > 0) {
+        setCandidates(
+          results.map((r, idx) => ({
+            id: r.id || `cand-${idx}`,
+            provider: r.provider,
+            label: r.displayName || r.model,
+            modelId: r.model,
+            latencyMs: r.latencyMs,
+            tokensPerSecond: r.tokensPerSecond,
+            totalTokens: r.totalTokens,
+            estimatedCostUsd: r.costUsd,
+            response: r.response,
+            error: r.error,
+          })),
+        );
+      }
+    } catch (err) {
+      toast.show(`Arena benchmark failed: ${String(err)}`, { variant: "error" });
+    } finally {
+      setIsComparing(false);
+    }
+  }, [candidates, cwd, isComparing, prompt, toast]);
+
+  const handleComparePress = useCallback(() => {
+    void handlePrepareComparison();
+  }, [handlePrepareComparison]);
 
   const handleDispatchModel = useCallback(
     (modelId: string) => {
@@ -147,11 +238,11 @@ export const ModelArenaModal = memo(function ModelArenaModal({
             />
             <Button
               size="sm"
-              onPress={handlePrepareComparison}
+              onPress={handleComparePress}
               disabled={isComparing || !prompt.trim()}
             >
               <Sparkles size={13} color="#ffffff" />
-              <Text style={styles.btnText}>Benchmark Pair</Text>
+              <Text style={styles.btnText}>{isComparing ? "Running..." : "Benchmark Pair"}</Text>
             </Button>
           </View>
 

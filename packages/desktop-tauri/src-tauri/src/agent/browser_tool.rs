@@ -76,7 +76,7 @@ pub async fn inspect_url(url: &str) -> Result<BrowserInspectionResult, String> {
     })
 }
 
-fn extract_title(html: &str) -> Option<String> {
+pub fn extract_title(html: &str) -> Option<String> {
     let lower = html.to_lowercase();
     let start_idx = lower.find("<title>")?;
     let end_idx = lower.find("</title>")?;
@@ -89,7 +89,7 @@ fn extract_title(html: &str) -> Option<String> {
     None
 }
 
-fn extract_dom_outline(html: &str) -> Vec<String> {
+pub fn extract_dom_outline(html: &str) -> Vec<String> {
     let mut outline = Vec::new();
     for line in html.lines() {
         let trimmed = line.trim();

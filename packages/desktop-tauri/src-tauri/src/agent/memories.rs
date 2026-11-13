@@ -65,12 +65,50 @@ pub fn load_workspace_memories(workspace_root: &Path) -> Vec<MemoryEntry> {
         if let Some(bullet) = trimmed.strip_prefix('-').or_else(|| trimmed.strip_prefix('*')) {
             let memory_text = bullet.trim();
             if !memory_text.is_empty() {
-                entries.push(MemoryEntry::new(current_category.clone(), memory_text));
+                let mut entry = MemoryEntry::new(current_category.clone(), memory_text);
+                entry.id = format!("{}_{}", entry.id, entries.len());
+                entries.push(entry);
             }
         }
     }
 
     entries
+}
+
+/// Replaces `.kronos/memories.md` with the provided full list of memory entries.
+pub fn save_workspace_memories(
+    workspace_root: &Path,
+    entries: &[MemoryEntry],
+) -> io::Result<()> {
+    let kronos_dir = workspace_root.join(KRONOS_DIR_NAME);
+    if !kronos_dir.exists() {
+        fs::create_dir_all(&kronos_dir)?;
+    }
+
+    let file_path = kronos_dir.join(MEMORIES_FILE_NAME);
+    let mut out = String::from(
+        "# Kronos Project Memories\n<!-- Persistent cross-session user preferences and project conventions -->\n",
+    );
+
+    let mut by_category: std::collections::BTreeMap<&str, Vec<&str>> =
+        std::collections::BTreeMap::new();
+    for entry in entries {
+        let cat = entry.category.trim();
+        let text = entry.content.trim();
+        if !text.is_empty() {
+            let key = if cat.is_empty() { "General" } else { cat };
+            by_category.entry(key).or_default().push(text);
+        }
+    }
+
+    for (cat, items) in by_category {
+        out.push_str(&format!("\n## {cat}\n"));
+        for item in items {
+            out.push_str(&format!("- {item}\n"));
+        }
+    }
+
+    fs::write(&file_path, out)
 }
 
 /// Appends a new memory item to `.kronos/memories.md`.

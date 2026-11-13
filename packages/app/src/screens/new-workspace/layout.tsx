@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { Text, View } from "react-native";
+import { Layers } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
+import { Button } from "@/components/ui/button";
 import { ComposerDock } from "@/composer/dock";
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import { MenuHeader } from "@/components/headers/menu-header";
@@ -13,6 +15,7 @@ export interface NewWorkspaceLayoutProps {
   title: string;
   formStack: ReactNode;
   onImportSession: () => void;
+  onOpenTemplates?: () => void;
   children: ReactNode;
 }
 
@@ -22,10 +25,28 @@ export function NewWorkspaceLayout({
   title,
   formStack,
   onImportSession,
+  onOpenTemplates,
   children,
 }: NewWorkspaceLayoutProps) {
   // In the header on compact layouts, under the composer otherwise.
-  const importSessionButton = <ImportSessionButton compact={isCompact} onPress={onImportSession} />;
+  const importSessionButton = (
+    <View style={isCompact ? styles.compactActions : styles.wideActions}>
+      <ImportSessionButton compact={isCompact} onPress={onImportSession} />
+      {onOpenTemplates ? (
+        <View style={isCompact ? null : styles.templateButtonWrap}>
+          <Button
+            variant="ghost"
+            leftIcon={Layers}
+            onPress={onOpenTemplates}
+            style={isCompact ? null : styles.pill}
+            testID="new-workspace-open-templates"
+          >
+            From Template
+          </Button>
+        </View>
+      ) : null}
+    </View>
+  );
   // Compact has no title: the fields name themselves. The free space above pushes them down onto
   // the composer, where the thumb is.
   const setupFields = isCompact ? (
@@ -77,5 +98,23 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize["2xl"],
     fontWeight: theme.fontWeight.normal,
     color: theme.colors.foreground,
+  },
+  compactActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  wideActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    flexWrap: "wrap",
+  },
+  templateButtonWrap: {
+    paddingTop: theme.spacing[4],
+  },
+  pill: {
+    borderRadius: theme.borderRadius.full,
+    borderColor: theme.colors.borderAccent,
   },
 }));

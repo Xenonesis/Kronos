@@ -13,6 +13,7 @@ import {
   Loader2,
 } from "lucide-react-native";
 import { useToast } from "@/contexts/toast-context";
+import { invokeTauri } from "@/utils/tauri-invoke";
 
 export interface SearchMatchItem {
   filePath: string;
@@ -71,59 +72,77 @@ export const GlobalSearchReplaceModal = memo(function GlobalSearchReplaceModal({
 
     setIsSearching(true);
     try {
-      // Simulate/trigger search query
-      // (In production Tauri environment, invokes native ripgrep search)
-      const mockResult: FileMatchGroup[] = [
-        {
-          relativePath: "src/main.rs",
-          fullPath: `${cwd}/src/main.rs`,
-          matchCount: 2,
-          matches: [
-            {
-              filePath: `${cwd}/src/main.rs`,
-              relativePath: "src/main.rs",
-              lineNumber: 42,
-              lineText: `fn run_service() -> Result<(), String> { // ${query}`,
-              matchStart: 12,
-              matchEnd: 12 + query.length,
-            },
-            {
-              filePath: `${cwd}/src/main.rs`,
-              relativePath: "src/main.rs",
-              lineNumber: 108,
-              lineText: `    let active = ${query}::initialize();`,
-              matchStart: 17,
-              matchEnd: 17 + query.length,
-            },
-          ],
+      const groups = await invokeTauri<FileMatchGroup[]>("workspace_text_search", {
+        req: {
+          cwd,
+          query: query.trim(),
+          isRegex,
+          caseSensitive: isCaseSensitive,
+          wholeWord: isWholeWord,
+          includeFilter: includeFilter.trim() ? includeFilter.trim() : null,
+          maxResults: 500,
         },
-      ];
-      setResults(mockResult);
-      // Auto expand all files on fresh search
-      const expands: Record<string, boolean> = {};
-      mockResult.forEach((g) => {
-        expands[g.relativePath] = true;
       });
+      if (!groups) {
+        toast.show("Workspace search requires Kronos desktop runtime", { variant: "error" });
+        setResults([]);
+        return;
+      }
+      setResults(groups);
+      const expands: Record<string, boolean> = {};
+      for (const g of groups) {
+        expands[g.relativePath] = true;
+      }
       setExpandedFiles(expands);
-    } catch {
-      toast.show("Search failed", { variant: "error" });
+    } catch (err) {
+      toast.show(`Search failed: ${String(err)}`, { variant: "error" });
     } finally {
       setIsSearching(false);
     }
-  }, [query, cwd, toast]);
+  }, [query, cwd, isRegex, isCaseSensitive, isWholeWord, includeFilter, toast]);
 
   const handleBatchReplace = useCallback(async () => {
     if (!query.trim() || !results.length) return;
 
     try {
-      toast.show(`Replaced ${totalMatches} occurrences across ${results.length} files`, {
-        variant: "success",
+      const res = await invokeTauri<{
+        filesModified: number;
+        totalReplacements: number;
+        modifiedPaths: string[];
+      }>("workspace_batch_replace", {
+        req: {
+          cwd,
+          query: query.trim(),
+          replacement,
+          isRegex,
+          caseSensitive: isCaseSensitive,
+          wholeWord: isWholeWord,
+          includeFilter: includeFilter.trim() ? includeFilter.trim() : null,
+        },
       });
+      if (!res) {
+        toast.show("Batch replace requires Kronos desktop runtime", { variant: "error" });
+        return;
+      }
+      toast.show(
+        `Replaced ${res.totalReplacements} occurrence(s) across ${res.filesModified} file(s)`,
+        { variant: "success" },
+      );
       setResults([]);
-    } catch {
-      toast.show("Batch replace failed", { variant: "error" });
+    } catch (err) {
+      toast.show(`Batch replace failed: ${String(err)}`, { variant: "error" });
     }
-  }, [query, results, totalMatches, toast]);
+  }, [
+    query,
+    results,
+    cwd,
+    replacement,
+    isRegex,
+    isCaseSensitive,
+    isWholeWord,
+    includeFilter,
+    toast,
+  ]);
 
   if (!visible) return null;
 

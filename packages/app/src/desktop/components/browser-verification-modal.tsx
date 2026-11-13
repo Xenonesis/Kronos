@@ -11,16 +11,25 @@ import {
   Loader2,
 } from "lucide-react-native";
 import { useToast } from "@/contexts/toast-context";
+import { useSessionStore } from "@/stores/session-store";
+import { useDraftStore } from "@/stores/draft-store";
+import { invokeTauri } from "@/utils/tauri-invoke";
 
 export interface BrowserVerificationModalProps {
   visible: boolean;
   initialUrl?: string;
+  cwd?: string;
+  serverId?: string;
+  agentId?: string;
   onClose: () => void;
 }
 
 export const BrowserVerificationModal = memo(function BrowserVerificationModal({
   visible,
   initialUrl = "http://localhost:5173",
+  cwd,
+  serverId: propServerId,
+  agentId: propAgentId,
   onClose,
 }: BrowserVerificationModalProps) {
   const [url, setUrl] = useState(initialUrl);
@@ -38,49 +47,83 @@ export const BrowserVerificationModal = memo(function BrowserVerificationModal({
   const toast = useToast();
 
   useEffect(() => {
-    if (visible) {
-      setUrl(initialUrl);
-      setReport(null);
-      setIsVerifying(false);
-    }
-  }, [visible, initialUrl]);
+    if (!visible) return;
+    setUrl(initialUrl);
+    setReport(null);
+    setIsVerifying(false);
+    if (!cwd || initialUrl !== "http://localhost:5173") return;
+    let cancelled = false;
+    void invokeTauri<string>("detect_workspace_preview_url", { cwd })
+      .then((detected) => {
+        if (!cancelled && detected) {
+          setUrl(detected);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, initialUrl, cwd]);
 
   const handleVerify = useCallback(async () => {
     if (!url.trim()) return;
 
     setIsVerifying(true);
     try {
-      // Simulate/trigger browser verification
-      await new Promise((r) => setTimeout(r, 600));
+      const res = await invokeTauri<{
+        url: string;
+        statusCode: number;
+        isHealthy: boolean;
+        title?: string | null;
+        detectedErrors: string[];
+        interactiveElements: { tag: string; label: string; selector: string }[];
+        autoFixPrompt?: string | null;
+      }>("verify_web_ui_url", { url: url.trim() });
+      if (!res) {
+        toast.show("Live URL verification requires Kronos desktop runtime", { variant: "error" });
+        return;
+      }
       setReport({
-        url,
-        statusCode: 200,
-        isHealthy: true,
-        title: "Vite + React App",
-        errors: [],
-        elements: [
-          { tag: "button", label: "Get Started" },
-          { tag: "button", label: "Documentation" },
-          { tag: "button", label: "Settings" },
-        ],
+        url: res.url,
+        statusCode: res.statusCode,
+        isHealthy: res.isHealthy,
+        title: res.title ?? "Untitled Page",
+        errors: res.detectedErrors,
+        elements: res.interactiveElements,
+        autoFixPrompt: res.autoFixPrompt ?? undefined,
       });
-      toast.show("Browser UI verified successfully!", { variant: "success" });
-    } catch {
-      toast.show("Verification failed", { variant: "error" });
+      toast.show(
+        res.isHealthy
+          ? `Verified HTTP ${res.statusCode} (${res.interactiveElements.length} elements)`
+          : `Detected ${res.detectedErrors.length} issue(s) (HTTP ${res.statusCode})`,
+        { variant: res.isHealthy ? "success" : "error" },
+      );
+    } catch (err) {
+      toast.show(`Verification failed: ${String(err)}`, { variant: "error" });
     } finally {
       setIsVerifying(false);
     }
   }, [url, toast]);
 
   const handleAutoFix = useCallback(() => {
-    if (report?.autoFixPrompt) {
-      if (navigator?.clipboard?.writeText) {
-        navigator.clipboard.writeText(report.autoFixPrompt);
-      }
+    if (!report?.autoFixPrompt) return;
+    const sessions = useSessionStore.getState().sessions;
+    const serverId = propServerId ?? Object.keys(sessions)[0];
+    const activeAgentId =
+      propAgentId ??
+      (serverId ? Array.from(sessions[serverId]?.agents.values() ?? [])[0]?.id : undefined);
+    if (serverId && activeAgentId) {
+      useDraftStore.getState().replaceDraftText({
+        draftKey: `agent:${serverId}:${activeAgentId}`,
+        text: report.autoFixPrompt,
+      });
+      toast.show("UI error repair prompt loaded into active composer", { variant: "success" });
+    } else if (navigator?.clipboard?.writeText) {
+      void navigator.clipboard.writeText(report.autoFixPrompt);
       toast.show("UI Error repair prompt copied to clipboard", { variant: "success" });
-      onClose();
     }
-  }, [report, toast, onClose]);
+    onClose();
+  }, [propAgentId, propServerId, report, toast, onClose]);
 
   if (!visible) return null;
 
@@ -139,7 +182,9 @@ export const BrowserVerificationModal = memo(function BrowserVerificationModal({
               <Globe size={18} color="#34d399" />
             </div>
             <div>
-              <div style={{ fontWeight: 600, fontSize: "15px" }}>Autonomous Browser UI Verifier</div>
+              <div style={{ fontWeight: 600, fontSize: "15px" }}>
+                Autonomous Browser UI Verifier
+              </div>
               <div style={{ fontSize: "12px", color: "#a1a1aa" }}>
                 Verify localhost frontend rendering, DOM elements & runtime errors
               </div>
@@ -195,7 +240,11 @@ export const BrowserVerificationModal = memo(function BrowserVerificationModal({
                 cursor: isVerifying ? "default" : "pointer",
               }}
             >
-              {isVerifying ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+              {isVerifying ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <RefreshCw size={14} />
+              )}
               Verify
             </button>
           </div>
@@ -213,7 +262,9 @@ export const BrowserVerificationModal = memo(function BrowserVerificationModal({
                 borderRadius: "8px",
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div
+                style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+              >
                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                   {report.isHealthy ? (
                     <CheckCircle2 size={18} color="#22c55e" />
@@ -226,7 +277,9 @@ export const BrowserVerificationModal = memo(function BrowserVerificationModal({
                 </div>
                 <span
                   style={{
-                    backgroundColor: report.isHealthy ? "rgba(34, 197, 94, 0.15)" : "rgba(245, 158, 11, 0.15)",
+                    backgroundColor: report.isHealthy
+                      ? "rgba(34, 197, 94, 0.15)"
+                      : "rgba(245, 158, 11, 0.15)",
                     color: report.isHealthy ? "#4ade80" : "#f59e0b",
                     padding: "2px 8px",
                     borderRadius: "12px",
@@ -238,9 +291,38 @@ export const BrowserVerificationModal = memo(function BrowserVerificationModal({
                 </span>
               </div>
 
+              {/* Errors Found */}
+              {report.errors.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                  {report.errors.map((errText) => (
+                    <div
+                      key={errText}
+                      style={{
+                        backgroundColor: "rgba(239, 68, 68, 0.12)",
+                        border: "1px solid rgba(239, 68, 68, 0.3)",
+                        borderRadius: "6px",
+                        padding: "6px 10px",
+                        fontSize: "12px",
+                        color: "#fca5a5",
+                      }}
+                    >
+                      {errText}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {/* Elements Found */}
               <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                <div style={{ fontSize: "12px", color: "#a1a1aa", display: "flex", alignItems: "center", gap: "5px" }}>
+                <div
+                  style={{
+                    fontSize: "12px",
+                    color: "#a1a1aa",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "5px",
+                  }}
+                >
                   <MousePointer size={12} />
                   <span>Interactive Elements ({report.elements.length} detected)</span>
                 </div>
@@ -300,7 +382,9 @@ export const BrowserVerificationModal = memo(function BrowserVerificationModal({
               }}
             >
               <Globe size={28} />
-              <div style={{ fontSize: "13px" }}>Enter localhost address to verify DOM and catch runtime errors</div>
+              <div style={{ fontSize: "13px" }}>
+                Enter localhost address to verify DOM and catch runtime errors
+              </div>
             </div>
           )}
         </div>

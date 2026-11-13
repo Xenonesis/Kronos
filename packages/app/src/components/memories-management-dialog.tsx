@@ -1,73 +1,168 @@
-import { memo, useState, useCallback } from "react";
-import { View, Text, Modal, Pressable, TextInput, ScrollView } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { BrainCircuit, X, Plus, Trash2, Tag, BookMarked } from "lucide-react-native";
+import { memo, useState, useCallback, useEffect } from "react";
+import { View, Text, ScrollView, Modal } from "react-native";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { Brain, Plus, Trash2, X, BookMarked, Tag } from "lucide-react-native";
+import { AdaptiveTextInput } from "@/components/adaptive-text-input";
 import { Button } from "@/components/ui/button";
+import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
+import { invokeTauri } from "@/utils/tauri-invoke";
+import { useToast } from "@/contexts/toast-context";
+
+const ThemedBrainIcon = withUnistyles(Brain, (theme) => ({ color: theme.colors.accent }));
+const ThemedCloseIcon = withUnistyles(X, (theme) => ({ color: theme.colors.foregroundMuted }));
+const ThemedTagIcon = withUnistyles(Tag, (theme) => ({ color: theme.colors.foregroundMuted }));
+const ThemedBookIcon = withUnistyles(BookMarked, (theme) => ({
+  color: theme.colors.foregroundMuted,
+}));
+const ThemedTrashIcon = withUnistyles(Trash2, () => ({ color: "#dc2626" }));
+const ThemedPlusIcon = withUnistyles(Plus, () => ({ color: "#ffffff" }));
 
 export interface MemoryItem {
   id: string;
   category: string;
   content: string;
+  createdAt: string;
 }
 
 export interface MemoriesManagementDialogProps {
   visible: boolean;
+  cwd: string;
   onClose: () => void;
-  workspacePath: string;
-  initialMemories?: MemoryItem[];
-  onSave?: (memories: MemoryItem[]) => void;
 }
 
-const DEFAULT_MEMORIES: MemoryItem[] = [
-  {
-    id: "mem-1",
-    category: "Architecture",
-    content: "All desktop integrations must run native in Rust (zero bundled Node in installer)",
-  },
-  {
-    id: "mem-2",
-    category: "Code Style",
-    content: "Use numeric theme.spacing[1..6] in Unistyles; never use sm/md/lg spacing names",
-  },
-  {
-    id: "mem-3",
-    category: "Conventions",
-    content: "Always run npm run typecheck and npx oxlint before finalizing agent changes",
-  },
-];
+const MemoryRow = memo(function MemoryRow({
+  item,
+  onDelete,
+}: {
+  item: MemoryItem;
+  onDelete: (id: string) => void;
+}) {
+  const handleDelete = useCallback(() => {
+    onDelete(item.id);
+  }, [item.id, onDelete]);
+
+  return (
+    <View style={styles.memoryRow}>
+      <View style={styles.memoryInfo}>
+        <View style={styles.badge}>
+          <Text style={styles.badgeText}>{item.category}</Text>
+        </View>
+        <Text style={styles.memoryText}>{item.content}</Text>
+      </View>
+      <ToolbarButton label="Delete memory" onPress={handleDelete} style={styles.deleteBtn}>
+        <ThemedTrashIcon size={14} />
+      </ToolbarButton>
+    </View>
+  );
+});
+
+function MemoriesListBody({
+  isLoading,
+  memories,
+  onDelete,
+}: {
+  isLoading: boolean;
+  memories: MemoryItem[];
+  onDelete: (id: string) => void;
+}) {
+  if (isLoading) {
+    return (
+      <View style={styles.emptyState}>
+        <Text style={styles.emptyStateText}>Loading .kronos/memories.md...</Text>
+      </View>
+    );
+  }
+  if (memories.length === 0) {
+    return (
+      <View style={styles.emptyState}>
+        <ThemedBookIcon size={28} />
+        <Text style={styles.emptyStateText}>No memories recorded yet.</Text>
+        <Text style={styles.emptyStateSub}>
+          Preferences added here are saved to .kronos/memories.md and injected into agent runs.
+        </Text>
+      </View>
+    );
+  }
+  return (
+    <>
+      {memories.map((m) => (
+        <MemoryRow key={m.id} item={m} onDelete={onDelete} />
+      ))}
+    </>
+  );
+}
 
 export const MemoriesManagementDialog = memo(function MemoriesManagementDialog({
   visible,
+  cwd,
   onClose,
-  workspacePath,
-  initialMemories = DEFAULT_MEMORIES,
-  onSave,
 }: MemoriesManagementDialogProps) {
-  const { theme } = useUnistyles();
-  const [memories, setMemories] = useState<MemoryItem[]>(initialMemories);
-  const [newCategory, setNewCategory] = useState("Conventions");
+  const toast = useToast();
+  const [memories, setMemories] = useState<MemoryItem[]>([]);
+  const [newCategory, setNewCategory] = useState("Code Style");
   const [newContent, setNewContent] = useState("");
+  const [inputResetKey, setInputResetKey] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!visible || !cwd) return;
+    let cancelled = false;
+    async function load() {
+      setIsLoading(true);
+      try {
+        const loaded = await invokeTauri<MemoryItem[]>("load_workspace_memories", { cwd });
+        if (!cancelled) {
+          setMemories(Array.isArray(loaded) ? loaded : []);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          toast.show(`Failed to load .kronos/memories.md: ${String(err)}`, { variant: "error" });
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, cwd, toast]);
+
+  const persistMemories = useCallback(
+    async (updated: MemoryItem[]) => {
+      try {
+        await invokeTauri<void>("save_workspace_memories", { cwd, entries: updated });
+      } catch (err) {
+        toast.show(`Failed to persist .kronos/memories.md: ${String(err)}`, { variant: "error" });
+      }
+    },
+    [cwd, toast],
+  );
 
   const handleAddMemory = useCallback(() => {
     if (!newContent.trim()) return;
     const item: MemoryItem = {
-      id: `mem-${Date.now()}`,
+      id: `mem_${Date.now()}`,
       category: newCategory.trim() || "General",
       content: newContent.trim(),
+      createdAt: new Date().toISOString(),
     };
-    const next = [...memories, item];
-    setMemories(next);
+    const updated = [...memories, item];
+    setMemories(updated);
     setNewContent("");
-    onSave?.(next);
-  }, [newContent, newCategory, memories, onSave]);
+    setInputResetKey((k) => k + 1);
+    void persistMemories(updated);
+  }, [newCategory, newContent, memories, persistMemories]);
 
   const handleDeleteMemory = useCallback(
     (id: string) => {
-      const next = memories.filter((m) => m.id !== id);
-      setMemories(next);
-      onSave?.(next);
+      const updated = memories.filter((m) => m.id !== id);
+      setMemories(updated);
+      void persistMemories(updated);
     },
-    [memories, onSave],
+    [memories, persistMemories],
   );
 
   if (!visible) return null;
@@ -76,82 +171,56 @@ export const MemoriesManagementDialog = memo(function MemoriesManagementDialog({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
         <View style={styles.card}>
-          {/* Header */}
           <View style={styles.header}>
             <View style={styles.titleRow}>
-              <BrainCircuit size={18} color={theme.colors.accent} />
+              <ThemedBrainIcon size={18} />
               <View>
                 <Text style={styles.titleText}>Project Memories (.kronos/memories.md)</Text>
-                <Text style={styles.subtitleText} numberOfLines={1}>
-                  {workspacePath}
+                <Text style={styles.subtitleText}>
+                  {memories.length} persistent rules active for agents
                 </Text>
               </View>
             </View>
-            <Pressable onPress={onClose} style={styles.closeBtn}>
-              <X size={18} color={theme.colors.foregroundMuted} />
-            </Pressable>
+            <ToolbarButton label="Close dialog" onPress={onClose} style={styles.closeBtn}>
+              <ThemedCloseIcon size={18} />
+            </ToolbarButton>
           </View>
 
-          {/* Add New Memory Row */}
           <View style={styles.addRow}>
             <View style={styles.categoryInputContainer}>
-              <Tag size={13} color={theme.colors.foregroundMuted} />
-              <TextInput
-                value={newCategory}
+              <ThemedTagIcon size={12} />
+              <AdaptiveTextInput
+                initialValue={newCategory}
                 onChangeText={setNewCategory}
-                placeholder="Category"
-                placeholderTextColor={theme.colors.foregroundMuted}
+                placeholder="Category..."
                 style={styles.categoryInput}
               />
             </View>
-            <TextInput
-              value={newContent}
+            <AdaptiveTextInput
+              initialValue={newContent}
+              resetKey={inputResetKey}
               onChangeText={setNewContent}
-              placeholder="e.g. Always use pnpm, never import React from react..."
-              placeholderTextColor={theme.colors.foregroundMuted}
+              placeholder="Add coding rule, preferred library, or architectural constraint..."
               style={styles.contentInput}
+              onSubmitEditing={handleAddMemory}
             />
             <Button size="sm" variant="default" onPress={handleAddMemory}>
-              <Plus size={14} color="#ffffff" />
+              <ThemedPlusIcon size={14} />
               <Text style={styles.addBtnText}>Add</Text>
             </Button>
           </View>
 
-          {/* Memory List */}
           <ScrollView style={styles.list}>
-            {memories.length === 0 ? (
-              <View style={styles.emptyState}>
-                <BookMarked size={28} color={theme.colors.foregroundMuted} />
-                <Text style={styles.emptyStateText}>No memories recorded yet.</Text>
-                <Text style={styles.emptyStateSub}>
-                  Preferences added here are remembered across all agent chats.
-                </Text>
-              </View>
-            ) : (
-              memories.map((m) => (
-                <View key={m.id} style={styles.memoryRow}>
-                  <View style={styles.memoryInfo}>
-                    <View style={styles.badge}>
-                      <Text style={styles.badgeText}>{m.category}</Text>
-                    </View>
-                    <Text style={styles.memoryText}>{m.content}</Text>
-                  </View>
-                  <Pressable
-                    onPress={() => handleDeleteMemory(m.id)}
-                    style={styles.deleteBtn}
-                    accessibilityLabel="Delete memory"
-                  >
-                    <Trash2 size={14} color="#dc2626" />
-                  </Pressable>
-                </View>
-              ))
-            )}
+            <MemoriesListBody
+              isLoading={isLoading}
+              memories={memories}
+              onDelete={handleDeleteMemory}
+            />
           </ScrollView>
 
-          {/* Footer */}
           <View style={styles.footer}>
             <Text style={styles.footerHint}>
-              Auto-injected into Kronos agent instructions under # Learned Memories.
+              Persisted in .kronos/memories.md and injected into every agent prompt.
             </Text>
             <Button size="sm" variant="outline" onPress={onClose}>
               Done

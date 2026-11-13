@@ -1,8 +1,9 @@
-import { memo, useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { memo, useState, useCallback, useEffect, useRef } from "react";
 import { View, Text, Pressable, TextInput } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { Sparkles, Terminal, CornerDownLeft, Play, X, ShieldAlert } from "lucide-react-native";
 import { isWeb } from "@/constants/platform";
+import { invokeTauri } from "@/utils/tauri-invoke";
 
 export interface TerminalAiCommandBarProps {
   visible: boolean;
@@ -12,11 +13,15 @@ export interface TerminalAiCommandBarProps {
   onExecuteCommand: (command: string) => void;
 }
 
-// Built-in intelligent terminal command synthesizers for instant offline resolution
-function synthesizeTerminalCommand(
-  prompt: string,
-  cwd: string,
-): { command: string; explanation: string; risk: "safe" | "caution" | "destructive" } {
+interface SynthesizedCommandResult {
+  command: string;
+  explanation: string;
+  risk: "safe" | "caution" | "destructive";
+  sourceLabel?: string;
+}
+
+// Offline heuristic fallback used ONLY when Tauri/LLM backend is unreachable
+function synthesizeTerminalCommandFallback(prompt: string, cwd: string): SynthesizedCommandResult {
   const p = prompt.trim().toLowerCase();
 
   // Port queries
@@ -116,6 +121,8 @@ export const TerminalAiCommandBar = memo(function TerminalAiCommandBar({
 }: TerminalAiCommandBarProps) {
   const { theme } = useUnistyles();
   const [prompt, setPrompt] = useState("");
+  const [synthesized, setSynthesized] = useState<SynthesizedCommandResult | null>(null);
+  const [isSynthesizing, setIsSynthesizing] = useState(false);
   const inputRef = useRef<TextInput>(null);
 
   useEffect(() => {
@@ -125,13 +132,58 @@ export const TerminalAiCommandBar = memo(function TerminalAiCommandBar({
       }, 50);
     } else {
       setPrompt("");
+      setSynthesized(null);
+      setIsSynthesizing(false);
     }
   }, [visible]);
 
-  const synthesized = useMemo(() => {
-    if (!prompt.trim()) return null;
-    return synthesizeTerminalCommand(prompt, cwd);
-  }, [prompt, cwd]);
+  useEffect(() => {
+    const trimmed = prompt.trim();
+    if (!visible || !trimmed) {
+      setSynthesized(null);
+      setIsSynthesizing(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsSynthesizing(true);
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const live = await invokeTauri<{
+            command: string;
+            explanation: string;
+            risk: "safe" | "caution" | "destructive";
+            provider: string;
+            model: string;
+          }>("synthesize_terminal_command", { prompt: trimmed, cwd });
+          if (cancelled) return;
+          if (live?.command) {
+            setSynthesized({
+              command: live.command,
+              explanation: live.explanation,
+              risk: live.risk,
+              sourceLabel: `${live.provider}:${live.model}`,
+            });
+            setIsSynthesizing(false);
+            return;
+          }
+        } catch {
+          // Fall back to explicit offline heuristic when no active LLM provider responds
+        }
+        if (!cancelled) {
+          const fallback = synthesizeTerminalCommandFallback(trimmed, cwd);
+          setSynthesized({ ...fallback, sourceLabel: "Offline heuristic" });
+          setIsSynthesizing(false);
+        }
+      })();
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [visible, prompt, cwd]);
 
   const handleInsert = useCallback(() => {
     if (!synthesized) return;
@@ -205,9 +257,14 @@ export const TerminalAiCommandBar = memo(function TerminalAiCommandBar({
                   <Text style={styles.riskTextCaution}>Caution</Text>
                 </View>
               )}
+              {synthesized.sourceLabel ? (
+                <Text style={styles.explanationText}>{synthesized.sourceLabel}</Text>
+              ) : null}
             </View>
 
-            <Text style={styles.explanationText}>{synthesized.explanation}</Text>
+            <Text style={styles.explanationText}>
+              {isSynthesizing ? "Synthesizing with AI provider..." : synthesized.explanation}
+            </Text>
 
             <View style={styles.actionRow}>
               <Pressable onPress={handleInsert} style={styles.actionBtn}>

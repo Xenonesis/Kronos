@@ -1,4 +1,4 @@
-import { memo, useState, useCallback } from "react";
+import { memo, useState, useCallback, useEffect } from "react";
 import { View, Text, Modal, Pressable, TextInput, ScrollView } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import {
@@ -15,6 +15,8 @@ import {
 } from "lucide-react-native";
 import * as Clipboard from "expo-clipboard";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/contexts/toast-context";
+import { invokeTauri } from "@/utils/tauri-invoke";
 
 export interface EnvVariable {
   key: string;
@@ -25,36 +27,82 @@ export interface EnvVariable {
 export interface EnvVaultModalProps {
   visible: boolean;
   onClose: () => void;
+  cwd?: string;
   envFileName?: string;
   initialVariables?: EnvVariable[];
   onSave?: (variables: EnvVariable[]) => void;
 }
 
-const DEFAULT_ENV_VARS: EnvVariable[] = [
-  { key: "PORT", value: "3000", isSecret: false },
-  { key: "NODE_ENV", value: "development", isSecret: false },
-  {
-    key: "DATABASE_URL",
-    value: "postgresql://postgres:secretpassword@localhost:5432/kronos",
-    isSecret: true,
-  },
-  { key: "OPENAI_API_KEY", value: "sk-proj-98a7sd987fa98sdf79as8d7f", isSecret: true },
-  { key: "ANTHROPIC_API_KEY", value: "sk-ant-api03-as98df7as8d7fa89sd", isSecret: true },
-];
-
 export const EnvVaultModal = memo(function EnvVaultModal({
   visible,
   onClose,
+  cwd,
   envFileName = ".env.local",
-  initialVariables = DEFAULT_ENV_VARS,
+  initialVariables,
   onSave,
 }: EnvVaultModalProps) {
   const { theme } = useUnistyles();
-  const [variables, setVariables] = useState<EnvVariable[]>(initialVariables);
+  const toast = useToast();
+  const [variables, setVariables] = useState<EnvVariable[]>(initialVariables ?? []);
+  const [activeFileName, setActiveFileName] = useState(envFileName);
+  const [isLoading, setIsLoading] = useState(false);
   const [revealedKeys, setRevealedKeys] = useState<Record<string, boolean>>({});
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
+
+  useEffect(() => {
+    if (!visible) return;
+    if (initialVariables) {
+      setVariables(initialVariables);
+      setActiveFileName(envFileName);
+      return;
+    }
+    if (!cwd) {
+      setVariables([]);
+      return;
+    }
+    let cancelled = false;
+    setIsLoading(true);
+    void invokeTauri<{ fileName: string; variables: EnvVariable[] }>("load_workspace_env_vars", {
+      cwd,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        if (res) {
+          setActiveFileName(res.fileName || envFileName);
+          setVariables(res.variables ?? []);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          toast.show(`Failed to load env file: ${String(err)}`, { variant: "error" });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, cwd, envFileName, initialVariables, toast]);
+
+  const persistVariables = useCallback(
+    async (updated: EnvVariable[]) => {
+      onSave?.(updated);
+      if (!cwd) return;
+      try {
+        const savedName = await invokeTauri<string>("save_workspace_env_vars", {
+          cwd,
+          vars: updated,
+        });
+        if (savedName) setActiveFileName(savedName);
+      } catch (err) {
+        toast.show(`Failed to save ${activeFileName}: ${String(err)}`, { variant: "error" });
+      }
+    },
+    [cwd, activeFileName, onSave, toast],
+  );
 
   const toggleReveal = useCallback((key: string) => {
     setRevealedKeys((prev) => ({
@@ -73,24 +121,26 @@ export const EnvVaultModal = memo(function EnvVaultModal({
 
   const handleAdd = useCallback(() => {
     if (!newKey.trim()) return;
-    const isSecret = /key|token|secret|password|auth|cert/i.test(newKey);
+    const cleanKey = newKey.trim().toUpperCase();
+    const isSecret = /key|token|secret|password|auth|cert/i.test(cleanKey);
+    const filtered = variables.filter((v) => v.key !== cleanKey);
     const updated: EnvVariable[] = [
-      ...variables,
-      { key: newKey.trim().toUpperCase(), value: newValue.trim(), isSecret },
+      ...filtered,
+      { key: cleanKey, value: newValue.trim(), isSecret },
     ];
     setVariables(updated);
     setNewKey("");
     setNewValue("");
-    onSave?.(updated);
-  }, [newKey, newValue, variables, onSave]);
+    void persistVariables(updated);
+  }, [newKey, newValue, variables, persistVariables]);
 
   const handleDelete = useCallback(
     (key: string) => {
       const updated = variables.filter((v) => v.key !== key);
       setVariables(updated);
-      onSave?.(updated);
+      void persistVariables(updated);
     },
-    [variables, onSave],
+    [variables, persistVariables],
   );
 
   if (!visible) return null;
@@ -105,7 +155,7 @@ export const EnvVaultModal = memo(function EnvVaultModal({
               <Lock size={18} color={theme.colors.accent} />
               <View>
                 <Text style={styles.titleText}>Environment Secrets Vault</Text>
-                <Text style={styles.subtitleText}>{envFileName}</Text>
+                <Text style={styles.subtitleText}>{activeFileName}</Text>
               </View>
             </View>
             <Pressable onPress={onClose} style={styles.closeBtn}>
@@ -117,8 +167,7 @@ export const EnvVaultModal = memo(function EnvVaultModal({
           <View style={styles.securityBanner}>
             <ShieldAlert size={14} color="#f59e0b" />
             <Text style={styles.securityBannerText}>
-              Values are masked by default. Sensitive keys are filtered before being sent to public
-              agent contexts.
+              Values are masked by default and persisted directly to {activeFileName} on disk.
             </Text>
           </View>
 
@@ -148,6 +197,13 @@ export const EnvVaultModal = memo(function EnvVaultModal({
 
           {/* Variables List */}
           <ScrollView style={styles.list}>
+            {isLoading ? (
+              <Text style={styles.footerCount}>Loading {activeFileName}...</Text>
+            ) : variables.length === 0 ? (
+              <Text style={styles.footerCount}>
+                No environment variables found in {activeFileName}. Add one above to create it.
+              </Text>
+            ) : null}
             {variables.map((v) => {
               const isRevealed = revealedKeys[v.key] ?? !v.isSecret;
               const isCopied = copiedKey === v.key;

@@ -70,13 +70,53 @@ pub fn save_schedule(id: &str, schedule: &Value) -> std::io::Result<()> {
     let path = dir.join(format!("{id}.json"));
     let bytes = serde_json::to_vec_pretty(schedule)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    crate::kernel::config_store::atomic_write(&path, &bytes)
+    let res = crate::kernel::config_store::atomic_write(&path, &bytes);
+    if res.is_ok() {
+        let name = schedule
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Scheduled Task")
+            .to_string();
+        let interval_secs = schedule
+            .pointer("/cadence/everyMs")
+            .and_then(|v| v.as_u64())
+            .map(|ms| (ms / 1000).max(1))
+            .unwrap_or(3600);
+        let prompt = schedule
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let cwd = schedule
+            .pointer("/target/config/cwd")
+            .and_then(|v| v.as_str())
+            .unwrap_or(".")
+            .to_string();
+        let enabled = schedule.get("status").and_then(|v| v.as_str()) == Some("active");
+        let last_run_at = schedule
+            .get("lastRunAt")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        crate::kernel::services::get_hub_services().add_schedule(
+            crate::kernel::services::ScheduleRecord {
+                id: id.to_string(),
+                name,
+                interval_secs,
+                prompt,
+                cwd,
+                enabled,
+                last_run_at,
+            },
+        );
+    }
+    res
 }
 
 pub fn delete_schedule(id: &str) -> bool {
     if id.is_empty() {
         return false;
     }
+    let _ = crate::kernel::services::get_hub_services().delete_schedule(id);
     let path = get_schedules_dir().join(format!("{id}.json"));
     if path.exists() {
         let _ = std::fs::remove_file(path);
@@ -144,27 +184,129 @@ pub fn execute_schedule_run(id: &str) -> Result<Value, String> {
 
     let prompt = schedule.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let target = schedule.get("target").cloned().unwrap_or(Value::Null);
+    let target_type = target.get("type").and_then(|v| v.as_str()).unwrap_or("new-agent");
+    let agent_mgr = crate::kernel::server::get_agent_manager();
+    let sched_name = schedule.get("name").and_then(|v| v.as_str()).unwrap_or("Task");
 
-    let mut agent_id_val = Value::Null;
-    if target.get("type").and_then(|v| v.as_str()) == Some("new-agent") {
-        if let Some(config) = target.get("config") {
-            let provider = config.get("provider").and_then(|v| v.as_str()).unwrap_or("codex");
-            let cwd = config.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
-            let agent_mgr = crate::kernel::server::get_agent_manager();
-            let sched_name = schedule.get("name").and_then(|v| v.as_str()).unwrap_or("Task");
-            if let Ok(agent) = agent_mgr.create_agent(
-                provider,
-                cwd,
-                Some(format!("Scheduled: {sched_name}")),
-                None,
-                None,
-            ) {
-                let aid = agent.id.clone();
-                agent_id_val = serde_json::json!(aid);
-                let _ = agent_mgr.send_message(&aid, &prompt);
+    let target_agent_result: Result<String, String> = match target_type {
+        "new-agent" => {
+            let config = target.get("config");
+            let provider = config
+                .and_then(|c| c.get("provider"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("codex");
+            let cwd = config
+                .and_then(|c| c.get("cwd"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let model = config.and_then(|c| c.get("model")).and_then(|v| v.as_str());
+            let mut agent_config = config.cloned().unwrap_or_else(|| serde_json::json!({}));
+            if let Some(m) = model {
+                if let Some(obj) = agent_config.as_object_mut() {
+                    obj.insert("model".to_string(), serde_json::json!(m));
+                }
             }
+            agent_mgr
+                .create_agent(
+                    provider,
+                    cwd,
+                    Some(format!("Scheduled: {sched_name}")),
+                    None,
+                    Some(agent_config),
+                )
+                .map(|a| a.id)
         }
-    }
+        "agent" | "self" => {
+            let aid = target
+                .get("agentId")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| "Schedule target missing agentId".to_string())?;
+            Ok(aid.to_string())
+        }
+        other => Err(format!("Unsupported schedule target type: {other}")),
+    };
+
+    let (agent_id_val, initial_status, finish_val, output_val, error_val) = match target_agent_result {
+        Ok(aid) => match agent_mgr.send_message(&aid, &prompt) {
+            Ok(turn) => {
+                let schedule_id = id.to_string();
+                let run_id_clone = run_id.clone();
+                let aid_clone = aid.clone();
+                let finalize_run = async move {
+                    crate::agent::runner::run_agent_turn(turn).await;
+                    let finish_iso = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                    let mgr = crate::kernel::server::get_agent_manager();
+                    let agent_rec = mgr.get_agent(&aid_clone);
+                    let last_err = agent_rec.as_ref().and_then(|r| r.last_error.clone());
+                    let last_text = mgr
+                        .get_timeline(&aid_clone)
+                        .into_iter()
+                        .rev()
+                        .find_map(|item| match item {
+                            crate::agent::types::AgentTimelineItem::AssistantMessage { text, .. } => Some(text),
+                            _ => None,
+                        });
+                    if let Some(mut sched) = load_schedule(&schedule_id) {
+                        if let Some(runs_arr) = sched.get_mut("runs").and_then(|v| v.as_array_mut()) {
+                            if let Some(run_entry) = runs_arr
+                                .iter_mut()
+                                .find(|r| r.get("id").and_then(|v| v.as_str()) == Some(run_id_clone.as_str()))
+                            {
+                                let failed = agent_rec
+                                    .as_ref()
+                                    .is_some_and(|r| r.last_status == crate::agent::types::AgentStatus::Error)
+                                    || last_err.is_some();
+                                run_entry["finishedAt"] = serde_json::json!(finish_iso);
+                                run_entry["status"] = serde_json::json!(if failed { "failed" } else { "succeeded" });
+                                run_entry["output"] = last_text
+                                    .map(|t| serde_json::json!(t))
+                                    .unwrap_or(Value::Null);
+                                run_entry["error"] = last_err
+                                    .map(|e| serde_json::json!(e))
+                                    .unwrap_or(Value::Null);
+                            }
+                        }
+                        sched["updatedAt"] = serde_json::json!(finish_iso);
+                        let _ = save_schedule(&schedule_id, &sched);
+                    }
+                };
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(finalize_run);
+                } else {
+                    std::thread::spawn(move || {
+                        if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                        {
+                            rt.block_on(finalize_run);
+                        }
+                    });
+                }
+                (
+                    serde_json::json!(aid),
+                    "running",
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                )
+            }
+            Err(err) => (
+                serde_json::json!(aid),
+                "failed",
+                serde_json::json!(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+                Value::Null,
+                serde_json::json!(err),
+            ),
+        },
+        Err(err) => (
+            Value::Null,
+            "failed",
+            serde_json::json!(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+            Value::Null,
+            serde_json::json!(err),
+        ),
+    };
 
     let finish_str = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
@@ -172,11 +314,11 @@ pub fn execute_schedule_run(id: &str) -> Result<Value, String> {
         "id": run_id,
         "scheduleId": id,
         "startedAt": now_str,
-        "finishedAt": finish_str,
-        "status": "succeeded",
+        "finishedAt": finish_val,
+        "status": initial_status,
         "agentId": agent_id_val,
-        "output": format!("Executed scheduled job: {}", prompt),
-        "error": serde_json::Value::Null
+        "output": output_val,
+        "error": error_val
     });
 
     let mut runs = schedule.get("runs").and_then(|r| r.as_array()).cloned().unwrap_or_default();

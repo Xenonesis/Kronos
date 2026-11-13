@@ -512,4 +512,48 @@ impl IoRingBatchReader {
 
         Ok(results)
     }
+
+    /// Reads a slice of candidate `PathBuf`s in batches via Windows Kernel IoRing (with Rayon
+    /// parallel fallback if any file in a batch fails to open) and records throughput telemetry
+    /// in the global `ShmRingBuffer`.
+    pub fn read_files_lossy(paths: &[PathBuf], max_file_bytes: usize) -> Vec<(PathBuf, Vec<u8>)> {
+        use rayon::prelude::*;
+        if paths.is_empty() {
+            return Vec::new();
+        }
+
+        // Pre-filter files exceeding `max_file_bytes`
+        let filtered: Vec<PathBuf> = paths
+            .iter()
+            .filter(|p| {
+                std::fs::metadata(p)
+                    .map(|m| (m.len() as usize) <= max_file_bytes)
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+
+        if filtered.is_empty() {
+            return Vec::new();
+        }
+
+        let out: Vec<(PathBuf, Vec<u8>)> = if let Ok(reader) = Self::new(128) {
+            match reader.read_files_batched(&filtered) {
+                Ok(buffers) => filtered.into_iter().zip(buffers).collect(),
+                Err(_) => filtered
+                    .into_par_iter()
+                    .filter_map(|p| std::fs::read(&p).ok().map(|b| (p, b)))
+                    .collect(),
+            }
+        } else {
+            filtered
+                .into_par_iter()
+                .filter_map(|p| std::fs::read(&p).ok().map(|b| (p, b)))
+                .collect()
+        };
+
+        let total_bytes: usize = out.iter().map(|(_, b)| b.len()).sum();
+        crate::kernel::shm::record_global_shm_metric(total_bytes as u32, out.len() as u32);
+        out
+    }
 }

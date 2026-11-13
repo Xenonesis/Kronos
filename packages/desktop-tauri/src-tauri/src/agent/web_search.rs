@@ -369,15 +369,6 @@ pub async fn search_web(query: &str, limit: usize) -> Result<Vec<SearchResult>, 
         .map_err(|e| format!("Failed to read search response: {e}"))?;
 
     let results = parse_duckduckgo_json_api(&body, limit);
-    if results.is_empty() {
-        // Return a mock informative result so the turn never crashes
-        return Ok(vec![SearchResult {
-            title: format!("Search query: {trimmed}"),
-            url: format!("https://duckduckgo.com/?q={encoded_q}"),
-            snippet: format!("No direct search excerpts were parsed for '{trimmed}'. You can query documentation or specific URLs directly."),
-        }]);
-    }
-
     Ok(results)
 }
 

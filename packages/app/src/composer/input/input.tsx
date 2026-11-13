@@ -96,6 +96,14 @@ import { getShortcutOs } from "@/utils/shortcut-platform";
 import type { MessageInputKeyboardActionKind } from "@/keyboard/actions";
 import { isImeComposingKeyboardEvent } from "@/utils/keyboard-ime";
 import { isNative, isWeb } from "@/constants/platform";
+
+export const VOICE_DICTATION_TOGGLE_EVENT = "kronos:toggle-voice-dictation";
+
+export function triggerVoiceDictationToggle(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(VOICE_DICTATION_TOGGLE_EVENT));
+  }
+}
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useComposerKeyboardScope } from "@/composer/keyboard-scope";
 import { RenderProfile } from "@/utils/render-profiler";
@@ -1686,6 +1694,19 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         voice,
       ],
     );
+
+    useEffect(() => {
+      if (!isWeb || typeof window === "undefined") {
+        return;
+      }
+      const onToggle = () => {
+        void handleVoicePress();
+      };
+      window.addEventListener(VOICE_DICTATION_TOGGLE_EVENT, onToggle);
+      return () => {
+        window.removeEventListener(VOICE_DICTATION_TOGGLE_EVENT, onToggle);
+      };
+    }, [handleVoicePress]);
 
     const handleCancelRecording = useCallback(async () => {
       await cancelDictation();

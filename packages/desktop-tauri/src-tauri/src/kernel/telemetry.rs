@@ -59,6 +59,43 @@ pub struct KernelTelemetry {
     pub pty_enabled: bool,
 }
 
+/// Parses Linux `/proc/self/status` content into `(working_set_bytes, peak_working_set_bytes, private_bytes)`.
+pub fn parse_proc_status_memory(status_text: &str) -> (u64, u64, u64) {
+    let mut vm_rss_kb = 0u64;
+    let mut vm_hwm_kb = 0u64;
+    let mut rss_anon_kb = 0u64;
+    let mut vm_data_kb = 0u64;
+
+    for line in status_text.lines() {
+        let mut parts = line.split_whitespace();
+        let Some(key) = parts.next() else {
+            continue;
+        };
+        let Some(val_str) = parts.next() else {
+            continue;
+        };
+        let Ok(val_kb) = val_str.parse::<u64>() else {
+            continue;
+        };
+        match key {
+            "VmRSS:" => vm_rss_kb = val_kb,
+            "VmHWM:" => vm_hwm_kb = val_kb,
+            "RssAnon:" => rss_anon_kb = val_kb,
+            "VmData:" => vm_data_kb = val_kb,
+            _ => {}
+        }
+    }
+
+    let working_set = vm_rss_kb * 1024;
+    let peak_working_set = vm_hwm_kb.max(vm_rss_kb) * 1024;
+    let private_bytes = if rss_anon_kb > 0 {
+        rss_anon_kb * 1024
+    } else {
+        vm_data_kb.max(vm_rss_kb) * 1024
+    };
+    (working_set, peak_working_set, private_bytes)
+}
+
 #[cfg(target_os = "windows")]
 pub fn query_process_memory() -> (u64, u64, u64) {
     use windows_sys::Win32::System::ProcessStatus::{
@@ -83,8 +120,41 @@ pub fn query_process_memory() -> (u64, u64, u64) {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
 pub fn query_process_memory() -> (u64, u64, u64) {
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        let parsed = parse_proc_status_memory(&status);
+        if parsed.0 > 0 {
+            return parsed;
+        }
+    }
+    if let Ok(statm) = std::fs::read_to_string("/proc/self/statm") {
+        let mut parts = statm.split_whitespace();
+        let _total_pages = parts.next();
+        if let Some(rss_pages) = parts.next().and_then(|s| s.parse::<u64>().ok()) {
+            let rss_bytes = rss_pages * 4096;
+            return (rss_bytes, rss_bytes, rss_bytes);
+        }
+    }
+    (0, 0, 0)
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
+pub fn query_process_memory() -> (u64, u64, u64) {
+    let pid = std::process::id().to_string();
+    if let Ok(out) = std::process::Command::new("ps")
+        .args(["-o", "rss=,vsz=", "-p", &pid])
+        .output()
+    {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut parts = text.split_whitespace();
+            let rss_kb = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+            let vsz_kb = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(rss_kb);
+            let rss_bytes = rss_kb * 1024;
+            return (rss_bytes, rss_bytes, vsz_kb.min(rss_kb * 2) * 1024);
+        }
+    }
     (0, 0, 0)
 }
 

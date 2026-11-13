@@ -118,14 +118,24 @@ export const SemanticCommitModal = memo(function SemanticCommitModal({
     setIsLoading(true);
     setErrorText(null);
     try {
-      const suggestion = await invokeTauri<SemanticCommitSuggestion>("suggest_semantic_commit", {
-        repoPath: cwd,
-      });
-      if (suggestion) {
-        setMessage(suggestion.fullMessage);
-        setFilesChanged(suggestion.filesChanged);
+      const [diffSuggestion, aiMessage] = await Promise.all([
+        invokeTauri<SemanticCommitSuggestion>("suggest_semantic_commit", {
+          repoPath: cwd,
+        }).catch(() => null),
+        invokeTauri<string>("generate_ai_semantic_commit", {
+          cwd,
+        }).catch(() => null),
+      ]);
+
+      if (aiMessage?.trim()) {
+        setMessage(aiMessage.trim());
+        setFilesChanged(diffSuggestion?.filesChanged ?? []);
+      } else if (diffSuggestion) {
+        setMessage(diffSuggestion.fullMessage);
+        setFilesChanged(diffSuggestion.filesChanged);
       } else {
-        setMessage("feat: update workspace changes");
+        setErrorText("No staged/unstaged changes found or git status unavailable.");
+        setMessage("");
         setFilesChanged([]);
       }
       setMessageResetKey((k) => k + 1);

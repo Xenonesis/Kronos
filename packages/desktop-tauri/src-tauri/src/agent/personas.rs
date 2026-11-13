@@ -36,6 +36,50 @@ pub fn get_persona_instructions(persona_id: &str) -> Option<&'static str> {
     }
 }
 
+/// Builds a two-stage Architect/Coder or specialized persona system prompt block.
+/// Wires `crate::agent::architect` (`ExecutionStage`, `ArchitectPlanSpec`,
+/// `format_architect_system_prompt`, `format_coder_system_prompt`) into live agent execution.
+pub fn build_stage_system_prompt(
+    persona_id: &str,
+    architect_plan: Option<&str>,
+    plan_spec: Option<&crate::agent::architect::ArchitectPlanSpec>,
+) -> Option<String> {
+    let base = get_persona_instructions(persona_id)?;
+    let normalized = persona_id.trim().to_lowercase();
+    let stage = match normalized.as_str() {
+        "architect" | "plan" => Some(crate::agent::architect::ExecutionStage::Architect),
+        "code" | "coder" => Some(crate::agent::architect::ExecutionStage::Coder),
+        _ => None,
+    };
+
+    match stage {
+        Some(crate::agent::architect::ExecutionStage::Architect) => {
+            let arch_block = crate::agent::architect::format_architect_system_prompt();
+            Some(format!("{base}\n\n{arch_block}"))
+        }
+        Some(crate::agent::architect::ExecutionStage::Coder) => {
+            if let Some(spec) = plan_spec {
+                let formatted_spec = format!(
+                    "Task: {}\nFiles: {}\nInvariants: {}\nSteps:\n{}",
+                    spec.task_title,
+                    spec.affected_files.join(", "),
+                    spec.architectural_invariants.join("; "),
+                    spec.implementation_steps.join("\n")
+                );
+                let coder_block =
+                    crate::agent::architect::format_coder_system_prompt(&formatted_spec);
+                Some(format!("{base}\n\n{coder_block}"))
+            } else if let Some(plan) = architect_plan.filter(|p| !p.trim().is_empty()) {
+                let coder_block = crate::agent::architect::format_coder_system_prompt(plan);
+                Some(format!("{base}\n\n{coder_block}"))
+            } else {
+                Some(base.to_string())
+            }
+        }
+        None => Some(base.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

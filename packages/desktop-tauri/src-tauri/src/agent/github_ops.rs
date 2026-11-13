@@ -26,6 +26,107 @@ pub struct CreatePrResult {
     pub message: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrDraftInfo {
+    pub current_branch: String,
+    pub base_branch: String,
+    pub repo_url: Option<String>,
+    pub suggested_title: String,
+    pub suggested_body: String,
+    pub has_remote: bool,
+}
+
+/// Collects live git branch, remote URL, and commit summary to prefill a PR.
+pub fn get_github_pr_draft(cwd: &Path) -> Result<PrDraftInfo, String> {
+    if !cwd.is_dir() {
+        return Err(format!("Workspace directory not found: {}", cwd.display()));
+    }
+    let current_branch = Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "HEAD".to_string());
+
+    let base_branch = Command::new("git")
+        .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .rsplit('/')
+                .next()
+                .map(str::to_string)
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "main".to_string());
+
+    let repo_url = get_github_repo_url(cwd);
+
+    let commit_range = format!("{base_branch}..HEAD");
+    let commits_raw = Command::new("git")
+        .args(["log", &commit_range, "--oneline", "-n", "12"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    let stat_raw = Command::new("git")
+        .args(["diff", "--stat", &base_branch])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    let first_commit_title = commits_raw
+        .lines()
+        .next()
+        .and_then(|line| line.split_once(' ').map(|(_, msg)| msg.trim().to_string()))
+        .filter(|s| !s.is_empty());
+
+    let suggested_title = first_commit_title.unwrap_or_else(|| {
+        format!(
+            "feat: updates from {}",
+            current_branch.trim_start_matches("feat/")
+        )
+    });
+
+    let mut body = String::from("## Summary\n");
+    if !commits_raw.is_empty() {
+        body.push_str("### Commits\n");
+        for line in commits_raw.lines() {
+            body.push_str(&format!("- {line}\n"));
+        }
+    } else {
+        body.push_str("- Changes prepared in Kronos workspace\n");
+    }
+    if !stat_raw.is_empty() {
+        body.push_str("\n### Diff Stat\n```\n");
+        body.push_str(&stat_raw);
+        body.push_str("\n```\n");
+    }
+
+    Ok(PrDraftInfo {
+        current_branch,
+        base_branch,
+        has_remote: repo_url.is_some(),
+        repo_url,
+        suggested_title,
+        suggested_body: body,
+    })
+}
+
 /// Discovers the GitHub repository web URL from git remote origin.
 pub fn get_github_repo_url(cwd: &Path) -> Option<String> {
     let output = Command::new("git")
