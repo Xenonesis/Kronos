@@ -29,6 +29,7 @@ pub mod watchdog;
 pub mod repo_map;
 pub mod tunnel;
 pub mod workspace_tools;
+pub mod sqlite_timeline;
 
 #[cfg(test)]
 mod protocol_test;

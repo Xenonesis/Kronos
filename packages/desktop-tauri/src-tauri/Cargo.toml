@@ -60,6 +60,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
 regex = "1"
+rusqlite = { version = "0.32", features = ["bundled", "backup", "modern_sqlite"] }
 
 [features]
 default = ["local-whisper"]

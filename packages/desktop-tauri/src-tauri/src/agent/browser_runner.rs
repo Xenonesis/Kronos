@@ -298,7 +298,221 @@ pub fn parse_browser_console_errors(stderr_log: &str) -> Vec<String> {
     errors
 }
 
+/// Chrome DevTools Protocol (CDP) session result — DOM snapshot + console errors + coverage
+#[derive(Debug, Clone)]
+pub struct CdpSessionResult {
+    pub dom: String,
+    pub console_errors: Vec<String>,
+    pub page_title: Option<String>,
+    pub load_timing_ms: Option<u64>,
+}
+
+/// Launches a Chromium/Edge instance with remote debugging enabled on a random port,
+/// connects via CDP WebSocket to fetch the rendered DOM and collect JS console errors
+/// without process respawn. Falls back to `--dump-dom` if CDP negotiation fails.
+async fn dump_rendered_dom_via_cdp(url: &str) -> Option<CdpSessionResult> {
+    let browser = find_headless_browser()?;
+
+    // Pick a random high port for the debug endpoint (avoid 9222 which may be in use)
+    let debug_port: u16 = {
+        let base: u16 = 19200;
+        let pid = std::process::id() as u16;
+        base.wrapping_add(pid % 400)
+    };
+
+    let mut cmd = tokio::process::Command::new(&browser);
+    cmd.args([
+        "--headless=new",
+        "--disable-gpu",
+        "--no-sandbox",
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--enable-logging=stderr",
+        "--v=0",
+        &format!("--remote-debugging-port={debug_port}"),
+        "about:blank",
+    ]);
+    #[cfg(windows)]
+    { cmd.creation_flags(0x08000000); }
+    cmd.stdout(std::process::Stdio::null())
+       .stderr(std::process::Stdio::piped());
+
+    let mut child = cmd.spawn().ok()?;
+
+    // Wait for CDP endpoint to be ready (up to 3s, polling /json/version every 100ms)
+    let cdp_base = format!("http://127.0.0.1:{debug_port}");
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(500))
+        .build()
+        .ok()?;
+
+    let ws_url: Option<String> = 'ready: {
+        for _ in 0..30 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if let Ok(resp) = http_client.get(format!("{cdp_base}/json/version")).send().await {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if let Some(ws) = json["webSocketDebuggerUrl"].as_str() {
+                        break 'ready Some(ws.to_string());
+                    }
+                }
+            }
+        }
+        None
+    };
+
+    let Some(_ws_debugger_url) = ws_url else {
+        let _ = child.kill().await;
+        return None;
+    };
+
+    // Open a new target tab for the URL
+    let new_tab_url = format!("{cdp_base}/json/new?{}", url);
+    let tab_json = http_client.put(&new_tab_url).send().await.ok()?.json::<serde_json::Value>().await.ok()?;
+    let tab_ws_url = tab_json["webSocketDebuggerUrl"].as_str()?.to_string();
+
+    // Connect CDP WebSocket and issue Page.navigate + Runtime.evaluate
+    let result = cdp_navigate_and_snapshot(&tab_ws_url, url).await;
+
+    // Clean up: close tab + kill browser
+    if let Some(tab_id) = tab_json["id"].as_str() {
+        let _ = http_client.get(format!("{cdp_base}/json/close/{tab_id}")).send().await;
+    }
+    let _ = child.kill().await;
+
+    result
+}
+
+/// Issues CDP commands over the tab's WebSocket debugger to navigate, wait for load,
+/// then extract `document.documentElement.outerHTML` and console errors via Runtime.evaluate.
+async fn cdp_navigate_and_snapshot(tab_ws: &str, url: &str) -> Option<CdpSessionResult> {
+    use tokio_tungstenite::connect_async;
+    use futures_util::{SinkExt, StreamExt};
+
+    let (mut ws, _) = tokio::time::timeout(
+        Duration::from_secs(5),
+        connect_async(tab_ws),
+    ).await.ok()?.ok()?;
+
+    let mut console_errors: Vec<String> = Vec::new();
+    let mut dom_html = String::new();
+    let mut page_title: Option<String> = None;
+    let start_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    // Enable Runtime + Page domains
+    for (id, method, params) in [
+        (1u32, "Runtime.enable", serde_json::json!({})),
+        (2, "Page.enable", serde_json::json!({})),
+        (3, "Network.enable", serde_json::json!({})),
+    ] {
+        let msg = serde_json::json!({ "id": id, "method": method, "params": params }).to_string();
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(msg)).await.ok()?;
+    }
+
+    // Navigate to URL
+    let nav_msg = serde_json::json!({
+        "id": 10,
+        "method": "Page.navigate",
+        "params": { "url": url }
+    }).to_string();
+    ws.send(tokio_tungstenite::tungstenite::Message::Text(nav_msg)).await.ok()?;
+
+    // Wait for Page.loadEventFired (or timeout 8s), collect Runtime.consoleAPICalled errors
+    let mut load_fired = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    while tokio::time::Instant::now() < deadline {
+        let msg_fut = tokio::time::timeout(Duration::from_secs(1), ws.next());
+        let Ok(Some(Ok(msg))) = msg_fut.await else { break };
+        if let tokio_tungstenite::tungstenite::Message::Text(text) = msg {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                let method = json["method"].as_str().unwrap_or("");
+                if method == "Page.loadEventFired" {
+                    load_fired = true;
+                    break;
+                }
+                if method == "Runtime.consoleAPICalled" {
+                    let typ = json["params"]["type"].as_str().unwrap_or("");
+                    if typ == "error" || typ == "warning" {
+                        if let Some(args) = json["params"]["args"].as_array() {
+                            let msg_parts: Vec<String> = args
+                                .iter()
+                                .filter_map(|a| a["value"].as_str().map(|s| s.to_string()))
+                                .collect();
+                            if !msg_parts.is_empty() {
+                                console_errors.push(format!("[{typ}] {}", msg_parts.join(" ")));
+                            }
+                        }
+                    }
+                }
+                if method == "Runtime.exceptionThrown" {
+                    if let Some(exc) = json["params"]["exceptionDetails"]["exception"]["description"].as_str() {
+                        console_errors.push(format!("[exception] {exc}"));
+                    }
+                }
+            }
+        }
+    }
+
+    // Evaluate DOM and title after navigation
+    for (id, expr) in [
+        (20u32, "document.documentElement.outerHTML"),
+        (21, "document.title"),
+    ] {
+        let eval_msg = serde_json::json!({
+            "id": id,
+            "method": "Runtime.evaluate",
+            "params": { "expression": expr, "returnByValue": true }
+        }).to_string();
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(eval_msg)).await.ok()?;
+        let deadline2 = tokio::time::Instant::now() + Duration::from_secs(3);
+        while tokio::time::Instant::now() < deadline2 {
+            let msg_fut = tokio::time::timeout(Duration::from_millis(500), ws.next());
+            let Ok(Some(Ok(msg))) = msg_fut.await else { break };
+            if let tokio_tungstenite::tungstenite::Message::Text(text) = msg {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if json["id"].as_u64() == Some(id as u64) {
+                        let val = json["result"]["result"]["value"].as_str().unwrap_or("").to_string();
+                        match id {
+                            20 => dom_html = val,
+                            21 => page_title = if val.is_empty() { None } else { Some(val) },
+                            _ => {}
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = ws.close(None).await;
+
+    if dom_html.is_empty() {
+        return None;
+    }
+
+    let load_timing_ms = if load_fired {
+        Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64 - start_ms
+        )
+    } else {
+        None
+    };
+
+    Some(CdpSessionResult { dom: dom_html, console_errors, page_title, load_timing_ms })
+}
+
 async fn dump_rendered_dom_and_console(url: &str) -> Option<(String, Vec<String>)> {
+    // ── Primary: CDP WebSocket session (live console errors, page title, load timing) ──
+    if let Some(cdp) = dump_rendered_dom_via_cdp(url).await {
+        return Some((cdp.dom, cdp.console_errors));
+    }
+
+    // ── Fallback: --dump-dom subprocess (no persistent WebSocket) ──
     let browser = find_headless_browser()?;
     let mut cmd = tokio::process::Command::new(browser);
     cmd.args([

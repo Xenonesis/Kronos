@@ -2611,6 +2611,42 @@ fn check_and_log_crashpad_dumps() {
     }
 }
 
+// ── SQLite Timeline Tauri Commands ───────────────────────────────────────────
+
+#[tauri::command]
+async fn search_agent_timeline_sqlite(
+    query: String,
+    agent_id: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let db = crate::kernel::sqlite_timeline::get_global_sqlite_timeline()
+        .ok_or_else(|| "SQLite timeline not initialized".to_string())?;
+    let hits = db
+        .fts_search(&query, agent_id.as_deref(), limit.unwrap_or(20))
+        .map_err(|e| e.to_string())?;
+    Ok(hits
+        .iter()
+        .map(|h| serde_json::to_value(h).unwrap_or_default())
+        .collect())
+}
+
+#[tauri::command]
+async fn get_recent_agent_timeline_sqlite(
+    agent_id: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let db = crate::kernel::sqlite_timeline::get_global_sqlite_timeline()
+        .ok_or_else(|| "SQLite timeline not initialized".to_string())?;
+    let aid = agent_id.as_deref().unwrap_or("");
+    let items = db
+        .get_recent(aid, limit.unwrap_or(50))
+        .map_err(|e| e.to_string())?;
+    Ok(items
+        .iter()
+        .map(|h| serde_json::to_value(h).unwrap_or_default())
+        .collect())
+}
+
 fn main() {
     let startup_trace = std::env::var("KRONOS_STARTUP_TRACE")
         .map(|v| v == "1" || v == "true")
@@ -3582,7 +3618,9 @@ try {{
             browser_register_attached,
             browser_unregister_tab,
             browser_focus_tab,
-            browser_clear_profile
+            browser_clear_profile,
+            search_agent_timeline_sqlite,
+            get_recent_agent_timeline_sqlite
         ])
         .setup(move |app| {
             crate::browser_automation::init_app_handle(app.handle().clone());
@@ -3810,6 +3848,16 @@ try {{
                     }
                 }
             });
+
+            // Init SQLite WAL+FTS5 timeline
+            {
+                let sqlite_db_path = crate::get_data_dir().join("kronos_timeline.db");
+                if let Err(e) = crate::kernel::sqlite_timeline::init_global_sqlite_timeline(&sqlite_db_path) {
+                    eprintln!("[sqlite_timeline] Init failed (non-fatal): {e}");
+                } else {
+                    println!("[sqlite_timeline] WAL+FTS5 timeline ready at {}", sqlite_db_path.display());
+                }
+            }
 
             Ok(())
         })
