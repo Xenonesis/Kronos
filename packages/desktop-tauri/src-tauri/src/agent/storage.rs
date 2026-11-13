@@ -130,6 +130,9 @@ impl AgentStorage {
         // obsolete history. Keep the same agent lock object to fence queued users.
         *timeline = None;
         self.remove_obsolete_history(id, generation);
+        if let Some(sqlite) = crate::kernel::sqlite_timeline::get_global_sqlite_timeline() {
+            let _ = sqlite.delete_agent_timeline(id);
+        }
         Ok(true)
     }
 
@@ -189,7 +192,13 @@ impl AgentStorage {
             atomic_write(&target, &bytes)?;
             timeline.journal_len = Some(bytes.len() as u64);
         }
+        let sqlite_row = crate::kernel::sqlite_timeline::SqliteTimelineRow::from_agent_timeline_item(agent_id, &item);
         timeline.items.push(item);
+        if let Some(sqlite) = crate::kernel::sqlite_timeline::get_global_sqlite_timeline() {
+            if let Err(e) = sqlite.upsert(&sqlite_row) {
+                eprintln!("[sqlite_timeline] Auto-sync append failed for {agent_id}: {e}");
+            }
+        }
         Ok(())
     }
 
@@ -304,6 +313,7 @@ impl AgentStorage {
                 })?);
                 offset += row.len();
             }
+            Self::sync_to_sqlite_if_needed(agent_id, &items);
             return Ok(Timeline {
                 items,
                 journal_len: Some(bytes.len() as u64),
@@ -327,11 +337,30 @@ impl AgentStorage {
         } else {
             Vec::new()
         };
+        Self::sync_to_sqlite_if_needed(agent_id, &items);
         Ok(Timeline {
             items,
             journal_len: None,
             append_error: None,
         })
+    }
+
+    fn sync_to_sqlite_if_needed(agent_id: &str, items: &[AgentTimelineItem]) {
+        if items.is_empty() {
+            return;
+        }
+        if let Some(sqlite) = crate::kernel::sqlite_timeline::get_global_sqlite_timeline() {
+            let count = sqlite.count(agent_id).unwrap_or(0);
+            if count < items.len() as i64 {
+                let rows: Vec<_> = items
+                    .iter()
+                    .map(|it| crate::kernel::sqlite_timeline::SqliteTimelineRow::from_agent_timeline_item(agent_id, it))
+                    .collect();
+                if let Err(e) = sqlite.upsert_batch(&rows) {
+                    eprintln!("[sqlite_timeline] Auto-sync hydration error for {agent_id}: {e}");
+                }
+            }
+        }
     }
 
     fn remove_obsolete_history(&self, agent_id: &str, generation: u64) {

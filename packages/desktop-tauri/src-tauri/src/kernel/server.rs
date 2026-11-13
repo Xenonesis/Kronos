@@ -2293,6 +2293,91 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }),
             }
         }
+        "agent/timeline/sqlite_search" => {
+            let payload = msg.get("payload");
+            let query = msg
+                .get("query")
+                .or_else(|| payload.and_then(|p| p.get("query")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let agent_id = msg
+                .get("agentId")
+                .or_else(|| payload.and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
+            let limit = msg
+                .get("limit")
+                .or_else(|| payload.and_then(|p| p.get("limit")))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(50) as usize;
+
+            if let Some(sqlite) = crate::kernel::sqlite_timeline::get_global_sqlite_timeline() {
+                match sqlite.fts_search(query, agent_id, limit) {
+                    Ok(hits) => serde_json::json!({
+                        "type": "agent/timeline/sqlite_search/response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": true,
+                        "payload": { "hits": hits }
+                    }),
+                    Err(e) => serde_json::json!({
+                        "type": "agent/timeline/sqlite_search/response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": false,
+                        "error": format!("FTS search failed: {e}")
+                    }),
+                }
+            } else {
+                serde_json::json!({
+                    "type": "agent/timeline/sqlite_search/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": false,
+                    "error": "SQLite timeline not initialized"
+                })
+            }
+        }
+        "agent/timeline/sqlite_recent" => {
+            let payload = msg.get("payload");
+            let agent_id = msg
+                .get("agentId")
+                .or_else(|| payload.and_then(|p| p.get("agentId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let limit = msg
+                .get("limit")
+                .or_else(|| payload.and_then(|p| p.get("limit")))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(50) as usize;
+
+            if let Some(sqlite) = crate::kernel::sqlite_timeline::get_global_sqlite_timeline() {
+                match sqlite.get_recent(agent_id, limit) {
+                    Ok(items) => serde_json::json!({
+                        "type": "agent/timeline/sqlite_recent/response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": true,
+                        "payload": { "items": items }
+                    }),
+                    Err(e) => serde_json::json!({
+                        "type": "agent/timeline/sqlite_recent/response",
+                        "requestId": request_id,
+                        "id": request_id,
+                        "success": false,
+                        "error": format!("Query failed: {e}")
+                    }),
+                }
+            } else {
+                serde_json::json!({
+                    "type": "agent/timeline/sqlite_recent/response",
+                    "requestId": request_id,
+                    "id": request_id,
+                    "success": false,
+                    "error": "SQLite timeline not initialized"
+                })
+            }
+        }
         "agent/cancel" => {
             let payload = msg.get("payload");
             let agent_id = msg

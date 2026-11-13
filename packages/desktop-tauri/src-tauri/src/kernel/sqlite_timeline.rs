@@ -29,6 +29,102 @@ pub struct SqliteTimelineRow {
     pub created_at_ms: i64,
 }
 
+impl SqliteTimelineRow {
+    /// Constructs a `SqliteTimelineRow` from an active `AgentTimelineItem`.
+    pub fn from_agent_timeline_item(agent_id: &str, item: &crate::agent::types::AgentTimelineItem) -> Self {
+        use crate::agent::types::AgentTimelineItem;
+
+        let parse_ts = |ts: &str| -> i64 {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .map(|dt| dt.timestamp_millis())
+                .unwrap_or_else(|_| chrono::Utc::now().timestamp_millis())
+        };
+
+        let raw_json = serde_json::to_string(item).unwrap_or_default();
+
+        match item {
+            AgentTimelineItem::UserMessage { id, text, timestamp } => Self {
+                agent_id: agent_id.to_string(),
+                item_id: id.clone(),
+                turn_id: None,
+                kind: "user_message".to_string(),
+                content_text: text.clone(),
+                raw_json,
+                created_at_ms: parse_ts(timestamp),
+            },
+            AgentTimelineItem::AssistantMessage { id, text, timestamp } => Self {
+                agent_id: agent_id.to_string(),
+                item_id: id.clone(),
+                turn_id: None,
+                kind: "assistant_message".to_string(),
+                content_text: text.clone(),
+                raw_json,
+                created_at_ms: parse_ts(timestamp),
+            },
+            AgentTimelineItem::Thinking { id, text, timestamp } => Self {
+                agent_id: agent_id.to_string(),
+                item_id: id.clone(),
+                turn_id: None,
+                kind: "thinking".to_string(),
+                content_text: text.clone(),
+                raw_json,
+                created_at_ms: parse_ts(timestamp),
+            },
+            AgentTimelineItem::ToolCall {
+                id,
+                call_id,
+                name,
+                input,
+                timestamp,
+            } => Self {
+                agent_id: agent_id.to_string(),
+                item_id: id.clone(),
+                turn_id: Some(call_id.clone()),
+                kind: "tool_call".to_string(),
+                content_text: format!("{}: {}", name, input),
+                raw_json,
+                created_at_ms: parse_ts(timestamp),
+            },
+            AgentTimelineItem::ToolResult {
+                id,
+                call_id,
+                output,
+                timestamp,
+                ..
+            } => Self {
+                agent_id: agent_id.to_string(),
+                item_id: id.clone(),
+                turn_id: Some(call_id.clone()),
+                kind: "tool_result".to_string(),
+                content_text: match output {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                },
+                raw_json,
+                created_at_ms: parse_ts(timestamp),
+            },
+            AgentTimelineItem::ErrorNotice {
+                id,
+                message,
+                timestamp,
+            } => Self {
+                agent_id: agent_id.to_string(),
+                item_id: id.clone(),
+                turn_id: None,
+                kind: "error_notice".to_string(),
+                content_text: message.clone(),
+                raw_json,
+                created_at_ms: parse_ts(timestamp),
+            },
+        }
+    }
+
+    /// Deserializes the stored raw JSON back into a typed `AgentTimelineItem`.
+    pub fn to_agent_timeline_item(&self) -> Result<crate::agent::types::AgentTimelineItem, serde_json::Error> {
+        serde_json::from_str(&self.raw_json)
+    }
+}
+
 /// Full-text search result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -190,6 +286,16 @@ impl SqliteTimeline {
         .filter_map(|r| r.ok())
         .collect();
         Ok(rows)
+    }
+
+    /// Returns the last `limit` timeline items deserialized as `AgentTimelineItem`s.
+    pub fn get_recent_items(&self, agent_id: &str, limit: usize) -> rusqlite::Result<Vec<crate::agent::types::AgentTimelineItem>> {
+        let rows = self.get_recent(agent_id, limit)?;
+        let items = rows
+            .into_iter()
+            .filter_map(|r| r.to_agent_timeline_item().ok())
+            .collect();
+        Ok(items)
     }
 
     /// Returns all timeline items for a specific turn.
