@@ -15,6 +15,7 @@ interface WorkspaceExplorerViewProps {
   normalizedServerId: string;
   normalizedWorkspaceId: string;
   isRouteFocused: boolean;
+  paneFocusSuspended: boolean;
   closingTabIds: Set<string>;
   hoveredCloseTabKey: string | null;
   setHoveredCloseTabKey: Dispatch<SetStateAction<string | null>>;
@@ -60,6 +61,7 @@ export const WorkspaceExplorerView = memo(function WorkspaceExplorerView({
   normalizedServerId,
   normalizedWorkspaceId,
   isRouteFocused,
+  paneFocusSuspended,
   closingTabIds,
   hoveredCloseTabKey,
   setHoveredCloseTabKey,
@@ -94,6 +96,7 @@ export const WorkspaceExplorerView = memo(function WorkspaceExplorerView({
       normalizedServerId={normalizedServerId}
       normalizedWorkspaceId={normalizedWorkspaceId}
       isWorkspaceFocused={isRouteFocused}
+      paneFocusSuspended={paneFocusSuspended}
       closingTabIds={closingTabIds}
       hoveredCloseTabKey={hoveredCloseTabKey}
       setHoveredCloseTabKey={setHoveredCloseTabKey}

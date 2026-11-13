@@ -854,6 +854,60 @@ function hideAlerts() {
 }
 ```
 
+### Workspace row badge items
+
+`addWorkspaceRowBadgeItem({ id, title, icon, Component })` adds an item to the line under each workspace
+title in the sidebar, after the row's own items (host, pull request, checks, services, labels).
+`title` and `icon` label the item's toggle in the sidebar's **Show** menu, in a separate plugin group
+below a separator. Items start visible.
+
+`Component` renders once per workspace row on the plugin's host and receives
+`PluginWorkspaceRowBadgeItemProps`: `theme`, `host`, `layout`, and `workspaceId`. Render
+`WorkspaceRowBadge` from `@getpaseo/plugin/client/ui`, or `null` when there is nothing to say about
+the workspace:
+
+| Prop                 | Meaning                                                                        |
+| -------------------- | ------------------------------------------------------------------------------ |
+| `icon`               | Optional. Any [icon](#icons) form, drawn at the line's glyph size.             |
+| `label`              | Optional. A short word. A badge with neither `icon` nor `label` draws nothing. |
+| `tone`               | `"muted"` (default), `"success"`, `"warning"`, `"danger"`, or `"info"`.        |
+| `accessibilityLabel` | Defaults to `label`, then the item's `title`.                                  |
+
+The line adds no separator around your badges, and returning `null` leaves no gap. Render as many
+badges as you like. Every row
+renders the component, so share one query across rows instead of fetching per workspace: the
+plugin's React Query client is shared by all of its components on a host.
+
+```tsx
+import type { PluginWorkspaceRowBadgeItemProps } from "@getpaseo/plugin/client";
+import { useRpc } from "@getpaseo/plugin/client";
+import { WorkspaceRowBadge } from "@getpaseo/plugin/client/ui";
+import { useQuery } from "@tanstack/react-query";
+
+function ReviewState({ workspaceId }: PluginWorkspaceRowBadgeItemProps) {
+  const list = useRpc(reviewStates);
+  const { data } = useQuery({
+    queryKey: ["review-states"],
+    queryFn: () => list({}),
+    refetchInterval: 5000,
+  });
+  const state = data?.[workspaceId];
+  if (!state) return null;
+  return <WorkspaceRowBadge icon="Eye" label={state.label} tone="warning" />;
+}
+
+client.addWorkspaceRowBadgeItem({
+  id: "review",
+  title: "Review",
+  icon: "Eye",
+  Component: ReviewState,
+});
+```
+
+Apps older than this API have no `addWorkspaceRowBadgeItem`; check for it before calling.
+
+See the [workspace row badges example](https://github.com/getpaseo/paseo/tree/main/plugin-examples/workspace-row-badges).
+
 ## Host UI
 
 Import Paseo-owned UI from `@getpaseo/plugin/client/ui` in client code. This example
@@ -1572,6 +1626,8 @@ Agent snapshot fields:
 | `workspaceId`       | `string`                                                       |
 | `provider`          | `string`                                                       |
 | `status`            | `"initializing" \| "idle" \| "running" \| "error" \| "closed"` |
+| `backgroundWork`    | `{ count: number }`                                            |
+| `background`        | `boolean`                                                      |
 | `createdAt`         | ISO timestamp                                                  |
 | `updatedAt`         | ISO timestamp                                                  |
 | `lastActivityAt`    | ISO timestamp                                                  |
@@ -1584,6 +1640,27 @@ Agent snapshot fields:
 | `attentionReason`   | `"finished" \| "error" \| "permission" \| null`                |
 | `parentAgentId`     | `string \| null`                                               |
 | `labels`            | `Record<string, string>`                                       |
+
+`backgroundWork.count` is the number of shells and monitors the agent left running after its turn,
+and `0` when none are live. An agent can be `idle` with `attentionReason: "finished"` while that
+work still runs, so combine the fields the way your plugin needs:
+
+```tsx
+const busy = useAgent(
+  agentId,
+  (agent) => agent.status === "running" || agent.backgroundWork.count > 0,
+);
+if (busy === null) return null; // The agent is unavailable.
+```
+
+To list or stop the work itself, use
+[`paseo.agents.ref(id).backgroundWork`](/docs/sdk/reference#agent-handle).
+
+`background` is `true` for a [background agent](/docs/sdk/agents#run-a-helper-as-a-background-agent),
+a helper hidden from tabs, lists and attention. It is fixed when the agent is created. An agent in a
+background workspace reads `false` unless it was created as a background agent; read the
+workspace's own `background` for that. `backgroundWork` and `background` require Paseo 0.16.0 or
+later.
 
 Paseo owns tab focus, splitting, closing, persistence, query state, the API/RPC providers, and the render error boundary. A restored tab whose plugin, panel, context, workspace, or agent is unavailable stays open with an unavailable message instead of crashing the workspace.
 
@@ -1953,6 +2030,7 @@ export default function contribute(client: PluginClientContext) {
 | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `context`                                           | `"agent"` for a running agent, `"draft"` for a new agent in a workspace, `"new-workspace"` for the New workspace screen.                                                                                                                                                                                  |
 | `prompt`, `setPrompt(text)`, `insertText(text)`     | The prompt. `insertText` replaces the selection or inserts at the cursor.                                                                                                                                                                                                                                 |
+| `focus(options?)`                                   | Puts the cursor in this composer, ready to type, and resolves when it is there. `selection: { start, end }` places the cursor or selects text, as offsets into `prompt` clamped to its length; omit it to keep the cursor where it is. See [focus a composer](#focus-a-composer).                         |
 | `attachments`, `addAttachment`, `removeAttachment`  | Items from [your own attachment sources](#add-a-composer-attachment-source). Attachments from other plugins and Paseo's own are not listed.                                                                                                                                                               |
 | `agent.provider`, `model`, `mode`, `thinking`       | What the agent runs with, or what the draft will create.                                                                                                                                                                                                                                                  |
 | `agent.options`                                     | The provider options in effect, defaults included. In a draft: the options the agent will be created with, including your changes.                                                                                                                                                                        |
@@ -1993,11 +2071,42 @@ The [composer controls example](https://github.com/getpaseo/paseo/tree/main/plug
 registers a `Select`, two `Toggle`s (one writes a provider option) and an `Action`, plus an
 Explorer panel and a Command Center item that reach a composer by reference.
 
+### Focus a composer
+
+`insertText` and `setPrompt` do not move the cursor. Call `focus()` after them so the user can keep
+typing:
+
+```tsx
+composer.insertText("- [ ] Tests\n");
+await composer.focus();
+```
+
+`await composer.focus({ selection: { start: 0, end: composer.prompt.length } })` selects the prompt.
+
+You do not need to know where the user is. On a running agent's composer, Paseo navigates to the
+agent's tab or workspace when it is not on screen, closes a phone's agent list or Explorer panel
+that covers it, and moves focus to the agent's pane, then focuses the input. When the input is
+already on screen and focused in its pane, `focus()` only puts the cursor there. Every composer also
+closes the sheets, menus, pickers and image previews it opened over itself first, such as the
+controls sheet that holds your items on a phone. A phone opens its keyboard.
+
+`focus()` rejects when the composer cannot take focus: the agent was archived, its composer did not
+come on screen within 15 seconds, or the input refused focus, as it does on a phone while dictation
+is running. When calls overlap, the latest one decides where the cursor goes and the earlier ones
+settle with it. A rejected promise returned from a button's `onPress` or a Command Center item's
+`onSelect` shows the user an error toast.
+
+Drafts and the New workspace composer are only reachable from an item inside them, so `focus()` does
+not navigate to them. It works while the composer is on screen, and rejects with "The composer is
+not on screen." when the user has already moved on. A locked composer accepts focus.
+
 ### Reach a composer by reference
 
 A running agent has a composer whether or not its tab is open. `useComposers(selector)` in any plugin
-component, and `composers(selector)` on every command context, return the same `PluginComposer` that
-`useComposer()` gives an item, for an agent you name or for the focused one:
+component, `composers(selector)` on every command context, and `client.composers(selector)` on the
+client context return the same `PluginComposer` that `useComposer()` gives an item, for an agent you
+name or for the focused one. Use `client.composers` in a callback that receives no context, such as a
+[pill's `onPress`](#composer-pills):
 
 ```tsx
 import { useComposers, type PluginClientContext } from "@getpaseo/plugin/client";
@@ -2055,6 +2164,7 @@ you reach from outside:
   rejects with the provider's message. `model` and `thinking` read what the model picker
   shows at that moment: until the provider's catalog loads that is the id the agent reports or was
   created with, which may be an alias, and once it loads the catalog's own id.
+- `focus()` reveals the composer first, as [described above](#focus-a-composer).
 - Drafts and the New workspace screen are not addressable by reference. Only an item inside one
   reaches its composer, through `useComposer()`.
 
@@ -2153,6 +2263,31 @@ const pill = client.addComposerPill({
       kind: "action",
       onPress() {
         client.openPanel("review", { workspaceId, agentId });
+      },
+    },
+  },
+});
+```
+
+A pill's `onPress` receives no arguments. Reach its agent's composer with
+[`client.composers`](#reach-a-composer-by-reference):
+
+```tsx
+const pill = client.addComposerPill({
+  id: "hello",
+  workspaceId,
+  agentId,
+  button: {
+    title: "Add HELLO to the composer",
+    icon: "Hand",
+    label: "Hello",
+    behavior: {
+      kind: "action",
+      async onPress() {
+        for (const composer of client.composers({ agentId })) {
+          composer.insertText("HELLO");
+          await composer.focus();
+        }
       },
     },
   },
