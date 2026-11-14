@@ -8,44 +8,54 @@ import type { ProviderSnapshotEntry } from "@getpaseo/protocol/agent-types";
 import type { MutableDaemonConfig } from "@getpaseo/protocol/messages";
 import { ToastApiProvider } from "@/contexts/toast-api-context";
 
-const { theme, snapshotState, configState, patchConfigMock, openProviderSettingsMock } = vi.hoisted(
-  () => ({
-    theme: {
-      spacing: { 1: 4, "1.5": 6, 2: 8, 3: 12, 4: 16, 6: 24 },
-      iconSize: { sm: 14, md: 20 },
-      fontSize: { xs: 11, sm: 13, base: 15 },
-      fontWeight: { normal: "400" },
-      borderRadius: { lg: 8 },
-      opacity: { 50: 0.5 },
-      colors: {
-        surface1: "#111",
-        surface2: "#222",
-        surface3: "#333",
-        foreground: "#fff",
-        foregroundMuted: "#aaa",
-        border: "#555",
-        accent: "#0a84ff",
-        statusSuccess: "#00ff00",
-        statusWarning: "#ff9500",
-        statusDanger: "#ff0000",
-        palette: { red: { 300: "#ff6b6b" }, white: "#fff" },
-      },
+const {
+  theme,
+  snapshotState,
+  configState,
+  patchConfigMock,
+  openProviderSettingsMock,
+  refreshMock,
+} = vi.hoisted(() => ({
+  theme: {
+    spacing: { 1: 4, "1.5": 6, 2: 8, 3: 12, 4: 16, 6: 24 },
+    iconSize: { sm: 14, md: 20 },
+    fontSize: { xs: 11, sm: 13, base: 15 },
+    fontWeight: { normal: "400", medium: "500" },
+    borderRadius: { sm: 4, md: 6, lg: 8 },
+    borderWidth: { 1: 1, 2: 2 },
+    opacity: { 50: 0.5 },
+    colors: {
+      surface1: "#111",
+      surface2: "#222",
+      surface3: "#333",
+      foreground: "#fff",
+      foregroundMuted: "#aaa",
+      border: "#555",
+      accent: "#0a84ff",
+      statusSuccess: "#00ff00",
+      statusWarning: "#ff9500",
+      statusDanger: "#ff0000",
+      palette: { red: { 300: "#ff6b6b" }, white: "#fff" },
     },
-    snapshotState: {
-      entries: undefined as ProviderSnapshotEntry[] | undefined,
-      isLoading: false,
-      isRefreshing: false,
-    },
-    configState: {
-      config: null as MutableDaemonConfig | null,
-    },
-    patchConfigMock: vi.fn(async () => undefined),
-    openProviderSettingsMock: vi.fn(),
-  }),
-);
+  },
+  snapshotState: {
+    entries: undefined as ProviderSnapshotEntry[] | undefined,
+    isLoading: false,
+    isRefreshing: false,
+  },
+  configState: {
+    config: null as MutableDaemonConfig | null,
+  },
+  patchConfigMock: vi.fn(async () => undefined),
+  openProviderSettingsMock: vi.fn(),
+  refreshMock: vi.fn(async () => undefined),
+}));
 
 vi.mock("react-native", () => ({
-  Platform: { OS: "web" },
+  Platform: {
+    OS: "web",
+    select: (options: Record<string, unknown>) => options.web ?? options.default,
+  },
   View: ({ children, testID }: { children?: React.ReactNode; testID?: string }) =>
     React.createElement("div", { "data-testid": testID }, children),
   Text: ({ children }: { children?: React.ReactNode }) =>
@@ -102,6 +112,8 @@ vi.mock("lucide-react-native", () => {
     ChevronRight: icon("ChevronRight"),
     MoreHorizontal: icon("MoreHorizontal"),
     Trash2: icon("Trash2"),
+    RotateCw: icon("RotateCw"),
+    SlidersHorizontal: icon("SlidersHorizontal"),
   };
 });
 
@@ -109,7 +121,7 @@ vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, values?: Record<string, string | number>) =>
       (
-        ({
+        {
           "settings.providers.providerDetails": "{{name}} provider details",
           "settings.providers.enableProvider": "Enable {{name}}",
           "settings.providers.statuses.disabled": "Disabled",
@@ -129,7 +141,7 @@ vi.mock("react-i18next", () => ({
             "This deletes the provider entry from config.json. It cannot be undone.",
           "settings.providers.remove.confirm": "Remove",
           "settings.providers.remove.errorTitle": "Unable to remove provider",
-        })[key] ?? key
+        }[key] ?? key
       )
         .replaceAll("{{name}}", String(values?.name ?? ""))
         .replaceAll("{{count}}", String(values?.count ?? "")),
@@ -261,7 +273,7 @@ vi.mock("@/hooks/use-providers-snapshot", () => ({
     isRefreshing: snapshotState.isRefreshing,
     error: null,
     supportsSnapshot: true,
-    refresh: vi.fn(async () => {}),
+    refresh: refreshMock,
     refetchIfStale: vi.fn(),
   }),
 }));
@@ -363,6 +375,8 @@ describe("ProvidersSection", () => {
     patchConfigMock.mockReset();
     patchConfigMock.mockResolvedValue(undefined);
     openProviderSettingsMock.mockReset();
+    refreshMock.mockReset();
+    refreshMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -479,5 +493,111 @@ describe("ProvidersSection", () => {
     expect(patchConfigMock).toHaveBeenCalledWith({
       providers: { claude: { enabled: false } },
     });
+  });
+
+  it("sorts installed and available providers to the top ahead of uninstalled providers", () => {
+    const uninstalledClaude: ProviderSnapshotEntry = {
+      provider: "claude",
+      status: "unavailable",
+      enabled: true,
+      label: "Claude",
+      modes: [],
+      models: [],
+    };
+    const availableCodex: ProviderSnapshotEntry = {
+      provider: "codex",
+      status: "ready",
+      enabled: true,
+      label: "Codex",
+      modes: [],
+      models: [{ provider: "codex", id: "o3-mini", label: "o3-mini" }],
+    };
+    const uninstalledOllama: ProviderSnapshotEntry = {
+      provider: "ollama",
+      status: "unavailable",
+      enabled: true,
+      label: "Ollama",
+      modes: [],
+      models: [],
+    };
+    const availablePi: ProviderSnapshotEntry = {
+      provider: "pi",
+      status: "ready",
+      enabled: true,
+      label: "Pi",
+      modes: [],
+      models: [{ provider: "pi", id: "pi-coder", label: "Pi Coder" }],
+    };
+
+    // Even though Claude and Ollama are placed first and third in entries
+    snapshotState.entries = [uninstalledClaude, availableCodex, uninstalledOllama, availablePi];
+    configState.config = makeConfig();
+
+    render();
+
+    const rows = Array.from(container?.querySelectorAll('[aria-label$="provider details"]') ?? []);
+    expect(rows).toHaveLength(4);
+
+    const labels = rows.map((row) => row.getAttribute("aria-label"));
+
+    // Available providers (Codex, Pi) must be at the top!
+    expect(labels[0]).toBe("Codex provider details");
+    expect(labels[1]).toBe("Pi provider details");
+    // Uninstalled providers (Claude, Ollama) must be at the bottom!
+    expect(labels[2]).toBe("Claude provider details");
+    expect(labels[3]).toBe("Ollama provider details");
+  });
+
+  it("respects custom order configuration within the installed group", () => {
+    const availableCodex: ProviderSnapshotEntry = {
+      provider: "codex",
+      status: "ready",
+      enabled: true,
+      label: "Codex",
+      modes: [],
+      models: [{ provider: "codex", id: "o3-mini", label: "o3-mini" }],
+    };
+    const availablePi: ProviderSnapshotEntry = {
+      provider: "pi",
+      status: "ready",
+      enabled: true,
+      label: "Pi",
+      modes: [],
+      models: [{ provider: "pi", id: "pi-coder", label: "Pi Coder" }],
+    };
+
+    snapshotState.entries = [availableCodex, availablePi];
+    // Give Pi higher priority (order: 1) and Codex lower priority (order: 2)
+    configState.config = makeConfig({
+      codex: { order: 2 },
+      pi: { order: 1 },
+    });
+
+    render();
+
+    const rows = Array.from(container?.querySelectorAll('[aria-label$="provider details"]') ?? []);
+    const labels = rows.map((row) => row.getAttribute("aria-label"));
+
+    expect(labels[0]).toBe("Pi provider details");
+    expect(labels[1]).toBe("Codex provider details");
+  });
+
+  it("triggers automatic refresh / auto-detection on mount and on scan button press", async () => {
+    snapshotState.entries = [claudeEntry];
+    configState.config = makeConfig();
+
+    render();
+
+    // Auto-refresh on mount
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+
+    const autoDetectBtn = container?.querySelector('[data-testid="providers-auto-detect-btn"]');
+    expect(autoDetectBtn).not.toBeNull();
+
+    await act(async () => {
+      autoDetectBtn?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(refreshMock).toHaveBeenCalledTimes(2);
   });
 });

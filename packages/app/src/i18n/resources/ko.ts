@@ -3068,6 +3068,32 @@ export const ko: TranslationResources = {
         available: "사용 가능",
         notInstalled: "설치되지 않음",
       },
+      customize: {
+        title: "Customize {{name}}",
+        button: "Customize",
+        description:
+          "Configure custom endpoint, authentication, executable path, or runtime environment.",
+        endpoint: "API Endpoint / Base URL",
+        endpointPlaceholder: "e.g. http://127.0.0.1:11434 or http://127.0.0.1:1234/v1",
+        apiKey: "API Key / Auth Token",
+        apiKeyPlaceholder: "Enter secret key or token",
+        command: "Executable Command / Binary Path",
+        commandPlaceholder: "e.g. C:\\path\\to\\executable.exe",
+        envVars: "Environment Variables (KEY=VALUE)",
+        envVarsPlaceholder: "ANTHROPIC_API_KEY=sk-...\nOLLAMA_HOST=127.0.0.1:11434",
+        order: "Display Priority / Order",
+        orderPlaceholder: "1 (Lower numbers appear first)",
+        save: "Save changes",
+        saving: "Saving...",
+        saveSuccess: "Provider settings saved successfully",
+        saveError: "Failed to save provider settings",
+      },
+      autoDetect: {
+        button: "Find installed providers",
+        scanning: "Scanning system for installed providers...",
+        detectedCount: "Found {{count}} available providers",
+      },
+
       models: {
         one: "모델 1개",
         many: "모델 {{count}}개",

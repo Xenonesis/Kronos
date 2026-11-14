@@ -1,5 +1,13 @@
 import * as Clipboard from "expo-clipboard";
-import { AlertTriangle, Copy, FileText, Plus, RotateCw, Trash2 } from "lucide-react-native";
+import {
+  AlertTriangle,
+  Copy,
+  FileText,
+  Plus,
+  RotateCw,
+  SlidersHorizontal,
+  Trash2,
+} from "lucide-react-native";
 import type { TFunction } from "i18next";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -25,7 +33,10 @@ import { settingsStyles } from "@/styles/settings";
 import { resolveProviderLabel } from "@/utils/provider-definitions";
 import { compareMatchScores, scoreTextFields } from "@getpaseo/protocol/search/text-match";
 import type { AgentModelDefinition, AgentProvider } from "@getpaseo/protocol/agent-types";
+import type { MutableDaemonConfig } from "@getpaseo/protocol/messages";
 import type { ProviderProfileModel } from "@getpaseo/protocol/provider-config";
+
+type ProviderOverride = NonNullable<NonNullable<MutableDaemonConfig["providers"]>[string]>;
 import {
   resolveProviderDiscoveredModels,
   type ProviderDiscoveredModelsCache,
@@ -234,6 +245,268 @@ function AddCustomModelSubSheet({
   );
 }
 
+const CUSTOMIZE_SNAP_POINTS = ["75%", "92%"];
+
+interface CustomizeFormValues {
+  url: string;
+  key: string;
+  cmd: string;
+  envLines: string;
+  ord: string;
+}
+
+function resolveInitialValues(currentOverride?: ProviderOverride): CustomizeFormValues {
+  const opts = (currentOverride?.options as Record<string, unknown> | undefined) ?? {};
+  let url = "";
+  if (typeof opts.baseUrl === "string") {
+    url = opts.baseUrl;
+  } else if (typeof opts.apiUrl === "string") {
+    url = opts.apiUrl;
+  }
+  const key = typeof opts.apiKey === "string" ? opts.apiKey : "";
+  const cmd = Array.isArray(currentOverride?.command) ? currentOverride.command.join(" ") : "";
+  const envLines = currentOverride?.env
+    ? Object.entries(currentOverride.env)
+        .map(([k, v]) => `${k}=${v}`)
+        .join("\n")
+    : "";
+  const ord = currentOverride?.order !== undefined ? String(currentOverride.order) : "";
+  return { url, key, cmd, envLines, ord };
+}
+
+function CustomizeProviderForm({
+  provider,
+  serverId,
+  onClose,
+  refresh,
+  currentOverride,
+}: {
+  provider: string;
+  serverId: string;
+  onClose: () => void;
+  refresh: (providers?: AgentProvider[]) => Promise<void>;
+  currentOverride?: ProviderOverride;
+}) {
+  const { t } = useTranslation();
+  const { theme } = useUnistyles();
+  const toast = useToast();
+  const { patchConfig } = useDaemonConfig(serverId);
+
+  const initial = useMemo(() => resolveInitialValues(currentOverride), [currentOverride]);
+  const [baseUrl, setBaseUrl] = useState(initial.url);
+  const [apiKey, setApiKey] = useState(initial.key);
+  const [command, setCommand] = useState(initial.cmd);
+  const [envVars, setEnvVars] = useState(initial.envLines);
+  const [order, setOrder] = useState(initial.ord);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSave = useCallback(async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const envObj: Record<string, string> = {};
+      for (const line of envVars.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const eqIdx = trimmed.indexOf("=");
+        if (eqIdx > 0) {
+          const k = trimmed.slice(0, eqIdx).trim();
+          const v = trimmed.slice(eqIdx + 1).trim();
+          if (k) envObj[k] = v;
+        }
+      }
+
+      const existingOpts = (currentOverride?.options as Record<string, unknown> | undefined) ?? {};
+      const nextOpts: Record<string, unknown> = { ...existingOpts };
+      if (baseUrl.trim()) {
+        nextOpts.baseUrl = baseUrl.trim();
+      } else {
+        delete nextOpts.baseUrl;
+        delete nextOpts.apiUrl;
+      }
+      if (apiKey.trim()) {
+        nextOpts.apiKey = apiKey.trim();
+      } else {
+        delete nextOpts.apiKey;
+      }
+
+      const nextCommand = command.trim() ? command.trim().split(/\s+/).filter(Boolean) : undefined;
+      const numOrder = order.trim() ? parseInt(order.trim(), 10) : undefined;
+
+      await patchConfig({
+        providers: {
+          [provider]: {
+            ...currentOverride,
+            options: Object.keys(nextOpts).length > 0 ? nextOpts : undefined,
+            command: nextCommand,
+            env: Object.keys(envObj).length > 0 ? envObj : undefined,
+            order: typeof numOrder === "number" && !isNaN(numOrder) ? numOrder : undefined,
+          },
+        },
+      });
+
+      await refresh([provider as AgentProvider]);
+      toast.show(t("settings.providers.customize.saveSuccess"));
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("settings.providers.customize.saveError"));
+    } finally {
+      setSaving(false);
+    }
+  }, [
+    apiKey,
+    baseUrl,
+    command,
+    currentOverride,
+    envVars,
+    onClose,
+    order,
+    patchConfig,
+    provider,
+    refresh,
+    t,
+    toast,
+  ]);
+
+  return (
+    <View style={sheetStyles.formGroup}>
+      <Text style={sheetStyles.formDescription}>
+        {t("settings.providers.customize.description")}
+      </Text>
+
+      <Text style={sheetStyles.formLabel}>{t("settings.providers.customize.endpoint")}</Text>
+      <AdaptiveTextInput
+        initialValue={baseUrl}
+        resetKey={`customize-endpoint-${provider}`}
+        onChangeText={setBaseUrl}
+        placeholder={t("settings.providers.customize.endpointPlaceholder")}
+        placeholderTextColor={theme.colors.foregroundMuted}
+        autoCapitalize="none"
+        autoCorrect={false}
+        style={sheetStyles.formInput}
+      />
+
+      <Text style={sheetStyles.formLabel}>{t("settings.providers.customize.apiKey")}</Text>
+      <AdaptiveTextInput
+        initialValue={apiKey}
+        resetKey={`customize-apikey-${provider}`}
+        onChangeText={setApiKey}
+        placeholder={t("settings.providers.customize.apiKeyPlaceholder")}
+        placeholderTextColor={theme.colors.foregroundMuted}
+        secureTextEntry
+        autoCapitalize="none"
+        autoCorrect={false}
+        style={sheetStyles.formInput}
+      />
+
+      <Text style={sheetStyles.formLabel}>{t("settings.providers.customize.command")}</Text>
+      <AdaptiveTextInput
+        initialValue={command}
+        resetKey={`customize-command-${provider}`}
+        onChangeText={setCommand}
+        placeholder={t("settings.providers.customize.commandPlaceholder")}
+        placeholderTextColor={theme.colors.foregroundMuted}
+        autoCapitalize="none"
+        autoCorrect={false}
+        style={sheetStyles.formInput}
+      />
+
+      <Text style={sheetStyles.formLabel}>{t("settings.providers.customize.envVars")}</Text>
+      <AdaptiveTextInput
+        initialValue={envVars}
+        resetKey={`customize-env-${provider}`}
+        onChangeText={setEnvVars}
+        placeholder={t("settings.providers.customize.envVarsPlaceholder")}
+        placeholderTextColor={theme.colors.foregroundMuted}
+        multiline
+        numberOfLines={3}
+        autoCapitalize="none"
+        autoCorrect={false}
+        style={[sheetStyles.formInput, sheetStyles.formInputMultiline]}
+      />
+
+      <Text style={sheetStyles.formLabel}>{t("settings.providers.customize.order")}</Text>
+      <AdaptiveTextInput
+        initialValue={order}
+        resetKey={`customize-order-${provider}`}
+        onChangeText={setOrder}
+        placeholder={t("settings.providers.customize.orderPlaceholder")}
+        placeholderTextColor={theme.colors.foregroundMuted}
+        keyboardType="numeric"
+        autoCapitalize="none"
+        autoCorrect={false}
+        style={sheetStyles.formInput}
+      />
+
+      {error ? <Text style={sheetStyles.errorText}>{error}</Text> : null}
+
+      <View style={sheetStyles.formActions}>
+        <Button variant="secondary" onPress={onClose} disabled={saving}>
+          {t("common.actions.cancel")}
+        </Button>
+        <Button
+          variant="default"
+          onPress={handleSave}
+          disabled={saving}
+          testID="save-provider-customization-btn"
+        >
+          {saving
+            ? t("settings.providers.customize.saving")
+            : t("settings.providers.customize.save")}
+        </Button>
+      </View>
+    </View>
+  );
+}
+
+function CustomizeProviderSubSheet({
+  provider,
+  providerLabel,
+  serverId,
+  visible,
+  onClose,
+  refresh,
+}: {
+  provider: string;
+  providerLabel: string;
+  serverId: string;
+  visible: boolean;
+  onClose: () => void;
+  refresh: (providers?: AgentProvider[]) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const { config } = useDaemonConfig(serverId);
+  const currentOverride = config?.providers?.[provider];
+
+  const header = useMemo<SheetHeader>(
+    () => ({ title: t("settings.providers.customize.title", { name: providerLabel }) }),
+    [providerLabel, t],
+  );
+
+  return (
+    <AdaptiveModalSheet
+      header={header}
+      visible={visible}
+      onClose={onClose}
+      desktopMaxWidth={520}
+      snapPoints={CUSTOMIZE_SNAP_POINTS}
+      testID="customize-provider-sheet"
+    >
+      {visible ? (
+        <CustomizeProviderForm
+          key={`${provider}-${visible}`}
+          provider={provider}
+          serverId={serverId}
+          onClose={onClose}
+          refresh={refresh}
+          currentOverride={currentOverride}
+        />
+      ) : null}
+    </AdaptiveModalSheet>
+  );
+}
+
 function DiagnosticSubSheet({
   provider,
   serverId,
@@ -405,6 +678,7 @@ interface ProviderModalBodyProps {
   deletingModelId: string | null;
   onRefresh: () => void;
   onDeleteCustom: (modelId: string) => void;
+  onOpenCustomizeSheet: () => void;
   theme: { iconSize: { md: number }; colors: { foregroundMuted: string } };
 }
 
@@ -413,6 +687,7 @@ interface ProviderSheetFooterInput {
   isCompact: boolean;
   modelsRefreshing: boolean;
   t: TFunction;
+  onOpenCustomizeSheet: () => void;
   onOpenAddSheet: () => void;
   onOpenDiagSheet: () => void;
   onRefreshModels: () => void;
@@ -423,6 +698,7 @@ function renderProviderSheetFooter({
   isCompact,
   modelsRefreshing,
   t,
+  onOpenCustomizeSheet,
   onOpenAddSheet,
   onOpenDiagSheet,
   onRefreshModels,
@@ -436,6 +712,15 @@ function renderProviderSheetFooter({
         <ProviderUpdatedLabel fetchedAt={fetchedAt} isCompact={isCompact} />
       ) : null}
       <View style={actionsStyle}>
+        <Button
+          variant="secondary"
+          leftIcon={SlidersHorizontal}
+          onPress={onOpenCustomizeSheet}
+          style={buttonStyle}
+          testID="provider-customize-footer-btn"
+        >
+          {t("settings.providers.customize.button")}
+        </Button>
         <Button variant="secondary" leftIcon={Plus} onPress={onOpenAddSheet} style={buttonStyle}>
           {t("settings.providers.models.addModel")}
         </Button>
@@ -512,11 +797,21 @@ function ProviderModalBody(props: ProviderModalBodyProps) {
       <View style={sheetStyles.emptyState}>
         <AlertTriangle size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
         <Text style={sheetStyles.mutedText}>{providerErrorMessage}</Text>
-        <Button variant="default" onPress={onRefresh} disabled={modelsRefreshing}>
-          {modelsRefreshing
-            ? t("settings.providers.models.retrying")
-            : t("settings.providers.models.retry")}
-        </Button>
+        <View style={sheetStyles.emptyActionsRow}>
+          <Button variant="default" onPress={onRefresh} disabled={modelsRefreshing}>
+            {modelsRefreshing
+              ? t("settings.providers.models.retrying")
+              : t("settings.providers.models.retry")}
+          </Button>
+          <Button
+            variant="secondary"
+            leftIcon={SlidersHorizontal}
+            onPress={props.onOpenCustomizeSheet}
+            testID="provider-empty-customize-btn"
+          >
+            {t("settings.providers.customize.button")}
+          </Button>
+        </View>
       </View>
     );
   }
@@ -531,6 +826,14 @@ function ProviderModalBody(props: ProviderModalBodyProps) {
     return (
       <View style={sheetStyles.emptyState}>
         <Text style={sheetStyles.mutedText}>{t("settings.providers.models.noneDetected")}</Text>
+        <Button
+          variant="secondary"
+          leftIcon={SlidersHorizontal}
+          onPress={props.onOpenCustomizeSheet}
+          testID="provider-none-detected-customize-btn"
+        >
+          {t("settings.providers.customize.button")}
+        </Button>
       </View>
     );
   }
@@ -614,11 +917,16 @@ export function ProviderDiagnosticSheet({
   });
   stableDiscoveredRef.current = nextDiscoveredCache;
 
+  const [customizeSheetOpen, setCustomizeSheetOpen] = useState(false);
+  const handleOpenCustomizeSheet = useCallback(() => setCustomizeSheetOpen(true), []);
+  const handleCloseCustomizeSheet = useCallback(() => setCustomizeSheetOpen(false), []);
+
   useEffect(() => {
     if (!visible) {
       setQuery("");
       setAddSheetOpen(false);
       setDiagSheetOpen(false);
+      setCustomizeSheetOpen(false);
     }
   }, [visible]);
 
@@ -683,6 +991,7 @@ export function ProviderDiagnosticSheet({
           isCompact,
           modelsRefreshing,
           t,
+          onOpenCustomizeSheet: handleOpenCustomizeSheet,
           onOpenAddSheet: handleOpenAddSheet,
           onOpenDiagSheet: handleOpenDiagSheet,
           onRefreshModels: handleRefreshModels,
@@ -701,6 +1010,7 @@ export function ProviderDiagnosticSheet({
           deletingModelId={deletingModelId}
           onRefresh={handleRefreshModels}
           onDeleteCustom={handleDeleteCustom}
+          onOpenCustomizeSheet={handleOpenCustomizeSheet}
           theme={theme}
         />
       </AdaptiveModalSheet>
@@ -716,6 +1026,14 @@ export function ProviderDiagnosticSheet({
         serverId={serverId}
         visible={diagSheetOpen}
         onClose={handleCloseDiagSheet}
+      />
+      <CustomizeProviderSubSheet
+        provider={provider}
+        providerLabel={providerLabel}
+        serverId={serverId}
+        visible={customizeSheetOpen}
+        onClose={handleCloseCustomizeSheet}
+        refresh={refresh}
       />
     </>
   );
@@ -845,15 +1163,29 @@ const sheetStyles = StyleSheet.create((theme) => ({
   formGroup: {
     gap: theme.spacing[3],
   },
+  formDescription: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foregroundMuted,
+    marginBottom: theme.spacing[1],
+  },
   formLabel: {
     fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.medium,
     color: theme.colors.foreground,
   },
+  formInputMultiline: {
+    minHeight: 72,
+    textAlignVertical: "top",
+  },
   formActions: {
     flexDirection: "row",
     justifyContent: "flex-end",
     gap: theme.spacing[2],
+  },
+  emptyActionsRow: {
+    flexDirection: "row",
+    gap: theme.spacing[2],
+    alignItems: "center",
   },
   codeBlockLoading: {
     paddingVertical: theme.spacing[4],

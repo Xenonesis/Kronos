@@ -1,7 +1,9 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Alert, Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
+import { RotateCw } from "lucide-react-native";
+import { Button } from "@/components/ui/button";
 import { useToast } from "@/contexts/toast-api-context";
 import { settingsStyles } from "@/styles/settings";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
@@ -10,6 +12,9 @@ import { useSessionStore } from "@/stores/session-store";
 import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
 import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import { buildProviderDefinitions } from "@/utils/provider-definitions";
+import { filterSelectableModels } from "@/provider-selection/model-catalog";
+import type { ProviderSnapshotEntry } from "@getpaseo/protocol/agent-types";
+import type { AgentProviderDefinition } from "@getpaseo/protocol/provider-manifest";
 import {
   buildAcpProviderConfigPatch,
   getAcpProviderCatalog,
@@ -26,12 +31,50 @@ export interface ProvidersSectionProps {
   serverId: string;
 }
 
+function isProviderInstalled(entry: ProviderSnapshotEntry | undefined): boolean {
+  if (!entry) return false;
+  if (entry.status === "ready") return true;
+  return (filterSelectableModels(entry.models ?? null)?.length ?? 0) > 0;
+}
+
+function compareProviderOrder(orderA: number | undefined, orderB: number | undefined): number {
+  if (typeof orderA === "number" && typeof orderB === "number") return orderA - orderB;
+  if (typeof orderA === "number") return -1;
+  if (typeof orderB === "number") return 1;
+  return 0;
+}
+
+function compareProviderDefinitions(
+  a: AgentProviderDefinition,
+  b: AgentProviderDefinition,
+  entries: ProviderSnapshotEntry[] | undefined,
+  configProviders: Record<string, unknown> | undefined,
+): number {
+  const entryA = entries?.find((candidate) => candidate.provider === a.id);
+  const entryB = entries?.find((candidate) => candidate.provider === b.id);
+
+  const aInstalled = isProviderInstalled(entryA);
+  const bInstalled = isProviderInstalled(entryB);
+  if (aInstalled !== bInstalled) return aInstalled ? -1 : 1;
+
+  const orderA = (configProviders?.[a.id] as { order?: number } | undefined)?.order;
+  const orderB = (configProviders?.[b.id] as { order?: number } | undefined)?.order;
+  const orderDiff = compareProviderOrder(orderA, orderB);
+  if (orderDiff !== 0) return orderDiff;
+
+  const aEnabled = entryA?.enabled ?? true;
+  const bEnabled = entryB?.enabled ?? true;
+  if (aEnabled !== bEnabled) return aEnabled ? -1 : 1;
+
+  return 0;
+}
+
 export function ProvidersSection({ serverId }: ProvidersSectionProps) {
   const { t } = useTranslation();
   const toast = useToast();
   const isConnected = useHostRuntimeIsConnected(serverId);
   const supportsProviderRemoval = useHostFeature(serverId, "providerRemoval");
-  const { entries, isLoading, refresh } = useProvidersSnapshot(serverId);
+  const { entries, isLoading, isRefreshing, refresh } = useProvidersSnapshot(serverId);
   const { config, patchConfig } = useDaemonConfig(serverId);
   const openProviderSettings = useProviderSettingsStore((state) => state.open);
   const [pendingProviderId, setPendingProviderId] = useState<string | null>(null);
@@ -39,8 +82,48 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
   const removingProviderIdRef = useRef<string | null>(null);
   const [installingProviderId, setInstallingProviderId] = useState<string | null>(null);
 
-  const providerDefinitions = useMemo(() => buildProviderDefinitions(entries), [entries]);
   const hasServer = serverId.length > 0;
+
+  // Auto-find installed providers on mount when connected
+  useEffect(() => {
+    if (hasServer && isConnected) {
+      void refresh();
+    }
+  }, [hasServer, isConnected, refresh]);
+
+  const handleScanPress = useCallback(() => {
+    void refresh();
+  }, [refresh]);
+
+  // Sort providers: Installed & Available providers appear on TOP
+  const providerDefinitions = useMemo(() => {
+    const rawDefs = buildProviderDefinitions(entries);
+    if (!rawDefs.length) return [];
+
+    return [...rawDefs].sort((a, b) =>
+      compareProviderDefinitions(a, b, entries, config?.providers),
+    );
+  }, [entries, config?.providers]);
+
+  const trailingHeaderAction = useMemo(() => {
+    if (!hasServer || !isConnected) return null;
+    return (
+      <Button
+        size="sm"
+        variant="ghost"
+        leftIcon={RotateCw}
+        loading={isRefreshing}
+        disabled={isRefreshing}
+        onPress={handleScanPress}
+        testID="providers-auto-detect-btn"
+        accessibilityLabel={t("settings.providers.autoDetect.button")}
+      >
+        {isRefreshing
+          ? t("settings.providers.autoDetect.scanning")
+          : t("settings.providers.autoDetect.button")}
+      </Button>
+    );
+  }, [hasServer, isConnected, isRefreshing, handleScanPress, t]);
 
   const isConfigOwnedProvider = useCallback(
     (providerId: string) =>
@@ -136,6 +219,7 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
         title={t("settings.providers.title")}
         testID="host-page-providers-card"
         style={styles.sectionSpacing}
+        trailing={trailingHeaderAction}
       >
         {!hasServer || !isConnected ? (
           <View style={[settingsStyles.card, styles.emptyCard]}>
