@@ -125,8 +125,17 @@ mod tests {
         use crate::kernel::cli::dispatch_agent_prompt_to;
 
         let inactive_port = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
-            listener.local_addr().expect("Failed to get local addr").port()
+            let mut port = 59800;
+            while port < 65000 {
+                let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+                if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(20)).is_err()
+                    && !crate::kernel::cli::probe_daemon_health(port)
+                {
+                    break;
+                }
+                port += 1;
+            }
+            port
         };
 
         let mut output = Vec::new();
@@ -178,8 +187,17 @@ mod tests {
 
         // 1. Inactive port should return false
         let inactive_port = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
-            listener.local_addr().expect("Failed to get local addr").port()
+            let mut port = 59800;
+            while port < 65000 {
+                let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+                if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(20)).is_err()
+                    && !crate::kernel::cli::probe_daemon_health(port)
+                {
+                    break;
+                }
+                port += 1;
+            }
+            port
         };
         assert!(!probe_daemon_health(inactive_port));
 
@@ -195,8 +213,17 @@ mod tests {
         use crate::kernel::cli::dispatch_agent_prompt_to;
 
         let inactive_port = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
-            listener.local_addr().expect("Failed to get local addr").port()
+            let mut port = 59800;
+            while port < 65000 {
+                let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+                if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(20)).is_err()
+                    && !crate::kernel::cli::probe_daemon_health(port)
+                {
+                    break;
+                }
+                port += 1;
+            }
+            port
         };
 
         let mut output = Vec::new();

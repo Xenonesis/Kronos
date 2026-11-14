@@ -349,11 +349,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_embedded_daemon_unknown_method_dispatch() {
-        let daemon = EmbeddedDaemon::start_test(6797)
+        let daemon = EmbeddedDaemon::start_test(0)
             .await
             .expect("Failed to start daemon");
-        let url = "ws://127.0.0.1:6797";
-        let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+        let url = format!("ws://127.0.0.1:{}", daemon.port);
+        let (mut ws_stream, _) = connect_async(&url).await.expect("Failed to connect");
         authenticate_socket(&mut ws_stream, &daemon).await;
 
         let msg = serde_json::json!({
@@ -368,8 +368,7 @@ mod tests {
             .await
             .unwrap();
 
-        let response = ws_stream.next().await.unwrap().unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+        let parsed = wait_for_rpc_response(&mut ws_stream, "req-unknown-1").await;
         assert_eq!(parsed["id"], "req-unknown-1");
         assert_eq!(parsed["success"], false);
         assert!(parsed["error"].is_string());
