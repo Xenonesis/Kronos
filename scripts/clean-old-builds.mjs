@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,17 +21,36 @@ export function cleanOldBuildArtifacts() {
         /^latest.*\.json$/.test(file)
       ) {
         const fullPath = path.join(distDir, file);
-        fs.rmSync(fullPath, { force: true, recursive: true });
-        console.log(`[Auto-Clean] Removed stale dist artifact: ${file}`);
-        cleanedCount++;
+        try {
+          fs.rmSync(fullPath, { force: true, recursive: true });
+          console.log(`[Auto-Clean] Removed stale dist artifact: ${file}`);
+          cleanedCount++;
+        } catch (err) {
+          if (process.platform === "win32" && (err.code === "EPERM" || err.code === "EBUSY")) {
+            try {
+              execFileSync("taskkill", ["/F", "/IM", file, "/T"], { stdio: "ignore" });
+              fs.rmSync(fullPath, { force: true, recursive: true });
+              console.log(`[Auto-Clean] Terminated running instance and removed stale artifact: ${file}`);
+              cleanedCount++;
+            } catch {
+              console.warn(`[Auto-Clean] Could not remove locked file (currently running): ${file}`);
+            }
+          } else {
+            console.warn(`[Auto-Clean] Skipping ${file}: ${err.message}`);
+          }
+        }
       }
     }
   }
 
   if (fs.existsSync(bundleDir)) {
-    fs.rmSync(bundleDir, { recursive: true, force: true });
-    console.log(`[Auto-Clean] Removed old Tauri bundle directory`);
-    cleanedCount++;
+    try {
+      fs.rmSync(bundleDir, { recursive: true, force: true });
+      console.log(`[Auto-Clean] Removed old Tauri bundle directory`);
+      cleanedCount++;
+    } catch {
+      // ignore
+    }
   }
 
   return cleanedCount;

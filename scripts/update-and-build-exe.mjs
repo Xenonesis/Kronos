@@ -9,7 +9,19 @@ import { isMainModule } from "./is-main-module.mjs";
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export function copyInstallerArtifact(source, destination) {
-  fs.rmSync(destination, { force: true });
+  try {
+    fs.rmSync(destination, { force: true });
+  } catch (err) {
+    if (process.platform === "win32" && (err.code === "EPERM" || err.code === "EBUSY")) {
+      try {
+        const base = path.basename(destination);
+        execFileSync("taskkill", ["/F", "/IM", base, "/T"], { stdio: "ignore" });
+        fs.rmSync(destination, { force: true });
+      } catch {
+        // ignore
+      }
+    }
+  }
   fs.copyFileSync(source, destination);
 }
 
@@ -38,8 +50,21 @@ export function buildInstaller(argv = process.argv.slice(2)) {
       file.endsWith(".md") ||
       /^latest.*\.json$/.test(file)
     ) {
-      console.log(`Cleaning old build artifact: ${file}`);
-      fs.rmSync(path.join(distDir, file), { force: true, recursive: true });
+      const targetPath = path.join(distDir, file);
+      try {
+        fs.rmSync(targetPath, { force: true, recursive: true });
+        console.log(`Cleaning old build artifact: ${file}`);
+      } catch (err) {
+        if (process.platform === "win32" && (err.code === "EPERM" || err.code === "EBUSY")) {
+          try {
+            execFileSync("taskkill", ["/F", "/IM", file, "/T"], { stdio: "ignore" });
+            fs.rmSync(targetPath, { force: true, recursive: true });
+            console.log(`Terminated running instance and cleaned old build artifact: ${file}`);
+          } catch {
+            console.warn(`Warning: Could not remove locked file (in use): ${file}`);
+          }
+        }
+      }
     }
   }
   if (result.signed) {
@@ -90,6 +115,14 @@ export function buildInstaller(argv = process.argv.slice(2)) {
   const alias = path.join(result.bundleDir, "nsis", "Kronos_x64-setup.exe");
   copyInstallerArtifact(installer, alias);
   if (result.signed) copyInstallerArtifact(`${installer}.sig`, `${alias}.sig`);
+  const standaloneExe = path.join(
+    rootDir,
+    "packages/desktop-tauri/src-tauri/target/release/paseo-desktop.exe",
+  );
+  if (fs.existsSync(standaloneExe)) {
+    copyInstallerArtifact(standaloneExe, path.join(distDir, "Kronos.exe"));
+    console.log(`Standalone executable copy: ${path.join(distDir, "Kronos.exe")}`);
+  }
   console.log(`NSIS installer: ${installer} (${stat.size} bytes)`);
   console.log(`Identical local installer copy: ${path.join(distDir, "Kronos_x64-setup.exe")}`);
   if (publish) {
