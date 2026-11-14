@@ -130,3 +130,64 @@ fn test_git_engine_repo_and_branch_discovery() {
     let is_dirty_repo = GitEngine::is_dirty(&repo);
     assert!(is_dirty_repo.is_ok());
 }
+
+#[test]
+fn test_vfs_diff_and_discard() {
+    let vfs = ShadowVfs::new();
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "kronos_diff_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&temp_dir).expect("create_dir_all failed");
+    let physical_path = temp_dir.join("test_diff.txt");
+
+    let initial_disk = "line1\nline2\nline3\n";
+    std::fs::write(&physical_path, initial_disk).expect("write initial failed");
+
+    // Before virtual write: diff is None because file is not in shadow VFS
+    assert!(vfs.diff_virtual_file(&physical_path).is_none());
+
+    // Write virtual modification
+    let virtual_overlay = "line1\nline2 edited\nline3\nline4\n";
+    vfs.write_virtual(&physical_path, virtual_overlay.as_bytes())
+        .expect("write_virtual failed");
+    assert!(vfs.is_virtual(&physical_path));
+
+    // Diff virtual against disk
+    let diff_res = vfs.diff_virtual_file(&physical_path).expect("diff must exist");
+    assert!(diff_res.is_virtual);
+    assert!(diff_res.has_changes);
+    assert!(diff_res.additions >= 2);
+    assert!(diff_res.deletions >= 1);
+    assert!(diff_res.diff.contains("line2 edited"));
+    assert!(!diff_res.hunks.is_empty());
+
+    // diff_all_virtual
+    let all_diffs = vfs.diff_all_virtual();
+    assert_eq!(all_diffs.len(), 1);
+    assert_eq!(all_diffs[0].has_changes, true);
+
+    // Discard single virtual file
+    let removed = vfs.remove_virtual(&physical_path).expect("remove_virtual ok");
+    assert!(removed.is_some());
+    assert!(!vfs.is_virtual(&physical_path));
+    assert!(vfs.diff_virtual_file(&physical_path).is_none());
+
+    // COW read returns disk content again
+    let read_cow = vfs.read_file_cow(&physical_path).expect("cow read disk");
+    assert_eq!(read_cow, initial_disk.as_bytes());
+
+    // Test clear()
+    vfs.write_virtual("temp_a.txt", b"a").unwrap();
+    vfs.write_virtual("temp_b.txt", b"b").unwrap();
+    assert_eq!(vfs.len(), 2);
+    vfs.clear().unwrap();
+    assert_eq!(vfs.len(), 0);
+    assert!(vfs.is_empty());
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

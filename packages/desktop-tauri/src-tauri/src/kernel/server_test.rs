@@ -3195,4 +3195,125 @@ USAGE: opencode models
         assert!(!ctrl_resp["payload"]["controls"].as_array().unwrap().is_empty());
         assert!(ctrl_resp["payload"]["fetchedAt"].is_string());
     }
+
+    #[tokio::test]
+    async fn test_vfs_rpc_diff_and_discard() {
+        let test_path = "vfs_rpc_test_file.txt";
+
+        // 1. Write virtual
+        let write_resp = dispatch_session_message(&serde_json::json!({
+            "type": "vfs/write_virtual",
+            "requestId": "vfs-w-1",
+            "payload": {
+                "path": test_path,
+                "content": "line1\nline2 added\n"
+            }
+        }))
+        .await;
+        assert_eq!(write_resp["type"], "vfs/write_virtual/response");
+        assert_eq!(write_resp["success"], true);
+
+        // 2. Status
+        let status_resp = dispatch_session_message(&serde_json::json!({
+            "type": "vfs/status",
+            "requestId": "vfs-s-1"
+        }))
+        .await;
+        assert_eq!(status_resp["type"], "vfs/status/response");
+        assert_eq!(status_resp["success"], true);
+        let dirty_count = status_resp["payload"]["dirtyCount"].as_u64().unwrap();
+        assert!(dirty_count >= 1);
+
+        // 3. Diff for single file
+        let diff_resp = dispatch_session_message(&serde_json::json!({
+            "type": "vfs/diff",
+            "requestId": "vfs-d-1",
+            "payload": {
+                "path": test_path
+            }
+        }))
+        .await;
+        assert_eq!(diff_resp["type"], "vfs/diff/response");
+        assert_eq!(diff_resp["success"], true);
+        assert_eq!(diff_resp["payload"]["isVirtual"], true);
+        assert_eq!(diff_resp["payload"]["hasChanges"], true);
+        assert!(diff_resp["payload"]["diff"].as_str().unwrap().contains("line2 added"));
+
+        // 4. Diff all
+        let diff_all_resp = dispatch_session_message(&serde_json::json!({
+            "type": "vfs/diff",
+            "requestId": "vfs-d-all"
+        }))
+        .await;
+        assert_eq!(diff_all_resp["type"], "vfs/diff/response");
+        assert_eq!(diff_all_resp["success"], true);
+        assert!(diff_all_resp["payload"]["totalFiles"].as_u64().unwrap() >= 1);
+
+        // 5. Discard single file
+        let discard_resp = dispatch_session_message(&serde_json::json!({
+            "type": "vfs/discard",
+            "requestId": "vfs-disc-1",
+            "payload": {
+                "path": test_path
+            }
+        }))
+        .await;
+        assert_eq!(discard_resp["type"], "vfs/discard/response");
+        assert_eq!(discard_resp["success"], true);
+        assert_eq!(discard_resp["payload"]["discarded"], true);
+
+        // 6. Discard all
+        let discard_all_resp = dispatch_session_message(&serde_json::json!({
+            "type": "vfs/discard",
+            "requestId": "vfs-disc-all",
+            "payload": {
+                "all": true
+            }
+        }))
+        .await;
+        assert_eq!(discard_all_resp["type"], "vfs/discard/response");
+        assert_eq!(discard_all_resp["success"], true);
+        assert_eq!(discard_all_resp["payload"]["dirtyCount"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_lsp_rpc_status_and_lifecycle() {
+        // 1. LSP status check
+        let status_resp = dispatch_session_message(&serde_json::json!({
+            "type": "lsp/status",
+            "requestId": "lsp-s-1"
+        }))
+        .await;
+        assert_eq!(status_resp["type"], "lsp/status/response");
+        assert_eq!(status_resp["success"], true);
+        assert!(status_resp["payload"]["servers"].is_array());
+
+        // 2. LSP stop non-existent
+        let stop_resp = dispatch_session_message(&serde_json::json!({
+            "type": "lsp/stop",
+            "requestId": "lsp-stop-1",
+            "payload": {
+                "id": "non_existent_server"
+            }
+        }))
+        .await;
+        assert_eq!(stop_resp["type"], "lsp/stop/response");
+        assert_eq!(stop_resp["success"], true);
+        assert_eq!(stop_resp["payload"]["stopped"], false);
+
+        // 3. LSP hover error without running server
+        let hover_resp = dispatch_session_message(&serde_json::json!({
+            "type": "lsp/hover",
+            "requestId": "lsp-h-1",
+            "payload": {
+                "path": "src/main.rs",
+                "line": 10,
+                "character": 5
+            }
+        }))
+        .await;
+        assert_eq!(hover_resp["type"], "lsp/hover/response");
+        assert_eq!(hover_resp["success"], false);
+        assert!(hover_resp["error"].as_str().unwrap().contains("No active LSP server"));
+    }
 }

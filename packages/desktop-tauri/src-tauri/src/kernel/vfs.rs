@@ -2,6 +2,24 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+use serde::{Deserialize, Serialize};
+use similar::TextDiff;
+
+use crate::native_diff::{compute_file_diff_sync, DiffHunk};
+
+/// Represents diff information between physical disk file and in-memory virtual overlay.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VirtualFileDiff {
+    pub path: String,
+    pub is_virtual: bool,
+    pub has_changes: bool,
+    pub additions: usize,
+    pub deletions: usize,
+    pub diff: String,
+    pub hunks: Vec<DiffHunk>,
+}
+
 /// Normalizes a path by resolving `.` and `..` components lexically
 /// without requiring the path to exist on disk.
 fn normalize_path(path: &Path) -> PathBuf {
@@ -112,7 +130,74 @@ impl ShadowVfs {
                 format!("ShadowVfs lock poisoned: {e}"),
             )
         })?;
-        Ok(map.remove(&norm))
+        if let Some(removed) = map.remove(&norm) {
+            return Ok(Some(removed));
+        }
+        if let Ok(canonical) = std::fs::canonicalize(path.as_ref()) {
+            let norm_c = normalize_path(&canonical);
+            if let Some(removed) = map.remove(&norm_c) {
+                return Ok(Some(removed));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Computes unified diff and structured hunks between physical disk version and virtual overlay.
+    /// Returns None if the path is not present in the virtual overlay.
+    pub fn diff_virtual_file(&self, path: impl AsRef<Path>) -> Option<VirtualFileDiff> {
+        let norm = normalize_path(path.as_ref());
+        let virt_bytes = self.read_virtual(&norm).or_else(|| {
+            if let Ok(canonical) = std::fs::canonicalize(path.as_ref()) {
+                self.read_virtual(&canonical)
+            } else {
+                None
+            }
+        })?;
+        let virt_text = String::from_utf8_lossy(&virt_bytes);
+
+        // Attempt reading physical disk version
+        let disk_text = if norm.exists() && norm.is_file() {
+            std::fs::read(&norm)
+                .map(|b| String::from_utf8_lossy(&b).to_string())
+                .unwrap_or_default()
+        } else if path.as_ref().exists() && path.as_ref().is_file() {
+            std::fs::read(path.as_ref())
+                .map(|b| String::from_utf8_lossy(&b).to_string())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let file_diff = compute_file_diff_sync(&disk_text, &virt_text, 3);
+        let header_old = format!("a/{}", path.as_ref().display()).replace('\\', "/");
+        let header_new = format!("b/{}", path.as_ref().display()).replace('\\', "/");
+        let unified_patch = TextDiff::from_lines(disk_text.as_str(), &virt_text)
+            .unified_diff()
+            .context_radius(3)
+            .header(&header_old, &header_new)
+            .to_string();
+
+        Some(VirtualFileDiff {
+            path: path.as_ref().to_string_lossy().to_string(),
+            is_virtual: true,
+            has_changes: disk_text != virt_text,
+            additions: file_diff.additions,
+            deletions: file_diff.deletions,
+            diff: unified_patch,
+            hunks: file_diff.hunks,
+        })
+    }
+
+    /// Computes diffs for all files currently modified in the virtual overlay.
+    pub fn diff_all_virtual(&self) -> Vec<VirtualFileDiff> {
+        let paths = self.list_virtual();
+        let mut results = Vec::with_capacity(paths.len());
+        for p in paths {
+            if let Some(diff) = self.diff_virtual_file(&p) {
+                results.push(diff);
+            }
+        }
+        results
     }
 
     /// Returns a list of all normalized virtual paths currently in the shadow overlay.

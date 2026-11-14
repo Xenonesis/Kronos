@@ -1201,6 +1201,383 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                 })),
             )
         }
+        "vfs/discard" => {
+            let path_opt = envelope
+                .payload
+                .get("path")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
+            let discard_all = envelope
+                .payload
+                .get("all")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let vfs = crate::kernel::vfs::get_global_shadow_vfs();
+            if discard_all || path_opt.is_none() {
+                let count = vfs.len();
+                match vfs.clear() {
+                    Ok(()) => RpcResponse::ok(
+                        &envelope.id,
+                        "vfs/discard/response",
+                        Some(serde_json::json!({
+                            "success": true,
+                            "discardedCount": count,
+                            "dirtyCount": vfs.len(),
+                        })),
+                    ),
+                    Err(e) => RpcResponse::err(&envelope.id, "vfs/discard/response", e.to_string()),
+                }
+            } else {
+                let path_str = path_opt.unwrap();
+                match vfs.remove_virtual(path_str) {
+                    Ok(removed) => RpcResponse::ok(
+                        &envelope.id,
+                        "vfs/discard/response",
+                        Some(serde_json::json!({
+                            "success": true,
+                            "path": path_str,
+                            "discarded": removed.is_some(),
+                            "dirtyCount": vfs.len(),
+                        })),
+                    ),
+                    Err(e) => RpcResponse::err(&envelope.id, "vfs/discard/response", e.to_string()),
+                }
+            }
+        }
+        "vfs/diff" => {
+            let path_opt = envelope
+                .payload
+                .get("path")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
+            let vfs = crate::kernel::vfs::get_global_shadow_vfs();
+
+            if let Some(path_str) = path_opt {
+                match vfs.diff_virtual_file(path_str) {
+                    Some(diff) => RpcResponse::ok(
+                        &envelope.id,
+                        "vfs/diff/response",
+                        Some(serde_json::to_value(diff).unwrap_or(serde_json::Value::Null)),
+                    ),
+                    None => RpcResponse::ok(
+                        &envelope.id,
+                        "vfs/diff/response",
+                        Some(serde_json::json!({
+                            "path": path_str,
+                            "isVirtual": false,
+                            "hasChanges": false,
+                            "additions": 0,
+                            "deletions": 0,
+                            "diff": "",
+                            "hunks": []
+                        })),
+                    ),
+                }
+            } else {
+                let diffs = vfs.diff_all_virtual();
+                RpcResponse::ok(
+                    &envelope.id,
+                    "vfs/diff/response",
+                    Some(serde_json::json!({
+                        "totalFiles": diffs.len(),
+                        "files": diffs,
+                    })),
+                )
+            }
+        }
+        "lsp/start" => {
+            let id = envelope
+                .payload
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default")
+                .to_string();
+            let root_path = envelope
+                .payload
+                .get("rootPath")
+                .or_else(|| envelope.payload.get("root_path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".")
+                .to_string();
+            let command = envelope
+                .payload
+                .get("command")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| match id.as_str() {
+                    "rust" => "rust-analyzer".to_string(),
+                    "typescript" | "javascript" => "typescript-language-server".to_string(),
+                    "python" => "pyright-langserver".to_string(),
+                    other => other.to_string(),
+                });
+            let args: Vec<String> = envelope
+                .payload
+                .get("args")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_else(|| {
+                    if command.contains("language-server") {
+                        vec!["--stdio".to_string()]
+                    } else {
+                        vec![]
+                    }
+                });
+            let init_options = envelope.payload.get("initializationOptions").cloned();
+
+            let config = crate::kernel::lsp::LspServerConfig {
+                id: id.clone(),
+                command,
+                args,
+                root_path,
+                initialization_options: init_options,
+            };
+
+            let mux = crate::kernel::lsp::get_global_lsp_multiplexer();
+            match mux.start_server(config).await {
+                Ok(proc) => RpcResponse::ok(
+                    &envelope.id,
+                    "lsp/start/response",
+                    Some(serde_json::to_value(proc.status()).unwrap_or(serde_json::Value::Null)),
+                ),
+                Err(err) => RpcResponse::err(&envelope.id, "lsp/start/response", err),
+            }
+        }
+        "lsp/stop" => {
+            let id = envelope
+                .payload
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if id.is_empty() {
+                RpcResponse::err(&envelope.id, "lsp/stop/response", "Missing 'id' parameter")
+            } else {
+                let mux = crate::kernel::lsp::get_global_lsp_multiplexer();
+                match mux.stop_server(id).await {
+                    Ok(stopped) => RpcResponse::ok(
+                        &envelope.id,
+                        "lsp/stop/response",
+                        Some(serde_json::json!({ "id": id, "stopped": stopped })),
+                    ),
+                    Err(err) => RpcResponse::err(&envelope.id, "lsp/stop/response", err),
+                }
+            }
+        }
+        "lsp/status" => {
+            let mux = crate::kernel::lsp::get_global_lsp_multiplexer();
+            let servers = mux.list_servers().await;
+            RpcResponse::ok(
+                &envelope.id,
+                "lsp/status/response",
+                Some(serde_json::json!({ "servers": servers })),
+            )
+        }
+        "lsp/request" => {
+            let id = envelope
+                .payload
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let method = envelope
+                .payload
+                .get("method")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let params = envelope
+                .payload
+                .get("params")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+
+            let mux = crate::kernel::lsp::get_global_lsp_multiplexer();
+            if let Some(proc) = mux.get_server(id).await {
+                match proc.request(method, params).await {
+                    Ok(res) => RpcResponse::ok(&envelope.id, "lsp/request/response", Some(res)),
+                    Err(err) => RpcResponse::err(&envelope.id, "lsp/request/response", err),
+                }
+            } else {
+                RpcResponse::err(
+                    &envelope.id,
+                    "lsp/request/response",
+                    format!("LSP server '{id}' is not running"),
+                )
+            }
+        }
+        "lsp/notify" => {
+            let id = envelope
+                .payload
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let method = envelope
+                .payload
+                .get("method")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let params = envelope
+                .payload
+                .get("params")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+
+            let mux = crate::kernel::lsp::get_global_lsp_multiplexer();
+            if let Some(proc) = mux.get_server(id).await {
+                match proc.notify(method, params).await {
+                    Ok(()) => RpcResponse::ok(
+                        &envelope.id,
+                        "lsp/notify/response",
+                        Some(serde_json::json!({ "success": true })),
+                    ),
+                    Err(err) => RpcResponse::err(&envelope.id, "lsp/notify/response", err),
+                }
+            } else {
+                RpcResponse::err(
+                    &envelope.id,
+                    "lsp/notify/response",
+                    format!("LSP server '{id}' is not running"),
+                )
+            }
+        }
+        "lsp/hover" => {
+            let path_str = envelope
+                .payload
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let line = envelope
+                .payload
+                .get("line")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let character = envelope
+                .payload
+                .get("character")
+                .or_else(|| envelope.payload.get("col"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+
+            let file_path = std::path::Path::new(path_str);
+            let explicit_id = envelope.payload.get("id").and_then(|v| v.as_str());
+            let server_id = explicit_id
+                .or_else(|| {
+                    crate::kernel::lsp::LspMultiplexer::detect_language_and_cmd(file_path)
+                        .map(|(lang, _, _)| lang)
+                })
+                .unwrap_or("rust");
+
+            let mux = crate::kernel::lsp::get_global_lsp_multiplexer();
+            if let Some(proc) = mux.get_server(server_id).await {
+                match proc.hover(file_path, line, character).await {
+                    Ok(hover_opt) => RpcResponse::ok(
+                        &envelope.id,
+                        "lsp/hover/response",
+                        Some(serde_json::json!({ "hover": hover_opt })),
+                    ),
+                    Err(err) => RpcResponse::err(&envelope.id, "lsp/hover/response", err),
+                }
+            } else {
+                RpcResponse::err(
+                    &envelope.id,
+                    "lsp/hover/response",
+                    format!("No active LSP server for '{server_id}'"),
+                )
+            }
+        }
+        "lsp/definition" => {
+            let path_str = envelope
+                .payload
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let line = envelope
+                .payload
+                .get("line")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let character = envelope
+                .payload
+                .get("character")
+                .or_else(|| envelope.payload.get("col"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+
+            let file_path = std::path::Path::new(path_str);
+            let explicit_id = envelope.payload.get("id").and_then(|v| v.as_str());
+            let server_id = explicit_id
+                .or_else(|| {
+                    crate::kernel::lsp::LspMultiplexer::detect_language_and_cmd(file_path)
+                        .map(|(lang, _, _)| lang)
+                })
+                .unwrap_or("rust");
+
+            let mux = crate::kernel::lsp::get_global_lsp_multiplexer();
+            if let Some(proc) = mux.get_server(server_id).await {
+                match proc.goto_definition(file_path, line, character).await {
+                    Ok(locs) => RpcResponse::ok(
+                        &envelope.id,
+                        "lsp/definition/response",
+                        Some(serde_json::json!({ "locations": locs })),
+                    ),
+                    Err(err) => RpcResponse::err(&envelope.id, "lsp/definition/response", err),
+                }
+            } else {
+                RpcResponse::err(
+                    &envelope.id,
+                    "lsp/definition/response",
+                    format!("No active LSP server for '{server_id}'"),
+                )
+            }
+        }
+        "lsp/did_open" => {
+            let path_str = envelope
+                .payload
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let file_path = std::path::Path::new(path_str);
+            let explicit_id = envelope.payload.get("id").and_then(|v| v.as_str());
+            let detected = crate::kernel::lsp::LspMultiplexer::detect_language_and_cmd(file_path);
+            let server_id = explicit_id
+                .or_else(|| detected.map(|(lang, _, _)| lang))
+                .unwrap_or("text");
+            let language_id = envelope
+                .payload
+                .get("languageId")
+                .and_then(|v| v.as_str())
+                .unwrap_or(server_id);
+
+            let content_str = if let Some(c) = envelope.payload.get("content").and_then(|v| v.as_str()) {
+                c.to_string()
+            } else {
+                let vfs = crate::kernel::vfs::get_global_shadow_vfs();
+                match vfs.read_file_cow(file_path) {
+                    Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+                    Err(e) => return RpcResponse::err(&envelope.id, "lsp/did_open/response", e.to_string()),
+                }
+            };
+
+            let mux = crate::kernel::lsp::get_global_lsp_multiplexer();
+            if let Some(proc) = mux.get_server(server_id).await {
+                match proc.did_open(file_path, &content_str, language_id).await {
+                    Ok(()) => RpcResponse::ok(
+                        &envelope.id,
+                        "lsp/did_open/response",
+                        Some(serde_json::json!({ "success": true, "path": path_str })),
+                    ),
+                    Err(err) => RpcResponse::err(&envelope.id, "lsp/did_open/response", err),
+                }
+            } else {
+                RpcResponse::err(
+                    &envelope.id,
+                    "lsp/did_open/response",
+                    format!("No active LSP server for '{server_id}'"),
+                )
+            }
+        }
         other => RpcResponse::err(
             envelope.id,
             other,
@@ -5711,7 +6088,8 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 || msg_type.starts_with("ioring/")
                 || msg_type.starts_with("speech/")
                 || msg_type.starts_with("shm/")
-                || msg_type.starts_with("vfs/") =>
+                || msg_type.starts_with("vfs/")
+                || msg_type.starts_with("lsp/") =>
         {
             let env = RpcEnvelope::new(
                 request_id,

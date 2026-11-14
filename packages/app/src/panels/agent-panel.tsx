@@ -2128,94 +2128,276 @@ function ActiveAgentComposer({
         onClientSlashCommand={handleClientSlashCommand}
         isCompactLayout={isCompactComposerLayout}
       />
-      <GitHubPrModal visible={isGitHubPrModalVisible} cwd={cwd} onClose={closeGitHubPrModal} />
-      <GlobalSearchReplaceModal
-        visible={isGlobalSearchVisible}
+      <ActiveAgentWorkspaceModals
         cwd={cwd}
-        onClose={closeGlobalSearchModal}
+        agentId={agentId}
+        isGitHubPrModalVisible={isGitHubPrModalVisible}
+        closeGitHubPrModal={closeGitHubPrModal}
+        isGlobalSearchVisible={isGlobalSearchVisible}
+        closeGlobalSearchModal={closeGlobalSearchModal}
+        isArtifactsModalVisible={isArtifactsModalVisible}
+        diagramArtifacts={diagramArtifacts}
+        closeArtifactsModal={closeArtifactsModal}
+        isCheckpointModalVisible={isCheckpointModalVisible}
+        closeCheckpointModal={closeCheckpointModal}
+        isCommitModalVisible={isCommitModalVisible}
+        closeCommitModal={closeCommitModal}
+        isCostModalVisible={isCostModalVisible}
+        closeCostModal={closeCostModal}
+        isMcpHubModalVisible={isMcpHubModalVisible}
+        closeMcpHubModal={closeMcpHubModal}
+        docsModalState={docsModalState}
+        closeDocsModal={closeDocsModal}
+        insertDocsPrompt={insertDocsPrompt}
       />
-      <ArtifactsCanvasModal
-        visible={isArtifactsModalVisible}
-        artifacts={diagramArtifacts}
-        onClose={closeArtifactsModal}
-      />
-      <MultiFileDiffReview
-        visible={isDiffReviewModalVisible}
-        files={diffReviewFiles}
-        onClose={closeDiffReviewModal}
-        onAcceptAll={acceptAllDiffReview}
-        onAcceptSelected={acceptSelectedDiffReview}
-        onRejectAll={rejectAllDiffReview}
-      />
-      <TurnCheckpointModal
-        visible={isCheckpointModalVisible}
-        cwd={cwd}
-        onClose={closeCheckpointModal}
-      />
-      <SemanticCommitModal visible={isCommitModalVisible} cwd={cwd} onClose={closeCommitModal} />
-      <CostBudgetModal visible={isCostModalVisible} agentId={agentId} onClose={closeCostModal} />
-      <McpHubModal visible={isMcpHubModalVisible} onClose={closeMcpHubModal} />
-      <WorkspaceDocsModal
-        visible={docsModalState.visible}
-        initialTab={docsModalState.tab}
-        cwd={cwd}
-        onClose={closeDocsModal}
-        onInsertPrompt={insertDocsPrompt}
-      />
-      <DatabaseStudioModal
-        visible={isDatabaseModalVisible}
-        cwd={cwd}
-        onClose={closeDatabaseModal}
-      />
-      <ModelArenaModal
-        visible={isModelArenaModalVisible}
-        cwd={cwd}
-        onClose={closeModelArenaModal}
-        onPickWinner={handleModelArenaPickWinner}
-      />
-      <SemanticSearchModal
-        visible={isSemanticSearchVisible}
+      <ActiveAgentToolModals
         cwd={cwd}
         serverId={serverId}
         agentId={agentId}
-        onClose={closeSemanticSearchModal}
-      />
-      <CodebaseBugHunterModal
-        visible={isBugHunterVisible}
-        items={bugAuditItems}
-        serverId={serverId}
-        agentId={agentId}
-        onClose={closeBugHunterModal}
-      />
-      <CloudDeploymentModal visible={isDeployModalVisible} cwd={cwd} onClose={closeDeployModal} />
-      <BrowserVerificationModal
-        visible={isBrowserTestModalVisible}
-        cwd={cwd}
-        serverId={serverId}
-        agentId={agentId}
-        onClose={closeBrowserTestModal}
-      />
-      <WebSearchModal
-        visible={webSearchModalState.visible}
-        initialMode={webSearchModalState.mode}
-        initialQuery={webSearchModalState.query}
-        onClose={closeWebSearchModal}
-        onInsertToComposer={insertWebSearchContent}
-      />
-      <EnvVaultModal visible={isEnvVaultVisible} cwd={cwd} onClose={closeEnvVaultModal} />
-      <MemoriesManagementDialog
-        visible={isMemoriesVisible}
-        cwd={cwd}
-        onClose={closeMemoriesModal}
-      />
-      <VisualDependencyGraphModal
-        visible={isDepsGraphVisible}
-        cwd={cwd}
-        serverId={serverId}
-        agentId={agentId}
-        onClose={closeDepsGraphModal}
+        isDiffReviewModalVisible={isDiffReviewModalVisible}
+        diffReviewFiles={diffReviewFiles}
+        closeDiffReviewModal={closeDiffReviewModal}
+        acceptAllDiffReview={acceptAllDiffReview}
+        acceptSelectedDiffReview={acceptSelectedDiffReview}
+        rejectAllDiffReview={rejectAllDiffReview}
+        isDatabaseModalVisible={isDatabaseModalVisible}
+        closeDatabaseModal={closeDatabaseModal}
+        isModelArenaModalVisible={isModelArenaModalVisible}
+        closeModelArenaModal={closeModelArenaModal}
+        handleModelArenaPickWinner={handleModelArenaPickWinner}
+        isSemanticSearchVisible={isSemanticSearchVisible}
+        closeSemanticSearchModal={closeSemanticSearchModal}
+        isBugHunterVisible={isBugHunterVisible}
+        bugAuditItems={bugAuditItems}
+        closeBugHunterModal={closeBugHunterModal}
+        isDeployModalVisible={isDeployModalVisible}
+        closeDeployModal={closeDeployModal}
+        isBrowserTestModalVisible={isBrowserTestModalVisible}
+        closeBrowserTestModal={closeBrowserTestModal}
+        webSearchModalState={webSearchModalState}
+        closeWebSearchModal={closeWebSearchModal}
+        insertWebSearchContent={insertWebSearchContent}
+        isEnvVaultVisible={isEnvVaultVisible}
+        closeEnvVaultModal={closeEnvVaultModal}
+        isMemoriesVisible={isMemoriesVisible}
+        closeMemoriesModal={closeMemoriesModal}
+        isDepsGraphVisible={isDepsGraphVisible}
+        closeDepsGraphModal={closeDepsGraphModal}
       />
     </View>
+  );
+}
+
+function ActiveAgentWorkspaceModals(props: {
+  cwd: string;
+  agentId: string;
+  isGitHubPrModalVisible: boolean;
+  closeGitHubPrModal: () => void;
+  isGlobalSearchVisible: boolean;
+  closeGlobalSearchModal: () => void;
+  isArtifactsModalVisible: boolean;
+  diagramArtifacts: ArtifactItem[] | undefined;
+  closeArtifactsModal: () => void;
+  isCheckpointModalVisible: boolean;
+  closeCheckpointModal: () => void;
+  isCommitModalVisible: boolean;
+  closeCommitModal: () => void;
+  isCostModalVisible: boolean;
+  closeCostModal: () => void;
+  isMcpHubModalVisible: boolean;
+  closeMcpHubModal: () => void;
+  docsModalState: { visible: boolean; tab: "notepad" | "playbook" | "command" };
+  closeDocsModal: () => void;
+  insertDocsPrompt: (prompt: string) => void;
+}) {
+  return (
+    <>
+      {props.isGitHubPrModalVisible && (
+        <GitHubPrModal
+          visible={props.isGitHubPrModalVisible}
+          cwd={props.cwd}
+          onClose={props.closeGitHubPrModal}
+        />
+      )}
+      {props.isGlobalSearchVisible && (
+        <GlobalSearchReplaceModal
+          visible={props.isGlobalSearchVisible}
+          cwd={props.cwd}
+          onClose={props.closeGlobalSearchModal}
+        />
+      )}
+      {props.isArtifactsModalVisible && (
+        <ArtifactsCanvasModal
+          visible={props.isArtifactsModalVisible}
+          artifacts={props.diagramArtifacts}
+          onClose={props.closeArtifactsModal}
+        />
+      )}
+      {props.isCheckpointModalVisible && (
+        <TurnCheckpointModal
+          visible={props.isCheckpointModalVisible}
+          cwd={props.cwd}
+          onClose={props.closeCheckpointModal}
+        />
+      )}
+      {props.isCommitModalVisible && (
+        <SemanticCommitModal
+          visible={props.isCommitModalVisible}
+          cwd={props.cwd}
+          onClose={props.closeCommitModal}
+        />
+      )}
+      {props.isCostModalVisible && (
+        <CostBudgetModal
+          visible={props.isCostModalVisible}
+          agentId={props.agentId}
+          onClose={props.closeCostModal}
+        />
+      )}
+      {props.isMcpHubModalVisible && (
+        <McpHubModal visible={props.isMcpHubModalVisible} onClose={props.closeMcpHubModal} />
+      )}
+      {props.docsModalState.visible && (
+        <WorkspaceDocsModal
+          visible={props.docsModalState.visible}
+          initialTab={props.docsModalState.tab}
+          cwd={props.cwd}
+          onClose={props.closeDocsModal}
+          onInsertPrompt={props.insertDocsPrompt}
+        />
+      )}
+    </>
+  );
+}
+
+function ActiveAgentToolModals(props: {
+  cwd: string;
+  serverId: string;
+  agentId: string;
+  isDiffReviewModalVisible: boolean;
+  diffReviewFiles: ReviewFileEntry[];
+  closeDiffReviewModal: () => void;
+  acceptAllDiffReview: () => void;
+  acceptSelectedDiffReview: (paths: string[]) => void;
+  rejectAllDiffReview: () => void;
+  isDatabaseModalVisible: boolean;
+  closeDatabaseModal: () => void;
+  isModelArenaModalVisible: boolean;
+  closeModelArenaModal: () => void;
+  handleModelArenaPickWinner: (arenaPrompt: string, modelId: string) => void;
+  isSemanticSearchVisible: boolean;
+  closeSemanticSearchModal: () => void;
+  isBugHunterVisible: boolean;
+  bugAuditItems: BugAuditItem[];
+  closeBugHunterModal: () => void;
+  isDeployModalVisible: boolean;
+  closeDeployModal: () => void;
+  isBrowserTestModalVisible: boolean;
+  closeBrowserTestModal: () => void;
+  webSearchModalState: { visible: boolean; mode: "search" | "fetch"; query: string };
+  closeWebSearchModal: () => void;
+  insertWebSearchContent: (content: string) => void;
+  isEnvVaultVisible: boolean;
+  closeEnvVaultModal: () => void;
+  isMemoriesVisible: boolean;
+  closeMemoriesModal: () => void;
+  isDepsGraphVisible: boolean;
+  closeDepsGraphModal: () => void;
+}) {
+  return (
+    <>
+      {props.isDiffReviewModalVisible && (
+        <MultiFileDiffReview
+          visible={props.isDiffReviewModalVisible}
+          files={props.diffReviewFiles}
+          onClose={props.closeDiffReviewModal}
+          onAcceptAll={props.acceptAllDiffReview}
+          onAcceptSelected={props.acceptSelectedDiffReview}
+          onRejectAll={props.rejectAllDiffReview}
+        />
+      )}
+      {props.isDatabaseModalVisible && (
+        <DatabaseStudioModal
+          visible={props.isDatabaseModalVisible}
+          cwd={props.cwd}
+          onClose={props.closeDatabaseModal}
+        />
+      )}
+      {props.isModelArenaModalVisible && (
+        <ModelArenaModal
+          visible={props.isModelArenaModalVisible}
+          cwd={props.cwd}
+          onClose={props.closeModelArenaModal}
+          onPickWinner={props.handleModelArenaPickWinner}
+        />
+      )}
+      {props.isSemanticSearchVisible && (
+        <SemanticSearchModal
+          visible={props.isSemanticSearchVisible}
+          cwd={props.cwd}
+          serverId={props.serverId}
+          agentId={props.agentId}
+          onClose={props.closeSemanticSearchModal}
+        />
+      )}
+      {props.isBugHunterVisible && (
+        <CodebaseBugHunterModal
+          visible={props.isBugHunterVisible}
+          items={props.bugAuditItems}
+          serverId={props.serverId}
+          agentId={props.agentId}
+          onClose={props.closeBugHunterModal}
+        />
+      )}
+      {props.isDeployModalVisible && (
+        <CloudDeploymentModal
+          visible={props.isDeployModalVisible}
+          cwd={props.cwd}
+          onClose={props.closeDeployModal}
+        />
+      )}
+      {props.isBrowserTestModalVisible && (
+        <BrowserVerificationModal
+          visible={props.isBrowserTestModalVisible}
+          cwd={props.cwd}
+          serverId={props.serverId}
+          agentId={props.agentId}
+          onClose={props.closeBrowserTestModal}
+        />
+      )}
+      {props.webSearchModalState.visible && (
+        <WebSearchModal
+          visible={props.webSearchModalState.visible}
+          initialMode={props.webSearchModalState.mode}
+          initialQuery={props.webSearchModalState.query}
+          onClose={props.closeWebSearchModal}
+          onInsertToComposer={props.insertWebSearchContent}
+        />
+      )}
+      {props.isEnvVaultVisible && (
+        <EnvVaultModal
+          visible={props.isEnvVaultVisible}
+          cwd={props.cwd}
+          onClose={props.closeEnvVaultModal}
+        />
+      )}
+      {props.isMemoriesVisible && (
+        <MemoriesManagementDialog
+          visible={props.isMemoriesVisible}
+          cwd={props.cwd}
+          onClose={props.closeMemoriesModal}
+        />
+      )}
+      {props.isDepsGraphVisible && (
+        <VisualDependencyGraphModal
+          visible={props.isDepsGraphVisible}
+          cwd={props.cwd}
+          serverId={props.serverId}
+          agentId={props.agentId}
+          onClose={props.closeDepsGraphModal}
+        />
+      )}
+    </>
   );
 }
 

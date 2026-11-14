@@ -30,6 +30,7 @@ pub mod repo_map;
 pub mod tunnel;
 pub mod workspace_tools;
 pub mod sqlite_timeline;
+pub mod lsp;
 
 #[cfg(test)]
 mod protocol_test;
@@ -57,3 +58,5 @@ pub mod rkyv_test;
 pub mod watcher_test;
 #[cfg(test)]
 pub mod ast_test;
+#[cfg(test)]
+pub mod lsp_test;
