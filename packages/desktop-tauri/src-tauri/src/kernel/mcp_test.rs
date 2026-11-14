@@ -313,7 +313,7 @@ mod tests {
         let init_resp: serde_json::Value =
             serde_json::from_str(&hub.handle_jsonrpc(&init_req).expect("Response expected")).unwrap();
         assert_eq!(init_resp["result"]["serverInfo"]["name"], "kronos-mcp-hub");
-        assert_eq!(init_resp["result"]["serverInfo"]["version"], "0.15.0-beta.1");
+        assert_eq!(init_resp["result"]["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
 
         let ping_req = json!({
             "jsonrpc": "2.0",

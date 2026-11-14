@@ -131,6 +131,8 @@ mod tests {
         assert_eq!(info["message"]["payload"]["protocolVersion"], 1);
         assert!(!info["message"]["payload"]["serverId"].as_str().unwrap().is_empty());
         assert_eq!(info["message"]["payload"]["features"]["projectAdd"], true);
+        assert_eq!(info["message"]["payload"]["features"]["agentProfiles"], true);
+        assert_eq!(info["message"]["payload"]["features"]["agentConfigApply"], true);
     }
 
     #[test]

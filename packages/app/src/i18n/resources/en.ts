@@ -2940,7 +2940,7 @@ export const en = {
       skills: {
         sectionTitle: "Orchestration skills",
         title: "Orchestration skills",
-        description: "Teach your agents how to use Paseo tools",
+        description: "Teach your agents how to use Kronos tools",
         docs: "Skills",
         openDocs: "Open skills documentation",
         unavailable: "Connect to this host to manage orchestration skills",

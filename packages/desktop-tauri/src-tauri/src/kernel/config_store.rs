@@ -29,6 +29,8 @@ pub struct DaemonConfig {
     pub providers_config: Value,
     #[serde(default)]
     pub custom_settings: HashMap<String, Value>,
+    #[serde(default)]
+    pub agent_profiles: Vec<Value>,
 }
 
 fn default_empty_object() -> Value {
@@ -165,6 +167,7 @@ impl Default for DaemonConfig {
             enable_terminal_agent_hooks: default_false(),
             providers_config: default_empty_object(),
             custom_settings: HashMap::new(),
+            agent_profiles: Vec::new(),
         }
     }
 }
@@ -811,11 +814,18 @@ mod tests {
         let cfg = store.get_config();
         assert_eq!(cfg.port, 6767);
         assert!(cfg.mcp_enabled);
+        assert!(cfg.agent_profiles.is_empty());
 
         store
             .update_config(|c| {
                 c.port = 6789;
                 c.relay_enabled = true;
+                c.agent_profiles = vec![serde_json::json!({
+                    "id": "profile-1",
+                    "name": "Fast Coder",
+                    "provider": "codex",
+                    "model": "gpt-5-mini"
+                })];
             })
             .expect("Update config");
 
@@ -823,6 +833,9 @@ mod tests {
         let updated = reloaded.get_config();
         assert_eq!(updated.port, 6789);
         assert!(updated.relay_enabled);
+        assert_eq!(updated.agent_profiles.len(), 1);
+        assert_eq!(updated.agent_profiles[0]["id"], "profile-1");
+        assert_eq!(updated.agent_profiles[0]["name"], "Fast Coder");
     }
 
     #[test]

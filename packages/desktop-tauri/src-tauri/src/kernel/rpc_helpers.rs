@@ -445,7 +445,8 @@ pub fn handle_get_daemon_config(request_id: &str) -> Value {
                 "providers": cfg.providers_config,
                 "autoArchiveAfterMerge": cfg.auto_archive_after_merge,
                 "enableTerminalAgentHooks": cfg.enable_terminal_agent_hooks,
-                "skills": { "selection": skills_selection }
+                "skills": { "selection": skills_selection },
+                "agentProfiles": cfg.agent_profiles
             }
         }
     })
@@ -500,6 +501,9 @@ pub fn handle_set_daemon_config(msg: &Value, request_id: &str) -> Value {
                         .insert("agentSkillsSelection".to_string(), val);
                 }
             }
+            if let Some(profiles) = patch.get("agentProfiles").and_then(|v| v.as_array()) {
+                cfg.agent_profiles = profiles.clone();
+            }
         })
         .unwrap_or_else(|_| store.get_config());
 
@@ -526,7 +530,8 @@ pub fn handle_set_daemon_config(msg: &Value, request_id: &str) -> Value {
                 "providers": updated.providers_config,
                 "autoArchiveAfterMerge": updated.auto_archive_after_merge,
                 "enableTerminalAgentHooks": updated.enable_terminal_agent_hooks,
-                "skills": { "selection": skills_selection }
+                "skills": { "selection": skills_selection },
+                "agentProfiles": updated.agent_profiles
             }
         }
     })

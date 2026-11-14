@@ -171,6 +171,8 @@ pub fn build_server_info_payload() -> Value {
             "providerUsageList",
             "usageSources",
             "usageSetting",
+            "agentProfiles",
+            "agentConfigApply",
         ] {
             obj.insert(key.to_string(), Value::Bool(true));
         }

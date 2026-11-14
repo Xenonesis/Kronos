@@ -1938,6 +1938,24 @@ mod tests {
         let cfg_resp = dispatch_session_message(&cfg_req).await;
         assert_eq!(cfg_resp["type"], "get_daemon_config_response");
         assert!(cfg_resp["payload"]["config"]["mcp"].is_object());
+        assert!(cfg_resp["payload"]["config"]["agentProfiles"].is_array());
+
+        let set_cfg_req = serde_json::json!({
+            "type": "set_daemon_config_request",
+            "requestId": "req-cfg-2",
+            "config": {
+                "agentProfiles": [
+                    {
+                        "id": "test-prof-1",
+                        "name": "Coder",
+                        "provider": "codex"
+                    }
+                ]
+            }
+        });
+        let set_cfg_resp = dispatch_session_message(&set_cfg_req).await;
+        assert_eq!(set_cfg_resp["type"], "set_daemon_config_response");
+        assert_eq!(set_cfg_resp["payload"]["config"]["agentProfiles"][0]["name"], "Coder");
 
         // 7. daemon.get_status.request
         let status_req = serde_json::json!({
