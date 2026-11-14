@@ -28,10 +28,18 @@ export function buildInstaller(argv = process.argv.slice(2)) {
   if (!stat.isFile() || !stat.size) throw new Error("A nonempty NSIS installer was not produced");
   const distDir = path.join(rootDir, "dist");
   fs.mkdirSync(distDir, { recursive: true });
-  // Never leave old updater metadata next to a newly built unsigned installer.
+  // Automatically clean up old executables, setup installers, and stale metadata on new builds
   for (const file of fs.readdirSync(distDir)) {
-    if (/^latest.*\.json$/.test(file) || file.endsWith(".sig") || file === "kronos-portable.exe") {
-      fs.rmSync(path.join(distDir, file), { force: true });
+    if (
+      file.endsWith(".exe") ||
+      file.endsWith(".msi") ||
+      file.endsWith(".zip") ||
+      file.endsWith(".sig") ||
+      file.endsWith(".md") ||
+      /^latest.*\.json$/.test(file)
+    ) {
+      console.log(`Cleaning old build artifact: ${file}`);
+      fs.rmSync(path.join(distDir, file), { force: true, recursive: true });
     }
   }
   if (result.signed) {

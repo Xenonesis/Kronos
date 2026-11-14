@@ -104,6 +104,7 @@
     "bundle:desktop:clean": "npm --prefix packages/desktop-tauri run build:clean",
     "bundle:desktop:with-node": "npm --prefix packages/desktop-tauri run build:with-node",
     "bundle:desktop:signed": "npm --prefix packages/desktop-tauri run build:signed",
+    "clean:dist": "node scripts/clean-old-builds.mjs",
     "desktop:update-build": "node scripts/update-and-build-exe.mjs",
     "db:query": "npm run db:query --workspace=@getpaseo/server --",
     "cli": "./scripts/dev-home.sh npx tsx packages/cli/src/index.js",
