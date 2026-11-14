@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 import { parseChangelog, type ChangelogRelease } from "./parse-changelog";
+import { BUNDLED_CHANGELOG } from "./bundled-changelog";
 
-const CHANGELOG_URL = "https://raw.githubusercontent.com/getpaseo/paseo/main/CHANGELOG.md";
+const CHANGELOG_URL = "https://raw.githubusercontent.com/Xenonesis/Kronos/main/CHANGELOG.md";
 
 export type ChangelogState =
   | { status: "loading" }
   | { status: "ready"; releases: ChangelogRelease[] }
   | { status: "error" };
 
-// Survives close/reopen so the second look paints without a spinner. The raw
-// text is kept alongside the releases so an unchanged revalidation can be
-// dropped: handing back an equal-but-new array would re-render every release.
-let cached: { markdown: string; releases: ChangelogRelease[] } | null = null;
+// Pre-seeded with bundled Kronos changelog so "What's new" displays immediately offline
+// without requiring network access or showing a loading spinner.
+let cached: { markdown: string; releases: ChangelogRelease[] } | null = {
+  markdown: BUNDLED_CHANGELOG,
+  releases: parseChangelog(BUNDLED_CHANGELOG),
+};
 
 export interface Changelog {
   state: ChangelogState;
