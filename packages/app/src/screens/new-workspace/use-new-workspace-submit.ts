@@ -103,20 +103,33 @@ export function useNewWorkspaceSubmit({
       if (creationResult.workspace) {
         return creationResult;
       }
-      if (!selectedProject) {
-        throw new Error("Choose a project");
-      }
-      if (!selectedSourceDirectory) {
-        throw new Error("Choose a host for this project");
-      }
+      const effectiveProject: HostProjectListItem = selectedProject ?? {
+        viewKey: `project:${selectedServerId}:prj_scratchpad`,
+        projectKey: null,
+        projectName: "General Chat",
+        projectKind: "unknown",
+        iconWorkingDir: "",
+        workspaceKeys: [],
+        hosts: [
+          {
+            serverId: selectedServerId,
+            projectId: "prj_scratchpad",
+            iconWorkingDir: "",
+            worktreeSupport: "unsupported",
+          },
+        ],
+      };
+      const effectiveSourceDirectory = selectedSourceDirectory ?? "";
       const connectedClient = withConnectedClient();
-      const createsWorktree = !supportsWorkspaceMultiplicity || effectiveIsolation === "worktree";
+      const createsWorktree =
+        Boolean(effectiveSourceDirectory) &&
+        (!supportsWorkspaceMultiplicity || effectiveIsolation === "worktree");
       const checkoutStatusForCreate = createsWorktree
         ? await ensureCheckoutStatus({
             queryClient,
             client: connectedClient,
             serverId: selectedServerId,
-            cwd: selectedSourceDirectory,
+            cwd: effectiveSourceDirectory,
           })
         : null;
       const checkoutRequest = checkoutStatusForCreate
@@ -129,8 +142,8 @@ export function useNewWorkspaceSubmit({
         worktreeSlug: creationIdentity.worktreeSlug,
         client: connectedClient,
         isolation: createsWorktree ? "worktree" : "local",
-        project: selectedProject,
-        sourceDirectory: selectedSourceDirectory,
+        project: effectiveProject,
+        sourceDirectory: effectiveSourceDirectory,
         checkoutRequest,
         withInitialAgent: input.withInitialAgent,
         prompt: input.prompt,

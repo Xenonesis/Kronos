@@ -1578,6 +1578,113 @@ pub async fn dispatch_envelope(envelope: RpcEnvelope) -> RpcResponse {
                 )
             }
         }
+        "notes.list.request" | "notes/list" => {
+            let store = crate::kernel::notes_store::get_notes_store();
+            let query = envelope
+                .payload
+                .get("query")
+                .and_then(|v| v.as_str());
+            let notes = match query {
+                Some(q) if !q.trim().is_empty() => store.search_notes(q.trim()),
+                _ => store.list_notes(),
+            };
+            RpcResponse::ok(
+                &envelope.id,
+                "notes.list.response",
+                Some(serde_json::json!({ "notes": notes, "success": true })),
+            )
+        }
+        "notes.get.request" | "notes/get" => {
+            let store = crate::kernel::notes_store::get_notes_store();
+            let note_id = envelope
+                .payload
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let note = store.get_note(note_id);
+            let success = note.is_some();
+            RpcResponse::ok(
+                &envelope.id,
+                "notes.get.response",
+                Some(serde_json::json!({ "note": note, "success": success })),
+            )
+        }
+        "notes.save.request" | "notes/save" => {
+            let store = crate::kernel::notes_store::get_notes_store();
+            let note_val = envelope
+                .payload
+                .get("note")
+                .cloned()
+                .unwrap_or_else(|| envelope.payload.clone());
+            match serde_json::from_value::<crate::kernel::notes_store::NoteRecord>(note_val) {
+                Ok(note) => match store.save_note(note) {
+                    Ok(saved) => RpcResponse::ok(
+                        &envelope.id,
+                        "notes.save.response",
+                        Some(serde_json::json!({ "note": saved, "success": true })),
+                    ),
+                    Err(err) => RpcResponse::err(&envelope.id, "notes.save.response", err),
+                },
+                Err(err) => RpcResponse::err(
+                    &envelope.id,
+                    "notes.save.response",
+                    format!("Invalid note record: {err}"),
+                ),
+            }
+        }
+        "notes.delete.request" | "notes/delete" => {
+            let store = crate::kernel::notes_store::get_notes_store();
+            let note_id = envelope
+                .payload
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match store.delete_note(note_id) {
+                Ok(deleted) => RpcResponse::ok(
+                    &envelope.id,
+                    "notes.delete.response",
+                    Some(serde_json::json!({ "deleted": deleted, "success": true })),
+                ),
+                Err(err) => RpcResponse::err(&envelope.id, "notes.delete.response", err),
+            }
+        }
+        "ci.check_status.request" | "ci/check_status" => {
+            let workspace = envelope
+                .payload
+                .get("workspacePath")
+                .or_else(|| envelope.payload.get("cwd"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            match crate::kernel::ci_repair::check_ci_status(std::path::Path::new(workspace)) {
+                Ok(status) => RpcResponse::ok(
+                    &envelope.id,
+                    "ci.check_status.response",
+                    Some(serde_json::json!({ "status": status, "success": true })),
+                ),
+                Err(err) => RpcResponse::err(&envelope.id, "ci.check_status.response", err),
+            }
+        }
+        "ci.get_failure_log.request" | "ci/get_failure_log" => {
+            let workspace = envelope
+                .payload
+                .get("workspacePath")
+                .or_else(|| envelope.payload.get("cwd"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let run_id = envelope
+                .payload
+                .get("runId")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            match crate::kernel::ci_repair::get_ci_failure_log(std::path::Path::new(workspace), run_id) {
+                Ok(log) => RpcResponse::ok(
+                    &envelope.id,
+                    "ci.get_failure_log.response",
+                    Some(serde_json::json!({ "log": log, "success": true })),
+                ),
+                Err(err) => RpcResponse::err(&envelope.id, "ci.get_failure_log.response", err),
+            }
+        }
         other => RpcResponse::err(
             envelope.id,
             other,
@@ -2528,7 +2635,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("provider")))
                 .and_then(|v| v.as_str())
                 .unwrap_or("claude");
-            let cwd = msg
+            let raw_cwd = msg
                 .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .and_then(|v| v.as_str())
@@ -2543,13 +2650,18 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+            let resolved_cwd = crate::agent::runner::resolve_safe_cwd(
+                std::path::Path::new(raw_cwd),
+                workspace_id.as_deref(),
+            );
+            let cwd = resolved_cwd.to_string_lossy().to_string();
             let config = msg
                 .get("config")
                 .or_else(|| payload.and_then(|p| p.get("config")))
                 .cloned();
 
             let mgr = get_agent_manager();
-            match mgr.create_agent(provider, cwd, title, workspace_id, config) {
+            match mgr.create_agent(provider, &cwd, title, workspace_id, config) {
                 Ok(record) => serde_json::json!({
                     "type": "agent/create/response",
                     "requestId": request_id,
@@ -3038,9 +3150,175 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }
             })
         }
+        "notes.list.request" => {
+            let payload = msg.get("payload");
+            let query = msg
+                .get("query")
+                .or_else(|| payload.and_then(|p| p.get("query")))
+                .and_then(|v| v.as_str());
+            let store = crate::kernel::notes_store::get_notes_store();
+            let notes = match query {
+                Some(q) if !q.trim().is_empty() => store.search_notes(q.trim()),
+                _ => store.list_notes(),
+            };
+            serde_json::json!({
+                "type": "notes.list.response",
+                "payload": {
+                    "requestId": request_id,
+                    "notes": notes,
+                    "success": true
+                }
+            })
+        }
+        "notes.get.request" => {
+            let payload = msg.get("payload");
+            let note_id = msg
+                .get("id")
+                .or_else(|| payload.and_then(|p| p.get("id")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let store = crate::kernel::notes_store::get_notes_store();
+            let note = store.get_note(note_id);
+            let success = note.is_some();
+            serde_json::json!({
+                "type": "notes.get.response",
+                "payload": {
+                    "requestId": request_id,
+                    "note": note,
+                    "success": success
+                }
+            })
+        }
+        "notes.save.request" => {
+            let payload = msg.get("payload");
+            let note_val = msg
+                .get("note")
+                .or_else(|| payload.and_then(|p| p.get("note")))
+                .or_else(|| payload)
+                .cloned();
+            let store = crate::kernel::notes_store::get_notes_store();
+            let record_opt = note_val.and_then(|v| serde_json::from_value::<crate::kernel::notes_store::NoteRecord>(v).ok());
+            match record_opt {
+                Some(record) => match store.save_note(record) {
+                    Ok(saved) => serde_json::json!({
+                        "type": "notes.save.response",
+                        "payload": {
+                            "requestId": request_id,
+                            "note": saved,
+                            "success": true
+                        }
+                    }),
+                    Err(err) => serde_json::json!({
+                        "type": "notes.save.response",
+                        "payload": {
+                            "requestId": request_id,
+                            "error": err,
+                            "success": false
+                        }
+                    }),
+                },
+                None => serde_json::json!({
+                    "type": "notes.save.response",
+                    "payload": {
+                        "requestId": request_id,
+                        "error": "Invalid or missing note record",
+                        "success": false
+                    }
+                }),
+            }
+        }
+        "notes.delete.request" => {
+            let payload = msg.get("payload");
+            let note_id = msg
+                .get("id")
+                .or_else(|| payload.and_then(|p| p.get("id")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let store = crate::kernel::notes_store::get_notes_store();
+            match store.delete_note(note_id) {
+                Ok(deleted) => serde_json::json!({
+                    "type": "notes.delete.response",
+                    "payload": {
+                        "requestId": request_id,
+                        "deleted": deleted,
+                        "success": true
+                    }
+                }),
+                Err(err) => serde_json::json!({
+                    "type": "notes.delete.response",
+                    "payload": {
+                        "requestId": request_id,
+                        "error": err,
+                        "success": false
+                    }
+                }),
+            }
+        }
+        "ci.check_status.request" => {
+            let payload = msg.get("payload");
+            let workspace = msg
+                .get("workspacePath")
+                .or_else(|| msg.get("cwd"))
+                .or_else(|| payload.and_then(|p| p.get("workspacePath").or_else(|| p.get("cwd"))))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            match crate::kernel::ci_repair::check_ci_status(std::path::Path::new(workspace)) {
+                Ok(status) => serde_json::json!({
+                    "type": "ci.check_status.response",
+                    "payload": {
+                        "requestId": request_id,
+                        "status": status,
+                        "success": true
+                    }
+                }),
+                Err(err) => serde_json::json!({
+                    "type": "ci.check_status.response",
+                    "payload": {
+                        "requestId": request_id,
+                        "error": err,
+                        "success": false
+                    }
+                }),
+            }
+        }
+        "ci.get_failure_log.request" => {
+            let payload = msg.get("payload");
+            let workspace = msg
+                .get("workspacePath")
+                .or_else(|| msg.get("cwd"))
+                .or_else(|| payload.and_then(|p| p.get("workspacePath").or_else(|| p.get("cwd"))))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let run_id = msg
+                .get("runId")
+                .or_else(|| payload.and_then(|p| p.get("runId")))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            match crate::kernel::ci_repair::get_ci_failure_log(std::path::Path::new(workspace), run_id) {
+                Ok(log) => serde_json::json!({
+                    "type": "ci.get_failure_log.response",
+                    "payload": {
+                        "requestId": request_id,
+                        "log": log,
+                        "success": true
+                    }
+                }),
+                Err(err) => serde_json::json!({
+                    "type": "ci.get_failure_log.response",
+                    "payload": {
+                        "requestId": request_id,
+                        "error": err,
+                        "success": false
+                    }
+                }),
+            }
+        }
         "project.list.request" => {
             let store = crate::kernel::config_store::get_config_store();
-            let projects = store.list_projects();
+            let mut projects = store.list_projects();
+            if projects.is_empty() {
+                projects.push(store.get_or_create_scratchpad_project());
+            }
             let project_descriptors: Vec<serde_json::Value> = projects
                 .iter()
                 .map(|p| {
@@ -3350,10 +3628,57 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
 
             let store = crate::kernel::config_store::get_config_store();
             let removed = store.remove_project(project_id).ok().flatten();
-            let removed_ws = store
+            let mut removed_ws = store
                 .remove_workspaces_for_project(project_id)
                 .unwrap_or_default();
-            let ws_ids: Vec<String> = removed_ws.into_iter().map(|w| w.id).collect();
+
+            if let Some(ref p) = removed {
+                if p.id != project_id {
+                    if let Ok(extra) = store.remove_workspaces_for_project(&p.id) {
+                        removed_ws.extend(extra);
+                    }
+                }
+                if !p.path.is_empty() && p.path != project_id {
+                    if let Ok(extra) = store.remove_workspaces_for_project(&p.path) {
+                        removed_ws.extend(extra);
+                    }
+                }
+            }
+
+            let mut ws_ids: Vec<String> = removed_ws.into_iter().map(|w| w.id).collect();
+            if ws_ids.is_empty() {
+                if let Ok(Some(single_ws)) = store.remove_workspace(project_id) {
+                    ws_ids.push(single_ws.id);
+                }
+            }
+            ws_ids.sort();
+            ws_ids.dedup();
+
+            // Broadcast workspace_update event via provider push channel so client UI updates immediately
+            let push_tx = get_provider_push_tx();
+            if ws_ids.is_empty() {
+                let update_msg = serde_json::json!({
+                    "type": "workspace_update",
+                    "payload": {
+                        "kind": "remove",
+                        "id": project_id,
+                        "removedProjectId": project_id
+                    }
+                });
+                let _ = push_tx.send(update_msg.to_string());
+            } else {
+                for ws_id in &ws_ids {
+                    let update_msg = serde_json::json!({
+                        "type": "workspace_update",
+                        "payload": {
+                            "kind": "remove",
+                            "id": ws_id,
+                            "removedProjectId": project_id
+                        }
+                    });
+                    let _ = push_tx.send(update_msg.to_string());
+                }
+            }
 
             serde_json::json!({
                 "type": "project.remove.response",
@@ -3361,7 +3686,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 "payload": {
                     "requestId": request_id,
                     "projectId": project_id,
-                    "accepted": removed.is_some(),
+                    "accepted": true,
                     "removedWorkspaceIds": ws_ids,
                     "error": null
                 }
@@ -3520,18 +3845,12 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 if let Some(proj) = store.get_project(project_id_req) {
                     (proj.path, proj.id, proj.name)
                 } else {
-                    (
-                        ".".to_string(),
-                        project_id_req.to_string(),
-                        "workspace".to_string(),
-                    )
+                    let proj = store.get_or_create_scratchpad_project();
+                    (proj.path, proj.id, proj.name)
                 }
             } else {
-                (
-                    ".".to_string(),
-                    "prj_default".to_string(),
-                    "workspace".to_string(),
-                )
+                let proj = store.get_or_create_scratchpad_project();
+                (proj.path, proj.id, proj.name)
             };
 
             let ws_id = if requested_id.starts_with("wks_") && requested_id.len() == 20 {
@@ -3723,7 +4042,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 (Some(p), _) => p,
                 _ => "codex",
             };
-            let cwd = msg
+            let raw_cwd = msg
                 .get("cwd")
                 .or_else(|| payload.and_then(|p| p.get("cwd")))
                 .or_else(|| source_config.and_then(|config| config.get("cwd")))
@@ -3739,6 +4058,11 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("workspaceId")))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+            let resolved_cwd = crate::agent::runner::resolve_safe_cwd(
+                std::path::Path::new(raw_cwd),
+                ws_id.as_deref(),
+            );
+            let cwd = resolved_cwd.to_string_lossy().to_string();
 
             let mut config = source_config
                 .cloned()
@@ -3779,7 +4103,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 let slug = format!("worktree-{}", &crate::agent::manager::uuid_v4_simple()[..8]);
                 mgr.create_agent_in_worktree(
                     provider,
-                    cwd,
+                    &cwd,
                     &slug,
                     None,
                     title,
@@ -3788,7 +4112,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 )
                 .await
             } else {
-                mgr.create_agent(provider, cwd, title, ws_id.clone(), Some(config))
+                mgr.create_agent(provider, &cwd, title, ws_id.clone(), Some(config))
             };
             match create_result {
                 Ok(mut record) => {
@@ -6616,6 +6940,8 @@ impl DaemonHandle {
         }
         #[cfg(not(test))]
         crate::kernel::schedules::start_scheduler_engine();
+        #[cfg(not(test))]
+        crate::kernel::config_store::get_config_store().sanitize_orphaned_workspaces();
         let access = Arc::new(crate::kernel::access::AccessControl::load(
             &home,
             actual_port,
@@ -7430,18 +7756,14 @@ async fn discover_jsonl_cli_models(
         Some(b) => b,
         None => return Vec::new(),
     };
-    let safe_cwd = if cwd.trim().is_empty() || !std::path::Path::new(cwd).is_dir() {
-        "."
-    } else {
-        cwd
-    };
+    let safe_cwd = crate::agent::runner::resolve_safe_cwd(std::path::Path::new(cwd), None);
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::process::Command;
 
     let discovery = async {
         let mut cmd = Command::new(&binary);
         cmd.args(args)
-            .current_dir(safe_cwd)
+            .current_dir(&safe_cwd)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -7738,16 +8060,12 @@ pub(crate) async fn discover_codex_models(cwd: &str) -> Vec<serde_json::Value> {
         Some(b) => b,
         None => return Vec::new(),
     };
-    let safe_cwd = if cwd.trim().is_empty() || !std::path::Path::new(cwd).is_dir() {
-        "."
-    } else {
-        cwd
-    };
+    let safe_cwd = crate::agent::runner::resolve_safe_cwd(std::path::Path::new(cwd), None);
 
     let discovery = async {
         let mut client = crate::agent::providers::codex::CodexAppServerClient::spawn_with_bin(
             &binary,
-            std::path::Path::new(safe_cwd),
+            &safe_cwd,
         )
         .await
         .ok()?;
@@ -7938,18 +8256,14 @@ pub(crate) async fn read_claude_settings_model(config_dir: &std::path::Path) -> 
 }
 
 async fn discover_opencode_models(cwd: &str) -> Vec<serde_json::Value> {
-    let safe_cwd = if cwd.trim().is_empty() || !std::path::Path::new(cwd).is_dir() {
-        "."
-    } else {
-        cwd
-    };
+    let safe_cwd = crate::agent::runner::resolve_safe_cwd(std::path::Path::new(cwd), None);
 
     // 1. Dynamic discovery via opencode CLI
     if let Some(binary) = crate::agent::registry::resolve_command("opencode") {
         // Try `models --verbose` first for detailed JSON capabilities
         let mut cmd = tokio::process::Command::new(&binary);
         cmd.args(["models", "--verbose"])
-            .current_dir(safe_cwd)
+            .current_dir(&safe_cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
@@ -7970,7 +8284,7 @@ async fn discover_opencode_models(cwd: &str) -> Vec<serde_json::Value> {
         let mut fallback_cmd = tokio::process::Command::new(&binary);
         fallback_cmd
             .args(["models"])
-            .current_dir(safe_cwd)
+            .current_dir(&safe_cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
@@ -8003,7 +8317,7 @@ async fn discover_opencode_models(cwd: &str) -> Vec<serde_json::Value> {
     };
     let response = match client
         .get(format!("{base_url}/provider"))
-        .header("x-opencode-directory", safe_cwd)
+        .header("x-opencode-directory", safe_cwd.to_string_lossy().to_string())
         .send()
         .await
     {

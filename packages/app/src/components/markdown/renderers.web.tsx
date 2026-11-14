@@ -10,6 +10,7 @@ import { useFileLink } from "@/assistant-file-links";
 import { useForgeShorthand } from "@/git/forge-shorthand";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { HighlightedCodeBlock } from "@/components/highlighted-code-block";
+import { ArtifactSnippetChip } from "@/features/artifacts";
 import type { Theme } from "@/styles/theme";
 import { MermaidFence } from "./fence/mermaid";
 import { markdownLinkSource } from "./source";
@@ -24,8 +25,25 @@ const codeStyle = (theme: Theme) => ({
   textStyle: { backgroundColor: theme.colors.surface2, padding: 12, borderRadius: 8 },
 });
 function WebCodeBlock({ code, language }: CodeBlockRendererProps) {
-  if (language?.toLowerCase() === "mermaid") return <MermaidFence code={code} />;
-  return <ThemedCodeBlock code={code} language={language} uniProps={codeStyle} />;
+  const lang = language?.toLowerCase();
+  if (lang === "mermaid") return <MermaidFence code={code} />;
+
+  const isArtifact = lang === "html" || lang === "svg";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: isArtifact ? 6 : 0 }}>
+      {isArtifact && (
+        <div style={{ marginBottom: 4 }}>
+          <ArtifactSnippetChip
+            type={lang === "svg" ? "svg" : "html"}
+            title={lang === "svg" ? "SVG Graphic" : "HTML Sandbox"}
+            content={code}
+          />
+        </div>
+      )}
+      <ThemedCodeBlock code={code} language={language} uniProps={codeStyle} />
+    </div>
+  );
 }
 
 // The library styles links inline, so a stylesheet :hover rule cannot underline them.

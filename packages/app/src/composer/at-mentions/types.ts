@@ -2,7 +2,7 @@
  * Kronos Composer @ Mentions Types
  */
 
-export type MentionKind = "file" | "folder" | "git_diff" | "git_status" | "terminal";
+export type MentionKind = "file" | "folder" | "git_diff" | "git_status" | "terminal" | "note";
 
 export interface MentionItem {
   id: string;
@@ -14,6 +14,13 @@ export interface MentionItem {
 }
 
 export const STATIC_MENTIONS: readonly MentionItem[] = [
+  {
+    id: "note",
+    kind: "note",
+    label: "Note / Scratchpad",
+    detail: "Attach saved markdown note into prompt",
+    insertToken: "@note ",
+  },
   {
     id: "git_diff",
     kind: "git_diff",

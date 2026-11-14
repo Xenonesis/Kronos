@@ -77,6 +77,20 @@ impl AgentStorage {
         self.records.read().unwrap_or_else(|e| e.into_inner()).records.get(id).cloned()
     }
 
+    pub fn update_agent_record<F: FnOnce(&mut StoredAgentRecord)>(
+        &self,
+        id: &str,
+        update_fn: F,
+    ) -> io::Result<Option<StoredAgentRecord>> {
+        let mut rec = match self.get_record(id) {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+        update_fn(&mut rec);
+        self.save_record(rec.clone())?;
+        Ok(Some(rec))
+    }
+
     pub fn list_records(&self) -> Vec<StoredAgentRecord> {
         let mut list: Vec<_> = self
             .records

@@ -3,6 +3,7 @@ import { View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { FloatingHeaderLayout } from "@/components/floating-header";
 import { StreamTopOverlayProvider } from "@/agent-stream/top-overlay";
+import { CiRepairBanner } from "@/features/ci-repair";
 import { SheetTabs } from "@/screens/workspace/sheet-tabs";
 import {
   WorkspaceDesktopTabsRow,
@@ -88,6 +89,7 @@ export const WorkspaceCenterColumn = memo(function WorkspaceCenterColumn({
         >
           {(topOverlayInset) => (
             <StreamTopOverlayProvider value={topOverlayInset}>
+              <CiRepairBanner />
               <View style={styles.content}>{children}</View>
             </StreamTopOverlayProvider>
           )}
@@ -131,6 +133,7 @@ export const WorkspaceCenterColumn = memo(function WorkspaceCenterColumn({
       ) : null}
 
       <View style={styles.centerContent}>
+        <CiRepairBanner />
         <View style={styles.content}>{children}</View>
       </View>
     </View>

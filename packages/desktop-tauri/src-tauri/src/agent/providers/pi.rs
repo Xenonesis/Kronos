@@ -12,9 +12,16 @@ pub struct PiAgentClient {
 
 impl PiAgentClient {
     pub async fn spawn(cwd: &Path, extension_paths: &[&str]) -> Result<Self, String> {
+        let safe_cwd = if cwd.is_dir() {
+            cwd.to_path_buf()
+        } else {
+            dirs::home_dir()
+                .filter(|d| d.is_dir())
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")))
+        };
         let mut cmd = Command::new("pi");
         cmd.arg("--json")
-            .current_dir(cwd)
+            .current_dir(&safe_cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

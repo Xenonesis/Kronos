@@ -204,12 +204,14 @@ impl DaemonConfigStore {
         let projects = Self::load_projects(&home).unwrap_or_default();
         let workspaces = Self::load_workspaces(&home).unwrap_or_default();
 
-        Self {
+        let store = Self {
             home_dir: home,
             config: Arc::new(RwLock::new(config)),
             projects: Arc::new(RwLock::new(projects)),
             workspaces: Arc::new(RwLock::new(workspaces)),
-        }
+        };
+        store.sanitize_orphaned_workspaces();
+        store
     }
 
     pub fn get_config(&self) -> DaemonConfig {
@@ -414,14 +416,88 @@ impl DaemonConfigStore {
         self.projects.read().unwrap_or_else(|e| e.into_inner()).values().cloned().collect()
     }
 
-    pub fn get_project(&self, id: &str) -> Option<ProjectRecord> {
-        self.projects.read().unwrap_or_else(|e| e.into_inner()).get(id).cloned()
-    }
-    pub fn remove_project(&self, id: &str) -> std::io::Result<Option<ProjectRecord>> {
+    pub fn get_or_create_scratchpad_project(&self) -> ProjectRecord {
+        let scratch_dir = self.home_dir.join("scratchpad");
+        let _ = std::fs::create_dir_all(&scratch_dir);
+        let path_str = scratch_dir.to_string_lossy().to_string();
+
         let mut map = self.projects.write().unwrap_or_else(|e| e.into_inner());
-        let removed = map.remove(id);
-        Self::save_projects_atomic(&self.home_dir, &map)?;
-        Ok(removed)
+        if let Some(p) = map.get("prj_scratchpad") {
+            return p.clone();
+        }
+        let project = ProjectRecord {
+            id: "prj_scratchpad".to_string(),
+            name: "General Chat".to_string(),
+            path: path_str,
+            created_at: crate::agent::types::now_iso(),
+            default_workspace_id: None,
+        };
+        map.insert(project.id.clone(), project.clone());
+        let _ = Self::save_projects_atomic(&self.home_dir, &map);
+        project
+    }
+
+    pub fn get_project(&self, id_or_path: &str) -> Option<ProjectRecord> {
+        let map = self.projects.read().unwrap_or_else(|e| e.into_inner());
+        let target = id_or_path.trim();
+        if target.is_empty() {
+            return None;
+        }
+        if let Some(p) = map.get(target) {
+            return Some(p.clone());
+        }
+        if let Some(p) = map.values()
+            .find(|p| {
+                p.id == target
+                    || paths_match(&p.path, target)
+                    || p.name == target
+                    || p.name.eq_ignore_ascii_case(target)
+            }) {
+            return Some(p.clone());
+        }
+        if target == "prj_scratchpad"
+            || target == "prj_default"
+            || target.eq_ignore_ascii_case("general chat")
+            || target.eq_ignore_ascii_case("scratchpad")
+        {
+            drop(map);
+            return Some(self.get_or_create_scratchpad_project());
+        }
+        None
+    }
+
+    pub fn remove_project(&self, id_or_path: &str) -> std::io::Result<Option<ProjectRecord>> {
+        let mut map = self.projects.write().unwrap_or_else(|e| e.into_inner());
+        let target = id_or_path.trim();
+        if target.is_empty() {
+            return Ok(None);
+        }
+
+        let keys_to_remove: Vec<String> = map
+            .iter()
+            .filter(|(k, p)| {
+                *k == target
+                    || p.id == target
+                    || paths_match(&p.path, target)
+                    || p.name == target
+                    || p.name.eq_ignore_ascii_case(target)
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        let mut primary_removed = None;
+        for k in keys_to_remove {
+            if let Some(r) = map.remove(&k) {
+                if primary_removed.is_none() {
+                    primary_removed = Some(r);
+                }
+            }
+        }
+
+        if primary_removed.is_some() {
+            Self::save_projects_atomic(&self.home_dir, &map)?;
+        }
+        Ok(primary_removed)
     }
 
     pub fn add_workspace(&self, workspace: WorkspaceRecord) -> std::io::Result<()> {
@@ -431,31 +507,112 @@ impl DaemonConfigStore {
         Ok(())
     }
 
-    pub fn get_workspace(&self, id: &str) -> Option<WorkspaceRecord> {
-        self.workspaces.read().unwrap_or_else(|e| e.into_inner()).get(id).cloned()
+    pub fn get_workspace(&self, id_or_path: &str) -> Option<WorkspaceRecord> {
+        let map = self.workspaces.read().unwrap_or_else(|e| e.into_inner());
+        let target = id_or_path.trim();
+        if target.is_empty() {
+            return None;
+        }
+        if let Some(ws) = map.get(target) {
+            return Some(ws.clone());
+        }
+        map.values()
+            .find(|ws| {
+                ws.id == target
+                    || paths_match(&ws.path, target)
+                    || ws.name == target
+                    || ws.name.eq_ignore_ascii_case(target)
+            })
+            .cloned()
     }
+
     pub fn list_workspaces(&self) -> Vec<WorkspaceRecord> {
         self.workspaces.read().unwrap_or_else(|e| e.into_inner()).values().cloned().collect()
     }
 
     pub fn remove_workspaces_for_project(
         &self,
-        project_id: &str,
+        project_id_or_path: &str,
     ) -> std::io::Result<Vec<WorkspaceRecord>> {
         let mut map = self.workspaces.write().unwrap_or_else(|e| e.into_inner());
+        let target = project_id_or_path.trim();
+        if target.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let mut removed = Vec::new();
-        map.retain(|_, ws| {
-            if ws.project_id == project_id {
+        map.retain(|k, ws| {
+            let matches = k == target
+                || ws.project_id == target
+                || ws.id == target
+                || paths_match(&ws.path, target);
+            if matches {
                 removed.push(ws.clone());
                 false
             } else {
                 true
             }
         });
+
         if !removed.is_empty() {
             Self::save_workspaces_atomic(&self.home_dir, &map)?;
         }
         Ok(removed)
+    }
+
+    pub fn remove_workspace(
+        &self,
+        workspace_id_or_path: &str,
+    ) -> std::io::Result<Option<WorkspaceRecord>> {
+        let mut map = self.workspaces.write().unwrap_or_else(|e| e.into_inner());
+        let target = workspace_id_or_path.trim();
+        if target.is_empty() {
+            return Ok(None);
+        }
+
+        let keys_to_remove: Vec<String> = map
+            .iter()
+            .filter(|(k, ws)| *k == target || ws.id == target || paths_match(&ws.path, target))
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        let mut primary_removed = None;
+        for k in keys_to_remove {
+            if let Some(r) = map.remove(&k) {
+                if primary_removed.is_none() {
+                    primary_removed = Some(r);
+                }
+            }
+        }
+
+        if primary_removed.is_some() {
+            Self::save_workspaces_atomic(&self.home_dir, &map)?;
+        }
+        Ok(primary_removed)
+    }
+
+    pub fn sanitize_orphaned_workspaces(&self) -> usize {
+        let project_ids: std::collections::HashSet<String> = {
+            let projects = self.projects.read().unwrap_or_else(|e| e.into_inner());
+            projects
+                .iter()
+                .flat_map(|(k, p)| [k.clone(), p.id.clone()])
+                .collect()
+        };
+        let mut map = self.workspaces.write().unwrap_or_else(|e| e.into_inner());
+        let initial_count = map.len();
+        map.retain(|_, ws| {
+            let project_exists = project_ids.contains(&ws.project_id);
+            let path_exists = !ws.path.trim().is_empty() && Path::new(&ws.path).exists();
+            project_exists || path_exists
+        });
+        let pruned = initial_count.saturating_sub(map.len());
+        if pruned > 0 {
+            if let Err(e) = Self::save_workspaces_atomic(&self.home_dir, &map) {
+                eprintln!("[kernel] Failed to save workspaces after sanitization: {e}");
+            }
+        }
+        pruned
     }
 
     fn load_config(home: &Path) -> Option<DaemonConfig> {
@@ -502,6 +659,30 @@ impl DaemonConfigStore {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         atomic_write(&target, json.as_bytes())
     }
+}
+
+pub fn normalize_path_for_match(p: &str) -> String {
+    let trimmed = p.trim().trim_end_matches(['/', '\\']);
+    let without_verbatim = trimmed.strip_prefix(r"\\?\").unwrap_or(trimmed);
+    without_verbatim.replace('\\', "/").to_lowercase()
+}
+
+pub fn paths_match(a: &str, b: &str) -> bool {
+    let norm_a = normalize_path_for_match(a);
+    let norm_b = normalize_path_for_match(b);
+    if !norm_a.is_empty() && norm_a == norm_b {
+        return true;
+    }
+    let pa = Path::new(a.trim());
+    let pb = Path::new(b.trim());
+    if (pa.is_absolute() || pb.is_absolute()) && pa.exists() && pb.exists() {
+        if let (Ok(ca), Ok(cb)) = (fs::canonicalize(pa), fs::canonicalize(pb)) {
+            if ca == cb {
+                return true;
+            }
+        }
+    }
+    false
 }
 static CONFIG_STORE: LazyLock<DaemonConfigStore> = LazyLock::new(|| {
     let home = crate::get_data_dir();
@@ -713,5 +894,121 @@ mod tests {
             catalog.assignments.get("wks_1").cloned().unwrap_or_default(),
             vec!["urgent".to_string()]
         );
+    }
+
+    #[test]
+    fn test_remove_project_flexible_matching() {
+        let dir = tempdir().unwrap();
+        let store = DaemonConfigStore::new(dir.path());
+
+        let p1 = ProjectRecord {
+            id: "prj_alpha".to_string(),
+            name: "Alpha Project".to_string(),
+            path: "C:\\Workspace\\alpha".to_string(),
+            created_at: "2026-11-01T00:00:00Z".to_string(),
+            default_workspace_id: None,
+        };
+        let p2 = ProjectRecord {
+            id: "prj_beta".to_string(),
+            name: "Beta Project".to_string(),
+            path: "C:/Workspace/beta".to_string(),
+            created_at: "2026-11-01T00:00:00Z".to_string(),
+            default_workspace_id: None,
+        };
+        store.add_project(p1.clone()).unwrap();
+        store.add_project(p2.clone()).unwrap();
+
+        // 1. Remove by normalized path with different slashes & casing
+        let removed = store.remove_project("c:/workspace/alpha/").unwrap();
+        assert_eq!(removed.map(|p| p.id), Some("prj_alpha".to_string()));
+        assert!(store.get_project("prj_alpha").is_none());
+
+        // 2. Remove by name (case-insensitive)
+        let removed = store.remove_project("beta project").unwrap();
+        assert_eq!(removed.map(|p| p.id), Some("prj_beta".to_string()));
+        assert!(store.get_project("prj_beta").is_none());
+
+        // 3. Idempotent removal of already removed project
+        let removed_again = store.remove_project("prj_alpha").unwrap();
+        assert!(removed_again.is_none());
+    }
+
+    #[test]
+    fn test_workspace_removal_and_sanitization() {
+        let dir = tempdir().unwrap();
+        let store = DaemonConfigStore::new(dir.path());
+
+        let proj = ProjectRecord {
+            id: "prj_main".to_string(),
+            name: "Main".to_string(),
+            path: "C:\\projects\\main".to_string(),
+            created_at: "2026-11-01T00:00:00Z".to_string(),
+            default_workspace_id: None,
+        };
+        store.add_project(proj).unwrap();
+
+        let ws1 = WorkspaceRecord {
+            id: "wks_1".to_string(),
+            project_id: "prj_main".to_string(),
+            name: "Main WS".to_string(),
+            path: "C:\\projects\\main".to_string(),
+            kind: "directory".to_string(),
+        };
+        let ws2 = WorkspaceRecord {
+            id: "wks_2".to_string(),
+            project_id: "prj_main".to_string(),
+            name: "Feature".to_string(),
+            path: "C:\\projects\\main_feat".to_string(),
+            kind: "worktree".to_string(),
+        };
+        let ws_orphan = WorkspaceRecord {
+            id: "wks_orphan".to_string(),
+            project_id: "prj_nonexistent".to_string(),
+            name: "Orphan".to_string(),
+            path: "C:\\nonexistent\\path\\to\\dir".to_string(),
+            kind: "directory".to_string(),
+        };
+
+        store.add_workspace(ws1.clone()).unwrap();
+        store.add_workspace(ws2.clone()).unwrap();
+        store.add_workspace(ws_orphan.clone()).unwrap();
+
+        // Remove single workspace by path
+        let removed_ws = store.remove_workspace("c:/projects/main_feat").unwrap();
+        assert_eq!(removed_ws.map(|w| w.id), Some("wks_2".to_string()));
+
+        // Sanitization prunes orphaned workspace (project doesn't exist AND path doesn't exist)
+        let pruned = store.sanitize_orphaned_workspaces();
+        assert_eq!(pruned, 1);
+        assert!(store.get_workspace("wks_orphan").is_none());
+        assert!(store.get_workspace("wks_1").is_some());
+
+        // Remove workspaces for project by project ID
+        let removed = store.remove_workspaces_for_project("prj_main").unwrap();
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].id, "wks_1");
+        assert_eq!(store.list_workspaces().len(), 0);
+    }
+
+    #[test]
+    fn test_scratchpad_project_auto_creation() {
+        let dir = tempdir().unwrap();
+        let store = DaemonConfigStore::new(dir.path());
+
+        // Initially no projects
+        assert_eq!(store.list_projects().len(), 0);
+
+        // Fetching prj_scratchpad or "general chat" automatically provisions it
+        let scratchpad = store.get_project("prj_scratchpad").expect("auto create scratchpad");
+        assert_eq!(scratchpad.id, "prj_scratchpad");
+        assert_eq!(scratchpad.name, "General Chat");
+        assert!(std::path::Path::new(&scratchpad.path).is_dir());
+
+        // Also queryable by name
+        let by_name = store.get_project("general chat").expect("query by name");
+        assert_eq!(by_name.id, "prj_scratchpad");
+
+        // Listed in projects
+        assert_eq!(store.list_projects().len(), 1);
     }
 }

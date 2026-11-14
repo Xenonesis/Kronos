@@ -95,4 +95,27 @@ describe("mention-resolver", () => {
 
     expect(resolved).toContain("[Attached Context: file:missing.ts (File reference preserved)]");
   });
+
+  it("resolves @note mentions from the notes store", async () => {
+    const { useNotesStore } = await import("@/features/notes/use-notes");
+    useNotesStore.setState({
+      notes: [
+        {
+          id: "note-design",
+          title: "System Design",
+          content: "Use SQLite for metadata and rocksdb for vectors",
+          tags: ["db"],
+          pinned: true,
+          createdAtMs: 100,
+          updatedAtMs: 200,
+        },
+      ],
+    });
+
+    const prompt = "Please review our architecture from @note:\"System Design\"";
+    const resolved = await resolvePromptMentionsAsync(prompt);
+
+    expect(resolved).toContain("[Attached Context: Note - System Design]");
+    expect(resolved).toContain("Use SQLite for metadata and rocksdb for vectors");
+  });
 });

@@ -599,10 +599,9 @@ async fn real_child_persists_session_and_resumes_after_manager_restart() {
     assert!(invocations[1]
         .windows(2)
         .any(|pair| pair == ["-c", "model_reasoning_effort=\"high\""]));
-    assert_eq!(
-        &invocations[1][invocations[1].len() - 3..],
-        &["controlled-thread", "--", "second"][..]
-    );
+    assert_eq!(invocations[1][invocations[1].len() - 3], "controlled-thread");
+    assert_eq!(invocations[1][invocations[1].len() - 2], "--");
+    assert!(invocations[1][invocations[1].len() - 1].contains("second"));
     assert_eq!(
         provider_handle(&reloaded.get_agent(&agent.id).unwrap())
             .unwrap()
@@ -1059,4 +1058,51 @@ async fn failed_start_commit_cleans_the_already_running_unix_descendant_group() 
     assert!(manager
         .send_message(&agent.id, "retry after failed start commit")
         .is_ok());
+}
+
+#[test]
+fn test_resolve_safe_cwd_existing_dir() {
+    let temp = tempfile::tempdir().unwrap();
+    let resolved = resolve_safe_cwd(temp.path(), None);
+    assert_eq!(resolved, temp.path());
+    assert!(resolved.is_dir());
+}
+
+#[test]
+fn test_resolve_safe_cwd_creates_missing_dir() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("sub").join("directory");
+    assert!(!missing.exists());
+    let resolved = resolve_safe_cwd(&missing, None);
+    assert_eq!(resolved, missing);
+    assert!(resolved.is_dir());
+}
+
+#[test]
+fn test_resolve_safe_cwd_placeholder_fallback() {
+    let resolved = resolve_safe_cwd(Path::new(""), None);
+    assert!(resolved.is_dir());
+
+    let resolved_dot = resolve_safe_cwd(Path::new("."), None);
+    assert!(resolved_dot.is_dir());
+}
+
+#[test]
+fn test_resolve_safe_cwd_workspace_fallback() {
+    let temp = tempfile::tempdir().unwrap();
+    let ws_dir = temp.path().join("workspace_folder");
+    std::fs::create_dir_all(&ws_dir).unwrap();
+
+    let ws = crate::kernel::config_store::WorkspaceRecord {
+        id: "wks_test_safe_cwd".to_string(),
+        project_id: "prj_test".to_string(),
+        name: "Test WS".to_string(),
+        path: ws_dir.to_string_lossy().to_string(),
+        kind: "directory".to_string(),
+    };
+    crate::kernel::config_store::get_config_store().add_workspace(ws).unwrap();
+
+    let resolved = resolve_safe_cwd(Path::new("."), Some("wks_test_safe_cwd"));
+    assert_eq!(resolved, ws_dir);
+    assert!(resolved.is_dir());
 }

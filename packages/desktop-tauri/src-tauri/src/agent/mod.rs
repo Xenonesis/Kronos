@@ -21,3 +21,5 @@ pub mod browser_runner;
 pub mod web_search;
 pub mod quick_llm;
 
+pub use runner::resolve_safe_cwd;
+

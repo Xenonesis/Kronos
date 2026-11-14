@@ -1849,6 +1849,16 @@ mod tests {
             "Timeline entries must contain the initial prompt"
         );
         assert_eq!(entries[0]["item"]["text"], "Initialize test repo");
+
+        // 5. Clean up: test project.remove.request
+        let remove_req = serde_json::json!({
+            "type": "project.remove.request",
+            "requestId": "req-proj-remove-1",
+            "projectId": proj["projectId"].as_str().unwrap()
+        });
+        let remove_resp = dispatch_session_message(&remove_req).await;
+        assert_eq!(remove_resp["type"], "project.remove.response");
+        assert_eq!(remove_resp["payload"]["accepted"], true);
     }
 
     #[tokio::test]

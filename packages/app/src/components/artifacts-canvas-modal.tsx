@@ -14,6 +14,7 @@ import {
 import { useToast } from "@/contexts/toast-context";
 import { MermaidFence } from "@/components/markdown/fence/mermaid";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
+import { HtmlArtifactFrame } from "@/features/artifacts";
 
 export interface ArtifactItem {
   id: string;
@@ -258,15 +259,13 @@ export const ArtifactsCanvasModal = memo(function ArtifactsCanvasModal({
               </div>
             </div>
           ) : activeArtifact.type === "html" ? (
-            <iframe
-              srcDoc={activeArtifact.content}
-              title={activeArtifact.title}
-              style={{
-                flex: 1,
-                border: "none",
-                width: "100%",
-                height: "100%",
-                backgroundColor: "#09090b",
+            <HtmlArtifactFrame
+              artifact={{
+                id: activeArtifact.id,
+                title: activeArtifact.title,
+                type: "html",
+                content: activeArtifact.content,
+                createdAt: Date.now(),
               }}
             />
           ) : activeArtifact.type === "mermaid" ? (

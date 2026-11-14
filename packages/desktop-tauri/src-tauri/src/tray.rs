@@ -21,6 +21,13 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let new_chat_i = MenuItem::with_id(app, "new_chat", "New Agent Chat", true, None::<&str>)?;
+    let quick_composer_i = MenuItem::with_id(
+        app,
+        "quick_composer",
+        "Quick Composer (Ctrl+Shift+Space)",
+        true,
+        None::<&str>,
+    )?;
     let toggle_window_i =
         MenuItem::with_id(app, "toggle_window", "Toggle Window", true, None::<&str>)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
@@ -36,6 +43,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             &active_agents_i,
             &sep1,
             &new_chat_i,
+            &quick_composer_i,
             &toggle_window_i,
             &sep2,
             &restart_daemon_i,
@@ -82,6 +90,14 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                         serde_json::json!({ "action": "new_chat" }),
                     );
                     let _ = window.emit("open-agent", serde_json::json!({ "new": true }));
+                }
+            }
+            "quick_composer" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                    let _ = window.emit("kronos://open-quick-composer", serde_json::json!({}));
                 }
             }
             "toggle_window" => {

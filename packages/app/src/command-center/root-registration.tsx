@@ -14,6 +14,8 @@ import {
   PanelLeft,
   Plus,
   Settings,
+  Sparkles,
+  StickyNote,
 } from "lucide-react-native";
 import { withUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
@@ -63,6 +65,20 @@ const ThemedCircleDashed = withUnistyles(CircleDashed, (theme) => ({
 const ThemedPanelLeft = withUnistyles(PanelLeft, (theme) => ({
   color: theme.colors.foregroundMuted,
 }));
+const ThemedSparkles = withUnistyles(Sparkles, (theme) => ({
+  color: theme.colors.accent,
+}));
+const ThemedStickyNote = withUnistyles(StickyNote, (theme) => ({
+  color: theme.colors.accent,
+}));
+
+function SparklesIcon({ size }: CommandCenterIconProps) {
+  return <ThemedSparkles size={size} strokeWidth={2.2} />;
+}
+
+function NotesIcon({ size }: CommandCenterIconProps) {
+  return <ThemedStickyNote size={size} strokeWidth={2.2} />;
+}
 
 function PlusIcon({ size }: CommandCenterIconProps) {
   return <ThemedPlus size={size} strokeWidth={2.4} />;
@@ -135,10 +151,50 @@ export function CommandCenterRootActions() {
   const actions = useMemo<CommandCenterContribution[]>(() => {
     const availableActions: CommandCenterContribution[] = [
       {
-        id: "add-project",
+        id: "quick-composer",
         group: "actions",
         groupRank: 0,
         rank: 0,
+        keywords: ["quick", "composer", "prompt", "dispatch", "ask", "agent", "floating"],
+        visibility: "always",
+        run: () => {
+          clearCommandCenterFocusRestoreElement();
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("kronos:open-quick-composer"));
+          }
+        },
+        presentation: {
+          kind: "action",
+          title: "Quick Composer",
+          sectionTitle: t("shell.commandCenter.actions"),
+          icon: SparklesIcon,
+        },
+      },
+      {
+        id: "scratchpad-notes",
+        group: "actions",
+        groupRank: 0,
+        rank: 1,
+        keywords: ["notes", "scratchpad", "memo", "snippet", "pin", "drawer"],
+        visibility: "always",
+        run: () => {
+          clearCommandCenterFocusRestoreElement();
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("kronos:open-notes"));
+          }
+        },
+        presentation: {
+          kind: "action",
+          title: "Scratchpad / Notes",
+          sectionTitle: t("shell.commandCenter.actions"),
+          icon: NotesIcon,
+        },
+      },
+      {
+        id: "add-project",
+        group: "actions",
+        groupRank: 0,
+        rank: 2,
         keywords: ["open", "project", "folder", "workspace", "repo"],
         visibility: "query",
         run: () => {

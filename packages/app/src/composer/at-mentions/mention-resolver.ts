@@ -39,7 +39,8 @@ export function hasMentions(text: string): boolean {
     text.includes("@file:") ||
     text.includes("@folder:") ||
     text.includes("@notepad") ||
-    text.includes("@playbook")
+    text.includes("@playbook") ||
+    text.includes("@note")
   );
 }
 
@@ -199,6 +200,44 @@ async function resolveKronosDocsMentions(
   return resolved;
 }
 
+async function resolveNoteMentions(text: string): Promise<string> {
+  if (!text.includes("@note")) {
+    return text;
+  }
+  let resolved = text;
+  try {
+    const { useNotesStore } = await import("@/features/notes/use-notes");
+    const notes = useNotesStore.getState().notes;
+    if (!notes || notes.length === 0) return resolved;
+
+    const noteRegex = /@note(?::(?:"([^"]+)"|([a-zA-Z0-9_.-]+)))?/g;
+    resolved = resolved.replace(noteRegex, (full, quotedTarget?: string, simpleTarget?: string) => {
+      const target = quotedTarget || simpleTarget;
+      if (target) {
+        const found = notes.find(
+          (n) =>
+            n.title.toLowerCase() === target.toLowerCase() ||
+            n.id.toLowerCase() === target.toLowerCase(),
+        );
+        if (found) {
+          return `\n\n[Attached Context: Note - ${found.title}]\n\`\`\`markdown\n${found.content.trim()}\n\`\`\`\n`;
+        }
+      }
+      const pinned = notes.filter((n) => n.pinned);
+      const toAttach = pinned.length > 0 ? pinned : [notes[0]];
+      return toAttach
+        .filter(Boolean)
+        .map(
+          (n) => `\n\n[Attached Context: Note - ${n.title}]\n\`\`\`markdown\n${n.content.trim()}\n\`\`\`\n`,
+        )
+        .join("\n");
+    });
+  } catch {
+    // Preserve raw mention outside environment
+  }
+  return resolved;
+}
+
 export async function resolvePromptMentionsAsync(
   prompt: string,
   options: ResolveMentionsOptions = {},
@@ -206,5 +245,6 @@ export async function resolvePromptMentionsAsync(
   const resolvedSync = resolvePromptMentions(prompt, options.payloads);
   const resolvedFiles = await resolveFileMentions(resolvedSync, options);
   const resolvedFolders = await resolveFolderMentions(resolvedFiles, options);
-  return resolveKronosDocsMentions(resolvedFolders, options);
+  const resolvedDocs = await resolveKronosDocsMentions(resolvedFolders, options);
+  return resolveNoteMentions(resolvedDocs);
 }

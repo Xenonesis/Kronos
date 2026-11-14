@@ -68,6 +68,7 @@ import { enhancePromptText } from "@/composer/prompt-enhancer";
 import { playAudioCue } from "@/utils/audio-cues";
 import { MentionPalette } from "@/composer/at-mentions/mention-palette";
 import type { MentionItem } from "@/composer/at-mentions/types";
+import { NoteActionChip } from "@/features/notes/NoteActionChip";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useSessionStore } from "@/stores/session-store";
@@ -104,6 +105,7 @@ export function triggerVoiceDictationToggle(): void {
     window.dispatchEvent(new CustomEvent(VOICE_DICTATION_TOGGLE_EVENT));
   }
 }
+import { registerKronosComposerListeners } from "./kronos-events";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useComposerKeyboardScope } from "@/composer/keyboard-scope";
 import { RenderProfile } from "@/utils/render-profiler";
@@ -2016,6 +2018,20 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       [onChangeText],
     );
 
+    const handleSendMessageRef = useRef(handleSendMessage);
+    handleSendMessageRef.current = handleSendMessage;
+    const replaceTextRef = useRef(replaceText);
+    replaceTextRef.current = replaceText;
+
+    useEffect(() => {
+      if (typeof window === "undefined") return;
+      return registerKronosComposerListeners({
+        getValue: () => valueRef.current,
+        replaceText: (next) => replaceTextRef.current(next),
+        handleSendMessage: () => handleSendMessageRef.current(),
+      });
+    }, []);
+
     const handleEnhancePrompt = useCallback(() => {
       const current = valueRef.current;
       if (!current.trim()) return;
@@ -2336,6 +2352,16 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
               >
                 <ThemedAtSign size={toolbarGlyph.size} />
               </PressHighlight>
+              <NoteActionChip
+                style={attachButtonStyle}
+                size={toolbarGlyph.size}
+                onInsertText={(text) => {
+                  const current = valueRef.current;
+                  const next = current ? `${current}\n\n${text}` : text;
+                  valueRef.current = next;
+                  onChangeText(next);
+                }}
+              />
               {leftContent}
             </View>
 

@@ -20,6 +20,8 @@ import { WorktreeSetupCalloutSource } from "@/components/worktree-setup-callout-
 import { DownloadToast } from "@/components/download-toast";
 import { QuittingOverlay } from "@/components/quitting-overlay";
 import { KeyboardShortcutsDialog } from "@/components/keyboard-shortcuts-dialog";
+import { QuickComposerModal } from "@/features/quick-composer";
+import { NotesDrawer } from "@/features/notes";
 import { ChangelogHost } from "@/changelog";
 import { OnboardingHost } from "@/onboarding";
 import { AppDiagnosticHost } from "@/components/app-diagnostic-host";
@@ -270,6 +272,8 @@ export function AppContainer({
         <WorkspaceArchiveUndoShortcutHost />
         <CommandCenter />
         <GlobalCommandPaletteHost />
+        <QuickComposerModal />
+        <NotesDrawer />
         <AddProjectFlowHost />
         <HostChooserModal />
         <HostConfirmationSheet />

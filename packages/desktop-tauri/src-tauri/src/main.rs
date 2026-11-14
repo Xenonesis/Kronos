@@ -477,6 +477,58 @@ async fn get_repo_map(cwd: Option<String>) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn list_notes(query: Option<String>) -> Vec<crate::kernel::notes_store::NoteRecord> {
+    let store = crate::kernel::notes_store::get_notes_store();
+    match query {
+        Some(q) if !q.trim().is_empty() => store.search_notes(q.trim()),
+        _ => store.list_notes(),
+    }
+}
+
+#[tauri::command]
+fn save_note(note: crate::kernel::notes_store::NoteRecord) -> Result<crate::kernel::notes_store::NoteRecord, String> {
+    let store = crate::kernel::notes_store::get_notes_store();
+    store.save_note(note)
+}
+
+#[tauri::command]
+fn delete_note(id: String) -> Result<bool, String> {
+    let store = crate::kernel::notes_store::get_notes_store();
+    store.delete_note(&id)
+}
+
+#[tauri::command]
+async fn ci_check_status(workspace_path: Option<String>) -> Result<crate::kernel::ci_repair::CiStatus, String> {
+    let path_str = workspace_path.unwrap_or_else(|| ".".to_string());
+    tokio::task::spawn_blocking(move || {
+        crate::kernel::ci_repair::check_ci_status(std::path::Path::new(&path_str))
+    })
+    .await
+    .map_err(|e| format!("CI check task failed: {e}"))?
+}
+
+#[tauri::command]
+async fn ci_get_failure_log(run_id: u64, workspace_path: Option<String>) -> Result<String, String> {
+    let path_str = workspace_path.unwrap_or_else(|| ".".to_string());
+    tokio::task::spawn_blocking(move || {
+        crate::kernel::ci_repair::get_ci_failure_log(std::path::Path::new(&path_str), run_id)
+    })
+    .await
+    .map_err(|e| format!("CI log task failed: {e}"))?
+}
+
+#[tauri::command]
+async fn open_quick_composer(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+        let _ = win.emit("kronos://open-quick-composer", serde_json::json!({}));
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn create_turn_checkpoint(repo_path: String, turn_id: String) -> Result<String, String> {
     crate::kernel::git::GitEngine::create_checkpoint(std::path::Path::new(&repo_path), &turn_id).await
 }
@@ -3065,6 +3117,47 @@ try {{
       resolveUrl: (url) => window.__TAURI_INTERNALS__.invoke('browser_proxy_url', {{ url }}),
       importCookies: (host, cookies) => window.__TAURI_INTERNALS__.invoke('browser_proxy_cookies', {{ host, cookies }})
     }},
+    notes: {{
+      list: async function(query) {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          return await window.__TAURI_INTERNALS__.invoke('list_notes', {{ query: query || null }});
+        }}
+        return [];
+      }},
+      save: async function(note) {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          return await window.__TAURI_INTERNALS__.invoke('save_note', {{ note: note }});
+        }}
+        throw new Error('Tauri IPC unavailable');
+      }},
+      delete: async function(id) {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          return await window.__TAURI_INTERNALS__.invoke('delete_note', {{ id: id }});
+        }}
+        return false;
+      }}
+    }},
+    ci: {{
+      checkStatus: async function(workspacePath) {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          return await window.__TAURI_INTERNALS__.invoke('ci_check_status', {{ workspacePath: workspacePath || null }});
+        }}
+        return {{ hasFailure: false }};
+      }},
+      getFailureLog: async function(runId, workspacePath) {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          return await window.__TAURI_INTERNALS__.invoke('ci_get_failure_log', {{ runId: runId, workspacePath: workspacePath || null }});
+        }}
+        return '';
+      }}
+    }},
+    quickComposer: {{
+      open: async function() {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          return await window.__TAURI_INTERNALS__.invoke('open_quick_composer');
+        }}
+      }}
+    }},
     invoke: async function(command, args) {{
       if (command === 'start_desktop_daemon') {{
         try {{
@@ -3265,7 +3358,7 @@ try {{
         }}
         return null;
       }}
-      if (command === 'mark_first_paint' || command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast' || command === 'crdt_doc_action' || command === 'get_ioring_status' || command === 'transcribe_audio_chunk' || command === 'get_speech_engine_status' || command === 'get_shm_status' || command === 'push_shm_chunk' || command === 'web_search_query' || command === 'web_scrape_url' || command === 'get_repo_map' || command === 'synthesize_terminal_command') {{
+      if (command === 'mark_first_paint' || command === 'watch_directory' || command === 'unwatch_directory' || command === 'analyze_ast' || command === 'crdt_doc_action' || command === 'get_ioring_status' || command === 'transcribe_audio_chunk' || command === 'get_speech_engine_status' || command === 'get_shm_status' || command === 'push_shm_chunk' || command === 'web_search_query' || command === 'web_scrape_url' || command === 'get_repo_map' || command === 'synthesize_terminal_command' || command === 'list_notes' || command === 'save_note' || command === 'delete_note' || command === 'ci_check_status' || command === 'ci_get_failure_log' || command === 'open_quick_composer') {{
         try {{
           if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
             return await window.__TAURI_INTERNALS__.invoke(command, args || {{}});
@@ -3290,6 +3383,14 @@ try {{
           throw e;
         }}
         return null;
+      }}
+      if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+        try {{
+          return await window.__TAURI_INTERNALS__.invoke(command, args || {{}});
+        }} catch (e) {{
+          console.error('[TauriBridge] Dynamic invoke failed for command:', command, e);
+          throw e;
+        }}
       }}
       return null;
     }},
@@ -3384,7 +3485,7 @@ try {{
       }}
     }}
   }} catch (e) {{}}
-  // Setup deep-link listener from Tauri runtime
+  // Setup deep-link and native event listeners from Tauri runtime
   try {{
     if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.listen) {{
       window.__TAURI_INTERNALS__.listen('single-instance-deep-link', (event) => {{
@@ -3393,6 +3494,11 @@ try {{
         if (deepLink) {{
           window.dispatchEvent(new CustomEvent('paseo:deep-link', {{ detail: deepLink }}));
         }}
+      }});
+      ['kronos://open-quick-composer', 'kronos:open-notes', 'kronos://open-notes', 'paseo:new-chat', 'open-agent', 'navigate'].forEach((evt) => {{
+        window.__TAURI_INTERNALS__.listen(evt, (event) => {{
+          window.dispatchEvent(new CustomEvent(evt, {{ detail: event.payload }}));
+        }});
       }});
     }}
   }} catch (e) {{}}
@@ -3620,7 +3726,13 @@ try {{
             browser_focus_tab,
             browser_clear_profile,
             search_agent_timeline_sqlite,
-            get_recent_agent_timeline_sqlite
+            get_recent_agent_timeline_sqlite,
+            list_notes,
+            save_note,
+            delete_note,
+            ci_check_status,
+            ci_get_failure_log,
+            open_quick_composer
         ])
         .setup(move |app| {
             crate::browser_automation::init_app_handle(app.handle().clone());
@@ -3785,6 +3897,25 @@ try {{
                     }
                 }) {
                     eprintln!("[shortcut] Failed to register global shortcut '{shortcut}': {err}");
+                }
+            }
+
+            // Register global shortcut for Quick Composer (Ctrl+Shift+Space)
+            let composer_win = win.clone();
+            for shortcut in ["CommandOrControl+Shift+Space", "Ctrl+Shift+Space"] {
+                let composer_win = composer_win.clone();
+                if let Err(err) = app.global_shortcut().on_shortcut(shortcut, move |app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        let target_win = composer_win.clone().or_else(|| app.get_webview_window("main"));
+                        if let Some(w) = target_win {
+                            let _ = w.show();
+                            let _ = w.unminimize();
+                            let _ = w.set_focus();
+                            let _ = w.emit("kronos://open-quick-composer", serde_json::json!({}));
+                        }
+                    }
+                }) {
+                    eprintln!("[shortcut] Failed to register Quick Composer shortcut '{shortcut}': {err}");
                 }
             }
             let handle = app.handle().clone();

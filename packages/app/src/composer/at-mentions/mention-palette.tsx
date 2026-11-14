@@ -12,6 +12,7 @@ import {
   FileText,
   X,
   File,
+  StickyNote,
 } from "lucide-react-native";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import {
@@ -42,6 +43,7 @@ const ThemedSearch = withUnistyles(Search);
 const ThemedFileText = withUnistyles(FileText);
 const ThemedX = withUnistyles(X);
 const ThemedFile = withUnistyles(File);
+const ThemedStickyNote = withUnistyles(StickyNote);
 
 interface MentionRowProps {
   item: MentionItem;
@@ -95,6 +97,8 @@ const MentionRow = memo(function MentionRow({ item, isSelected, onSelect }: Ment
         return <ThemedGitBranch size={size} />;
       case "terminal":
         return <ThemedTerminal size={size} />;
+      case "note":
+        return <ThemedStickyNote size={size} />;
       default:
         return <ThemedFile size={size} />;
     }

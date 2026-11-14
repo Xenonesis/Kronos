@@ -15,10 +15,32 @@ impl ProcessTree {
     /// Capture group ownership in the same synchronous operation as spawn, before
     /// any persistence or other fallible startup work can run.
     pub fn spawn(command: &mut Command) -> Result<(Self, Child), String> {
+        if let Some(cwd) = command.as_std().get_current_dir() {
+            if !cwd.is_dir() {
+                let _ = std::fs::create_dir_all(cwd);
+                if !cwd.is_dir() {
+                    let fallback = dirs::home_dir()
+                        .filter(|d| d.is_dir())
+                        .or_else(|| std::env::current_dir().ok().filter(|d| d.is_dir()))
+                        .unwrap_or_else(std::env::temp_dir);
+                    eprintln!(
+                        "[turn_process] Command working directory '{}' is invalid, falling back to '{}'",
+                        cwd.display(),
+                        fallback.display()
+                    );
+                    command.current_dir(fallback);
+                }
+            }
+        }
         let tree = Self::prepare(command)?;
-        let child = command
-            .spawn()
-            .map_err(|error| format!("Failed to spawn provider: {error}"))?;
+        let child = command.spawn().map_err(|error| {
+            let cwd_desc = command
+                .as_std()
+                .get_current_dir()
+                .map(|p| format!(" (cwd: '{}')", p.display()))
+                .unwrap_or_default();
+            format!("Failed to spawn provider{cwd_desc}: {error}")
+        })?;
         #[cfg(unix)]
         let mut tree = tree;
         #[cfg(unix)]

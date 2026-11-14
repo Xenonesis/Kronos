@@ -31,6 +31,8 @@ pub mod tunnel;
 pub mod workspace_tools;
 pub mod sqlite_timeline;
 pub mod lsp;
+pub mod notes_store;
+pub mod ci_repair;
 
 #[cfg(test)]
 mod protocol_test;

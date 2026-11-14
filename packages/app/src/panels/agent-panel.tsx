@@ -64,6 +64,7 @@ const EMPTY_TODO_LIST: readonly TodoEntry[] = [];
 import { TurnCheckpointModal } from "@/timeline/turn-checkpoint-modal";
 import { GlobalSearchReplaceModal } from "@/panels/global-search-replace-modal";
 import { ArtifactsCanvasModal, type ArtifactItem } from "@/components/artifacts-canvas-modal";
+import { ArtifactInspectorModal } from "@/features/artifacts";
 import { invokeTauri } from "@/utils/tauri-invoke";
 import { openPreferredWorkspaceTarget } from "@/workspace-tabs/open-beside";
 import { useDraftStore } from "@/stores/draft-store";
@@ -2233,6 +2234,7 @@ function ActiveAgentWorkspaceModals(props: {
           onClose={props.closeArtifactsModal}
         />
       )}
+      <ArtifactInspectorModal />
       {props.isCheckpointModalVisible && (
         <TurnCheckpointModal
           visible={props.isCheckpointModalVisible}

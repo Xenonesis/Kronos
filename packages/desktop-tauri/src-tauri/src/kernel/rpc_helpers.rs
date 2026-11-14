@@ -2302,10 +2302,29 @@ fn save_ws_meta_map(map: &HashMap<String, Value>) -> Result<(), String> {
 pub fn handle_workspace_meta_mutation(kind: &str, msg: &Value, request_id: &str) -> Value {
     let ws_id = msg_str(msg, "workspaceId");
     let store = get_config_store();
+    let now = crate::agent::types::now_iso();
     let Some(mut ws) = store.get_workspace(ws_id) else {
+        if kind == "archive" {
+            let mut meta_map = load_ws_meta_map();
+            let entry = meta_map.entry(ws_id.to_string()).or_insert_with(|| json!({}));
+            if !entry.is_object() {
+                *entry = json!({});
+            }
+            entry["archivedAt"] = json!(now);
+            let _ = save_ws_meta_map(&meta_map);
+            return json!({
+                "type": "archive_workspace_response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "workspaceId": ws_id,
+                    "archivedAt": now,
+                    "error": null
+                }
+            });
+        }
         let err = format!("Workspace {ws_id} not found");
         return match kind {
-            "archive" => json!({"type":"archive_workspace_response","requestId":request_id,"payload":{"requestId":request_id,"workspaceId":ws_id,"archivedAt":null,"error":err}}),
             "title" => json!({"type":"workspace.title.set.response","requestId":request_id,"payload":{"requestId":request_id,"workspaceId":ws_id,"accepted":false,"title":null,"error":err}}),
             "pin" => json!({"type":"workspace.pin.set.response","requestId":request_id,"payload":{"requestId":request_id,"workspaceId":ws_id,"accepted":false,"pinnedAt":null,"error":err}}),
             "clear_attention" => json!({"type":"workspace.clear_attention.response","requestId":request_id,"payload":{"requestId":request_id,"workspaceId":ws_id,"cleared":false}}),

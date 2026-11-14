@@ -1160,6 +1160,80 @@ async fn execute_local_http_provider_turn(
     Ok(output)
 }
 
+/// Resolves a directory path that is guaranteed to exist and be safe for process execution.
+///
+/// Resolution strategy:
+/// 1. If `requested` is not empty/placeholder and is an existing directory, return it.
+/// 2. If `requested` is not a directory, attempt `create_dir_all`. If now a directory, return it.
+/// 3. If that fails and `workspace_id` is provided, look up the workspace in `config_store`.
+///    If its path exists or can be created with `create_dir_all`, return it.
+/// 4. If that fails, look up the parent project in `config_store`. If its path exists or can be created, return it.
+/// 5. Fall back to `dirs::home_dir()` if it is a directory.
+/// 6. Fall back to `std::env::current_dir()` if it is a directory.
+/// 7. Fall back to `std::env::temp_dir()`.
+pub fn resolve_safe_cwd(requested: &Path, workspace_id: Option<&str>) -> PathBuf {
+    let is_placeholder = requested.as_os_str().is_empty() || requested == Path::new(".");
+
+    // 1 & 2. Try the requested path if not a placeholder
+    if !is_placeholder {
+        if requested.is_dir() {
+            return requested.to_path_buf();
+        }
+        if std::fs::create_dir_all(requested).is_ok() && requested.is_dir() {
+            return requested.to_path_buf();
+        }
+    }
+
+    // 3 & 4. Try workspace and parent project lookup
+    if let Some(ws_id) = workspace_id {
+        let store = crate::kernel::config_store::get_config_store();
+        if let Some(ws) = store.get_workspace(ws_id) {
+            let ws_path = PathBuf::from(&ws.path);
+            if !ws.path.trim().is_empty() {
+                if ws_path.is_dir() {
+                    return ws_path;
+                }
+                if std::fs::create_dir_all(&ws_path).is_ok() && ws_path.is_dir() {
+                    return ws_path;
+                }
+            }
+
+            if let Some(proj) = store.get_project(&ws.project_id) {
+                let proj_path = PathBuf::from(&proj.path);
+                if !proj.path.trim().is_empty() {
+                    if proj_path.is_dir() {
+                        return proj_path;
+                    }
+                    if std::fs::create_dir_all(&proj_path).is_ok() && proj_path.is_dir() {
+                        return proj_path;
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Fall back to dirs::home_dir()
+    if let Some(home) = dirs::home_dir() {
+        if home.is_dir() {
+            return home;
+        }
+    }
+
+    // 6. Fall back to std::env::current_dir()
+    if let Ok(current) = std::env::current_dir() {
+        if current.is_dir() {
+            return current;
+        }
+    }
+
+    // 7. Fall back to std::env::temp_dir()
+    let temp = std::env::temp_dir();
+    if !temp.is_dir() {
+        let _ = std::fs::create_dir_all(&temp);
+    }
+    temp
+}
+
 async fn execute_provider_turn(
     turn: &mut ReservedTurn,
     command: Option<Command>,
@@ -1177,17 +1251,27 @@ async fn execute_provider_turn(
         .config
         .as_ref()
         .and_then(|config| config["thinkingOptionId"].as_str());
-    let cwd = if agent.cwd.is_empty() || agent.cwd == "." {
-        dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+    let raw_cwd = if agent.cwd.is_empty() || agent.cwd == "." {
+        PathBuf::from(".")
     } else {
         PathBuf::from(&agent.cwd)
     };
+    let safe_cwd = resolve_safe_cwd(&raw_cwd, agent.workspace_id.as_deref());
+    let safe_cwd_str = safe_cwd.to_string_lossy().to_string();
+    if safe_cwd_str != agent.cwd {
+        let _ = turn.manager().storage().update_agent_record(&agent.id, |rec| {
+            rec.cwd = safe_cwd_str.clone();
+        });
+        turn.agent.cwd = safe_cwd_str;
+    }
 
     // Enforce configured token / USD cost budget before launching provider turn
     crate::agent::guardrails::check_agent_budget(&agent.id)?;
 
     // Automatic shadow git checkpoint before turn execution
-    let _ = crate::kernel::git::GitEngine::create_checkpoint(&cwd, &turn.token).await;
+    if safe_cwd.is_dir() {
+        let _ = crate::kernel::git::GitEngine::create_checkpoint(&safe_cwd, &turn.token).await;
+    }
 
     // Automatic Project Rules and High-Altitude Repo Map auto-ingestion
     let is_initial_turn = turn
@@ -1227,23 +1311,31 @@ async fn execute_provider_turn(
             context_prefix.push_str("\n\n");
         }
     }
-    if let Some(rules) = crate::agent::rules::load_workspace_rules(&cwd) {
-        context_prefix.push_str(&rules);
-        context_prefix.push_str("\n\n");
+    if safe_cwd.is_dir() {
+        if let Some(rules) = crate::agent::rules::load_workspace_rules(&safe_cwd) {
+            context_prefix.push_str(&rules);
+            context_prefix.push_str("\n\n");
+        }
     }
-    let playbooks_path = cwd.join(".kronos").join("playbooks.md");
-    if playbooks_path.is_file() {
-        if let Ok(playbooks) = std::fs::read_to_string(&playbooks_path) {
-            let trimmed = playbooks.trim();
-            if !trimmed.is_empty() {
-                let capped: String = trimmed.chars().take(4000).collect();
-                context_prefix.push_str("[WORKSPACE PLAYBOOKS & LESSONS]\n");
-                context_prefix.push_str(&capped);
-                context_prefix.push_str("\n\n");
+    if safe_cwd.is_dir() {
+        let playbooks_path = safe_cwd.join(".kronos").join("playbooks.md");
+        if playbooks_path.is_file() {
+            if let Ok(playbooks) = std::fs::read_to_string(&playbooks_path) {
+                let trimmed = playbooks.trim();
+                if !trimmed.is_empty() {
+                    let capped: String = trimmed.chars().take(4000).collect();
+                    context_prefix.push_str("[WORKSPACE PLAYBOOKS & LESSONS]\n");
+                    context_prefix.push_str(&capped);
+                    context_prefix.push_str("\n\n");
+                }
             }
         }
     }
-    let loaded_memories = crate::agent::memories::load_workspace_memories(&cwd);
+    let loaded_memories = if safe_cwd.is_dir() {
+        crate::agent::memories::load_workspace_memories(&safe_cwd)
+    } else {
+        Vec::new()
+    };
     if let Some(memories_block) =
         crate::agent::memories::format_memories_for_system_prompt(&loaded_memories)
     {
@@ -1280,8 +1372,8 @@ async fn execute_provider_turn(
             names.join(", ")
         ));
     }
-    if is_initial_turn {
-        if let Some(map) = crate::kernel::repo_map::generate_repo_map(&cwd) {
+    if is_initial_turn && safe_cwd.is_dir() {
+        if let Some(map) = crate::kernel::repo_map::generate_repo_map(&safe_cwd) {
             context_prefix.push_str(&map);
             context_prefix.push_str("\n\n");
         }
@@ -1310,7 +1402,7 @@ async fn execute_provider_turn(
         return execute_acp_provider_turn(
             turn,
             provider,
-            &cwd,
+            &safe_cwd,
             &prompt,
             &daemon_cfg,
             &enabled_mcp_servers,
@@ -1373,7 +1465,7 @@ async fn execute_provider_turn(
         provider,
         model,
         thinking,
-        &cwd,
+        &safe_cwd,
         &enriched_prompt,
         handle.as_deref(),
         Some(&session_dir),
@@ -1400,7 +1492,7 @@ async fn execute_provider_turn(
             command
         }
     };
-    cmd.current_dir(cwd)
+    cmd.current_dir(&safe_cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1605,9 +1697,18 @@ async fn execute_acp_provider_turn(
         ));
     };
 
+    let safe_cwd = resolve_safe_cwd(cwd, turn.agent.workspace_id.as_deref());
+    let safe_cwd_str = safe_cwd.to_string_lossy().to_string();
+    if safe_cwd_str != turn.agent.cwd {
+        let _ = turn.manager().storage().update_agent_record(&turn.agent.id, |rec| {
+            rec.cwd = safe_cwd_str.clone();
+        });
+        turn.agent.cwd = safe_cwd_str;
+    }
+
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     let mut client =
-        crate::agent::providers::acp::AcpAgentClient::spawn(&bin, &arg_refs, cwd).await?;
+        crate::agent::providers::acp::AcpAgentClient::spawn(&bin, &arg_refs, &safe_cwd).await?;
     let mut output = ProviderOutput::default();
     output.identity = turn.token.clone();
 
@@ -1656,7 +1757,7 @@ async fn execute_acp_provider_turn(
             .send_request(
                 "sess-1",
                 "session/new",
-                Some(json!({ "cwd": cwd.to_string_lossy(), "mcpServers": acp_mcp_servers })),
+                Some(json!({ "cwd": safe_cwd.to_string_lossy(), "mcpServers": acp_mcp_servers })),
             )
             .await?;
         while let Ok(Ok(Some(val))) =

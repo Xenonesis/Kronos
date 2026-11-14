@@ -12,9 +12,16 @@ pub struct OmpAgentClient {
 
 impl OmpAgentClient {
     pub async fn spawn(cwd: &Path) -> Result<Self, String> {
+        let safe_cwd = if cwd.is_dir() {
+            cwd.to_path_buf()
+        } else {
+            dirs::home_dir()
+                .filter(|d| d.is_dir())
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")))
+        };
         let mut cmd = Command::new("omp");
         cmd.arg("--stdio")
-            .current_dir(cwd)
+            .current_dir(&safe_cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

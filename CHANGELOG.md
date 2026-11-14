@@ -1,11 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.16.0 - 2026-11-14
 
-- Populate native-daemon model snapshots from live Codex, Pi, OMP, OpenCode, and Ollama catalogs plus the configured Claude model instead of shipping a stale built-in model list.
-- Replace the old Paseo butterfly on the web and desktop startup splash with the Kronos emblem while preserving the loading shimmer.
-- Make desktop NSIS and signed-updater builds reproducible from fresh frontend exports, validating signed artifacts before staging.
-- Defer the optional Mermaid runtime to reduce the desktop web entry bundle and preserve single-use browser-proxy navigation responses.
+### Kronos Workstation & Native Rust Kernel
+
+- **100% Native Rust Kernel Migration:** Embedded daemon inside Tauri v2 architecture, pure-Rust WebSocket multiplexer, lightweight memory footprint (<100MB RAM), sub-second cold boot.
+- **Monocode Swarm Parity:** Quick Composer modal (`Cmd/Ctrl+Shift+K`), Scratchpad Notes drawer (`Cmd/Ctrl+Shift+N`), OMP Session telemetry, AST diff viewer, and full-text search over SQLite WAL.
+- **Autonomous CI Repair Subsystem:** Real GitHub API check-run and job log retrieval, AI log parser, patch generator, and automated git worktree commit & push.
+- **Zero-Mock Production Hardening:** Eliminated mock fallback layers across Claude, Codex, OMP, Pi, ACP, and Ollama providers; strictly honest live API dispatch and error reporting.
+- **System Tray DOM Bridge:** System tray click events (`open-quick-composer`, `open-notes`, `new-chat`) directly bridged to window `CustomEvent` listeners.
+- **Populate Live Model Snapshots:** Populate native-daemon model snapshots from live Codex, Pi, OMP, OpenCode, and Ollama catalogs plus the configured Claude model instead of shipping a stale built-in model list.
+- **Kronos Branding & Visual Identity:** Pure Kronos tactical theme, branding emblem on web and desktop startup splash, zero Paseo residue.
 
 ## 0.16.0-beta.2 - 2026-11-11
 

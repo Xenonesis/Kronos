@@ -40,12 +40,19 @@ pub struct ClaudeCliClient {
 
 impl ClaudeCliClient {
     pub async fn spawn(cwd: &Path, model: Option<&str>) -> Result<Self, String> {
+        let safe_cwd = if cwd.is_dir() {
+            cwd.to_path_buf()
+        } else {
+            dirs::home_dir()
+                .filter(|d| d.is_dir())
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")))
+        };
         let mut cmd = Command::new("claude");
         cmd.arg("--output-format")
             .arg("stream-json")
             .arg("--input-format")
             .arg("stream-json")
-            .current_dir(cwd)
+            .current_dir(&safe_cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

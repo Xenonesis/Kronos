@@ -33,9 +33,16 @@ pub struct AcpAgentClient {
 impl AcpAgentClient {
     /// Spawns an ACP-compatible agent command (e.g. cursor, copilot, or generic bridge).
     pub async fn spawn(command: &str, args: &[&str], cwd: &Path) -> Result<Self, String> {
+        let safe_cwd = if cwd.is_dir() {
+            cwd.to_path_buf()
+        } else {
+            dirs::home_dir()
+                .filter(|d| d.is_dir())
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")))
+        };
         let mut cmd = Command::new(command);
         cmd.args(args)
-            .current_dir(cwd)
+            .current_dir(&safe_cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
