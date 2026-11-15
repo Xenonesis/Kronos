@@ -541,6 +541,19 @@ fn provider_arguments(
     if let Some(model) = model.filter(|model| {
         !model.is_empty() && matches!(provider, "omp" | "pi" | "opencode" | "codex" | "claude")
     }) {
+        let model_arg = if provider == "opencode" {
+            if let Some(t) = thinking.filter(|t| !t.is_empty() && *t != "default") {
+                if model.contains('#') {
+                    model.to_string()
+                } else {
+                    format!("{model}#{t}")
+                }
+            } else {
+                model.to_string()
+            }
+        } else {
+            model.to_string()
+        };
         args.extend([
             if provider == "opencode" || provider == "codex" {
                 "-m"
@@ -548,14 +561,14 @@ fn provider_arguments(
                 "--model"
             }
             .into(),
-            model.into(),
+            model_arg,
         ]);
     }
     if let Some(thinking) = thinking.filter(|thinking| !thinking.is_empty()) {
         match provider {
             "omp" | "pi" => args.extend(["--thinking".into(), thinking.into()]),
-            "opencode" if matches!(thinking, "max" | "minimal" | "high") => {
-                args.extend(["--variant".into(), thinking.into()])
+            "opencode" => {
+                // OpenCode variant is passed as `provider/model#variant` in the `-m` flag above
             }
             "codex" => args.extend([
                 "-c".into(),
@@ -740,7 +753,6 @@ async fn run_reserved_turn(mut turn: ReservedTurn, command: Option<Command>) {
     let provider = turn.agent.provider.clone();
     let manager = turn.manager().clone();
     broadcast_agent_status(&manager, &agent_id);
-    broadcast_timeline_replacement(&agent_id);
     let turn_id = turn.token.clone();
     let _ = get_provider_push_tx().send(
         json!({
@@ -759,11 +771,10 @@ async fn run_reserved_turn(mut turn: ReservedTurn, command: Option<Command>) {
                 .or_else(|| output.error.clone());
             if output.has_assistant_message() {
                 if let Some(ref e) = err {
-                    if e.contains("Cancelled a request for input")
-                        || e.contains("this run cannot answer")
-                    {
-                        err = None;
-                    }
+                    eprintln!(
+                        "[Runner] Provider {provider} reported post-turn condition ({e}) but assistant message was generated; suppressing error notice."
+                    );
+                    err = None;
                 }
             }
             (err, output.cleanup_confirmed, output.usage.clone())
@@ -1234,6 +1245,86 @@ pub fn resolve_safe_cwd(requested: &Path, workspace_id: Option<&str>) -> PathBuf
     temp
 }
 
+pub fn sanitize_error_notice_message(msg: &str) -> String {
+    let trimmed = msg.trim();
+    let stripped = trimmed.trim_end_matches(|c| c == ':' || c == ' ');
+    let lower = stripped.to_lowercase();
+
+    if lower.contains("exited with") {
+        let parts: Vec<&str> = stripped.split_whitespace().collect();
+        let provider = parts.first().copied().unwrap_or("Provider");
+        let code = parts.iter().rev().find(|p| p.chars().all(|c| c.is_ascii_digit()));
+        if let Some(code) = code {
+            return format!("{provider} process stopped unexpectedly (exit code {code}). Please check provider settings or restart the conversation.");
+        }
+        return format!("{provider} process stopped unexpectedly. Please check provider settings or restart the conversation.");
+    }
+
+    if lower.contains("rate limit")
+        || lower.contains("429")
+        || lower.contains("too many requests")
+    {
+        return "AI model provider encountered a rate limit. Please wait a moment before trying again.".to_string();
+    }
+    if lower.contains("quota")
+        || lower.contains("credits")
+        || lower.contains("insufficient_quota")
+    {
+        return "API credits or quota have been exhausted. Please check your provider account.".to_string();
+    }
+
+    stripped.to_string()
+}
+
+fn format_user_friendly_provider_error(
+    provider: &str,
+    status: std::process::ExitStatus,
+    stderr: &str,
+) -> String {
+    let stderr_clean = stderr.trim();
+    let lower = stderr_clean.to_lowercase();
+
+    if lower.contains("rate limit")
+        || lower.contains("429")
+        || lower.contains("too many requests")
+    {
+        return format!("{provider} encountered a rate limit from the AI model provider. Please wait a moment before trying again.");
+    }
+    if lower.contains("quota")
+        || lower.contains("credits")
+        || lower.contains("insufficient_quota")
+        || lower.contains("credit balance")
+    {
+        return format!("{provider} reported that your API credits or quota have been exhausted. Please check your provider account.");
+    }
+    if lower.contains("unauthorized")
+        || lower.contains("401")
+        || lower.contains("invalid api key")
+        || lower.contains("authentication")
+        || lower.contains("auth failed")
+    {
+        return format!("{provider} authentication failed. Please verify your API key or provider configuration in Settings.");
+    }
+    if lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("connection refused")
+    {
+        return format!("{provider} connection timed out. Please check your internet connection or model availability.");
+    }
+    if lower.contains("context length")
+        || lower.contains("maximum context")
+        || lower.contains("token limit")
+    {
+        return format!("{provider} exceeded the model's context window. Try starting a new conversation or summarizing previous messages.");
+    }
+
+    if !stderr_clean.is_empty() {
+        format!("{provider} encountered an error: {stderr_clean}")
+    } else {
+        format!("{provider} process stopped unexpectedly ({status}). Please check provider settings or restart the conversation.")
+    }
+}
+
 async fn execute_provider_turn(
     turn: &mut ReservedTurn,
     command: Option<Command>,
@@ -1268,9 +1359,15 @@ async fn execute_provider_turn(
     // Enforce configured token / USD cost budget before launching provider turn
     crate::agent::guardrails::check_agent_budget(&agent.id)?;
 
-    // Automatic shadow git checkpoint before turn execution
+    // Automatic shadow git checkpoint before turn execution with tight timeout to never stall message dispatch
     if safe_cwd.is_dir() {
-        let _ = crate::kernel::git::GitEngine::create_checkpoint(&safe_cwd, &turn.token).await;
+        let cwd_clone = safe_cwd.clone();
+        let token_clone = turn.token.clone();
+        let _ = tokio::time::timeout(
+            Duration::from_millis(600),
+            crate::kernel::git::GitEngine::create_checkpoint(&cwd_clone, &token_clone),
+        )
+        .await;
     }
 
     // Automatic Project Rules and High-Altitude Repo Map auto-ingestion
@@ -1373,7 +1470,10 @@ async fn execute_provider_turn(
         ));
     }
     if is_initial_turn && safe_cwd.is_dir() {
-        if let Some(map) = crate::kernel::repo_map::generate_repo_map(&safe_cwd) {
+        let cwd_for_map = safe_cwd.clone();
+        if let Ok(Some(map)) = tokio::task::spawn_blocking(move || {
+            crate::kernel::repo_map::generate_repo_map(&cwd_for_map)
+        }).await {
             context_prefix.push_str(&map);
             context_prefix.push_str("\n\n");
         }
@@ -1521,7 +1621,7 @@ async fn execute_provider_turn(
     let mut reader = BufReader::new(stdout).lines();
     let deadline = tokio::time::sleep(Duration::from_secs(300));
     tokio::pin!(deadline);
-    let mut session_poll = tokio::time::interval(Duration::from_millis(100));
+    let mut session_poll = tokio::time::interval(Duration::from_millis(500));
     let mut exited = None;
     let mut stdout_closed = false;
     loop {
@@ -1596,6 +1696,8 @@ async fn execute_provider_turn(
         }
     }
     let stderr = finish_stderr(stderr_task).await;
+    let stderr_text = String::from_utf8_lossy(&stderr);
+    let stderr_trimmed = stderr_text.trim();
     if let Some(status) = exited {
         if status.success() {
             if output.has_assistant_message() {
@@ -1607,11 +1709,19 @@ async fn execute_provider_turn(
                     }
                 }
             }
-        } else if output.error.is_none() && !turn.is_cancelled() {
-            output.error = Some(format!(
-                "{provider} exited with {status}: {}",
-                String::from_utf8_lossy(&stderr).trim()
-            ));
+        } else if !turn.is_cancelled() {
+            if output.has_assistant_message() {
+                eprintln!(
+                    "[Runner] {provider} exited with {status} but assistant message was generated. Treating turn as successful."
+                );
+                output.error = None;
+            } else if output.error.is_none() {
+                output.error = Some(format_user_friendly_provider_error(
+                    provider,
+                    status,
+                    stderr_trimmed,
+                ));
+            }
         }
     }
     if handle.is_none() && matches!(provider, "omp" | "pi") {

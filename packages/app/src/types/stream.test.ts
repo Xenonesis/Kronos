@@ -2406,3 +2406,32 @@ it("retains agent-message provenance through live delivery and repeated history"
   expect(replay).toHaveLength(1);
   expect(replay[0]).toMatchObject({ payload: { data: { agentMessage } } });
 });
+
+it("sanitizes cryptic provider exit codes and trailing colons into user-friendly messages", () => {
+  const event1 = {
+    type: "timeline",
+    provider: "opencode",
+    item: {
+      type: "error",
+      message: "opencode exited with exit code: 1: ",
+    },
+  } satisfies AgentStreamEventPayload;
+  const state1 = reduceStreamUpdate([], event1, new Date(1));
+  expect(state1).toHaveLength(1);
+  expect((state1[0] as { message?: string }).message).toBe(
+    "opencode process stopped unexpectedly (exit code 1). Please check provider settings or restart the conversation.",
+  );
+
+  const event2 = {
+    type: "timeline",
+    provider: "opencode",
+    item: {
+      type: "error",
+      message: "opencode exited with code 1:",
+    },
+  } satisfies AgentStreamEventPayload;
+  const state2 = reduceStreamUpdate([], event2, new Date(2));
+  expect((state2[0] as { message?: string }).message).toBe(
+    "opencode process stopped unexpectedly (exit code 1). Please check provider settings or restart the conversation.",
+  );
+});

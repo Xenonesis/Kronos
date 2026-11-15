@@ -1852,6 +1852,39 @@ struct CloseTransportInput {
     session_id: String,
 }
 
+fn flush_local_daemon_batch(
+    app_handle: &tauri::AppHandle,
+    session_id: &str,
+    batch: &mut Vec<String>,
+) {
+    if batch.is_empty() {
+        return;
+    }
+    use tauri::Emitter;
+    if batch.len() == 1 {
+        let text = batch.remove(0);
+        let _ = app_handle.emit(
+            "local-daemon-transport-event",
+            serde_json::json!({
+                "sessionId": session_id,
+                "kind": "message",
+                "text": &text,
+                "messages": [text]
+            }),
+        );
+    } else {
+        let messages = std::mem::take(batch);
+        let _ = app_handle.emit(
+            "local-daemon-transport-event",
+            serde_json::json!({
+                "sessionId": session_id,
+                "kind": "message",
+                "messages": messages
+            }),
+        );
+    }
+}
+
 #[tauri::command]
 async fn open_local_daemon_transport(
     app: tauri::AppHandle,
@@ -1901,58 +1934,100 @@ async fn open_local_daemon_transport(
         sessions.remove(&sid_out);
     });
 
-    // Incoming pump
+    // Incoming pump with token batching & cooperative yielding to prevent Windows message loop starvation
     tokio::spawn(async move {
-        while let Some(msg_res) = ws_read.next().await {
-            match msg_res {
-                Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
-                    let _ = app_handle.emit(
-                        "local-daemon-transport-event",
-                        serde_json::json!({
-                            "sessionId": sid_in,
-                            "kind": "message",
-                            "text": text
-                        }),
-                    );
+        let mut batch: Vec<String> = Vec::new();
+        let mut last_flush = std::time::Instant::now();
+        const BATCH_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(60);
+        const MAX_BATCH_SIZE: usize = 40;
+
+        loop {
+            tokio::select! {
+                biased;
+                _ = tokio::time::sleep(BATCH_FLUSH_INTERVAL), if !batch.is_empty() => {
+                    flush_local_daemon_batch(&app_handle, &sid_in, &mut batch);
+                    last_flush = std::time::Instant::now();
+                    tokio::task::yield_now().await;
                 }
-                Ok(tokio_tungstenite::tungstenite::Message::Binary(bin)) => {
-                    use base64::Engine;
-                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bin);
-                    let _ = app_handle.emit(
-                        "local-daemon-transport-event",
-                        serde_json::json!({
-                            "sessionId": sid_in,
-                            "kind": "message",
-                            "binaryBase64": b64
-                        }),
-                    );
+                msg_opt = ws_read.next() => {
+                    match msg_opt {
+                        Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
+                            let is_urgent = text.contains("turn_started")
+                                || text.contains("turn_completed")
+                                || text.contains("turn_failed")
+                                || text.contains("turn_canceled")
+                                || text.contains("agent.timeline.replacement");
+                            batch.push(text);
+                            if is_urgent
+                                || batch.len() >= MAX_BATCH_SIZE
+                                || last_flush.elapsed() >= BATCH_FLUSH_INTERVAL
+                            {
+                                flush_local_daemon_batch(&app_handle, &sid_in, &mut batch);
+                                last_flush = std::time::Instant::now();
+                                tokio::task::yield_now().await;
+                            }
+                        }
+                        Some(Ok(tokio_tungstenite::tungstenite::Message::Binary(bin))) => {
+                            if !batch.is_empty() {
+                                flush_local_daemon_batch(&app_handle, &sid_in, &mut batch);
+                                last_flush = std::time::Instant::now();
+                            }
+                            use base64::Engine;
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(&bin);
+                            let _ = app_handle.emit(
+                                "local-daemon-transport-event",
+                                serde_json::json!({
+                                    "sessionId": sid_in,
+                                    "kind": "message",
+                                    "binaryBase64": b64
+                                }),
+                            );
+                        }
+                        Some(Ok(tokio_tungstenite::tungstenite::Message::Close(frame))) => {
+                            if !batch.is_empty() {
+                                flush_local_daemon_batch(&app_handle, &sid_in, &mut batch);
+                            }
+                            let code = frame.as_ref().map(|f| u16::from(f.code));
+                            let reason = frame.as_ref().map(|f| f.reason.to_string());
+                            let _ = app_handle.emit(
+                                "local-daemon-transport-event",
+                                serde_json::json!({
+                                    "sessionId": sid_in,
+                                    "kind": "close",
+                                    "code": code,
+                                    "reason": reason
+                                }),
+                            );
+                            break;
+                        }
+                        Some(Err(e)) => {
+                            if !batch.is_empty() {
+                                flush_local_daemon_batch(&app_handle, &sid_in, &mut batch);
+                            }
+                            let _ = app_handle.emit(
+                                "local-daemon-transport-event",
+                                serde_json::json!({
+                                    "sessionId": sid_in,
+                                    "kind": "error",
+                                    "error": e.to_string()
+                                }),
+                            );
+                            break;
+                        }
+                        None => {
+                            if !batch.is_empty() {
+                                flush_local_daemon_batch(&app_handle, &sid_in, &mut batch);
+                            }
+                            break;
+                        }
+                        _ => {}
+                    }
                 }
-                Ok(tokio_tungstenite::tungstenite::Message::Close(frame)) => {
-                    let code = frame.as_ref().map(|f| u16::from(f.code));
-                    let reason = frame.as_ref().map(|f| f.reason.to_string());
-                    let _ = app_handle.emit(
-                        "local-daemon-transport-event",
-                        serde_json::json!({
-                            "sessionId": sid_in,
-                            "kind": "close",
-                            "code": code,
-                            "reason": reason
-                        }),
-                    );
-                    break;
+                _ = tokio::time::sleep(BATCH_FLUSH_INTERVAL), if !batch.is_empty() => {
+                    flush_local_daemon_batch(&app_handle, &sid_in, &mut batch);
+                    last_flush = std::time::Instant::now();
+                    tokio::task::yield_now().await;
                 }
-                Err(e) => {
-                    let _ = app_handle.emit(
-                        "local-daemon-transport-event",
-                        serde_json::json!({
-                            "sessionId": sid_in,
-                            "kind": "error",
-                            "error": e.to_string()
-                        }),
-                    );
-                    break;
-                }
-                _ => {}
             }
         }
 
@@ -3840,6 +3915,10 @@ try {{
             std::thread::spawn(move || {
                 let mut rx = crate::kernel::server::get_provider_push_tx().subscribe();
                 while let Ok(msg_str) = rx.blocking_recv() {
+                    // Fast pre-filter to avoid costly JSON deserialization on high-frequency streaming tokens
+                    if !msg_str.contains("\"turn_") {
+                        continue;
+                    }
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&msg_str) {
                         if let Some(event_type) = val.pointer("/message/payload/event/type").and_then(|v| v.as_str()) {
                             if let Some(win) = handle_for_taskbar.get_webview_window("main") {

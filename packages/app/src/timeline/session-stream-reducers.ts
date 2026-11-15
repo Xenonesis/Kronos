@@ -15,9 +15,9 @@ import {
   upsertUserMessageAcrossStream,
 } from "@/types/stream";
 
-// Ceiling for a pending commit. A frame callback normally gets there first; this
-// is the fallback for when nothing is painting.
-const AGENT_STREAM_REDUCER_FLUSH_DELAY_MS = 16 * 3;
+// Throttle stream reducer state flushes to 60ms (~16 updates/sec).
+// This guarantees smooth perceived text progression while preventing WebView2 UI thread starvation.
+const AGENT_STREAM_REDUCER_FLUSH_DELAY_MS = 60;
 
 // ---------------------------------------------------------------------------
 // Shared cursor type
@@ -1887,8 +1887,7 @@ function scheduleAgentStreamReducerFlush(callback: () => void): number {
   };
 
   const timerId = setTimeout(run, AGENT_STREAM_REDUCER_FLUSH_DELAY_MS);
-  const frameId = typeof requestAnimationFrame === "function" ? requestAnimationFrame(run) : null;
-  scheduledReducerFlushes.set(id, { frameId, timerId });
+  scheduledReducerFlushes.set(id, { frameId: null, timerId });
   return id;
 }
 

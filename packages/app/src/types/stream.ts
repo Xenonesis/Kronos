@@ -1539,6 +1539,21 @@ function reduceTimelineCompaction(
   return [...state, compaction];
 }
 
+function formatUserFriendlyErrorMessage(msg?: string): string {
+  if (!msg) return "An unexpected error occurred. Please try again.";
+  const trimmed = msg.trim();
+  const stripped = trimmed.replace(/[:\s]+$/, "");
+  const exitCodeMatch = stripped.match(
+    /^([a-z0-9_-]+)\s+exited with (?:status )?(?:exit )?code:?\s*(\d*)$/i,
+  );
+  if (exitCodeMatch) {
+    const provider = exitCodeMatch[1];
+    const code = exitCodeMatch[2];
+    return `${provider} process stopped unexpectedly${code ? ` (exit code ${code})` : ""}. Please check provider settings or restart the conversation.`;
+  }
+  return stripped;
+}
+
 function reduceTimelineEvent(
   state: StreamItem[],
   event: Extract<AgentStreamEventPayload, { type: "timeline" }>,
@@ -1585,26 +1600,31 @@ function reduceTimelineEvent(
       return appendTodoList(state, event.provider, items, timestamp, timelineCursor);
     }
     case "error": {
+      const formattedMessage = formatUserFriendlyErrorMessage(item.message);
       const notification: NotificationItem = {
         kind: "notification",
         sourceType: "error",
-        id: createUniqueTimelineId(state, "error", item.message ?? "", timestamp),
+        id: createUniqueTimelineId(state, "error", formattedMessage, timestamp),
         ...(timelineCursor ? { timelineCursor } : {}),
         timestamp,
         level: "error",
-        message: item.message ?? "Unknown error",
+        message: formattedMessage,
       };
       return appendNotification(state, notification);
     }
     case "notification": {
+      const formattedMessage =
+        item.level === "error"
+          ? formatUserFriendlyErrorMessage(item.message)
+          : (item.message ?? "");
       const notification: NotificationItem = {
         kind: "notification",
         sourceType: "notification",
-        id: createUniqueTimelineId(state, "notification", item.message, timestamp),
+        id: createUniqueTimelineId(state, "notification", formattedMessage, timestamp),
         ...(timelineCursor ? { timelineCursor } : {}),
         timestamp,
         level: item.level,
-        message: item.message,
+        message: formattedMessage,
       };
       return appendNotification(state, notification);
     }

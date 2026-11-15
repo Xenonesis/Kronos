@@ -422,6 +422,19 @@ impl DaemonConfigStore {
     pub fn get_or_create_scratchpad_project(&self) -> ProjectRecord {
         let scratch_dir = self.home_dir.join("scratchpad");
         let _ = std::fs::create_dir_all(&scratch_dir);
+        let git_dir = scratch_dir.join(".git");
+        let objects_dir = git_dir.join("objects");
+        let refs_dir = git_dir.join("refs").join("heads");
+        if !git_dir.exists() || !objects_dir.exists() || !refs_dir.exists() {
+            let _ = std::fs::create_dir_all(&objects_dir);
+            let _ = std::fs::create_dir_all(&refs_dir);
+            let _ = std::fs::create_dir_all(git_dir.join("refs").join("tags"));
+            let _ = std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n");
+            let _ = std::fs::write(
+                git_dir.join("config"),
+                "[core]\n\trepositoryformatversion = 0\n\tfilemode = false\n\tbare = false\n\tlogallrefupdates = true\n\tsymlinks = false\n\tignorecase = true\n",
+            );
+        }
         let path_str = scratch_dir.to_string_lossy().to_string();
 
         let mut map = self.projects.write().unwrap_or_else(|e| e.into_inner());

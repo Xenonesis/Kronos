@@ -17,7 +17,7 @@ static PROVIDER_SNAPSHOT_CACHE: std::sync::LazyLock<
     tokio::sync::Mutex<Option<(Instant, String, Vec<serde_json::Value>)>>,
 > = std::sync::LazyLock::new(|| tokio::sync::Mutex::new(None));
 static PROVIDER_PUSH_TX: std::sync::LazyLock<broadcast::Sender<String>> =
-    std::sync::LazyLock::new(|| broadcast::channel::<String>(16).0);
+    std::sync::LazyLock::new(|| broadcast::channel::<String>(1024).0);
 
 pub fn get_provider_push_tx() -> broadcast::Sender<String> {
     PROVIDER_PUSH_TX.clone()
@@ -1888,7 +1888,7 @@ pub fn timeline_item_to_entry(
             serde_json::json!({
                 "type": "notification",
                 "level": "error",
-                "message": message,
+                "message": crate::agent::runner::sanitize_error_notice_message(message),
             }),
             timestamp.clone(),
         ),
@@ -7263,10 +7263,9 @@ async fn handle_ws(
                             break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        // Reconnect invokes the client's authoritative history reconciliation.
-                        close_for_resync(&mut socket).await;
-                        break;
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!("WebSocket provider push lagged by {} messages; continuing without dropping connection", skipped);
+                        continue;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
@@ -8406,6 +8405,16 @@ pub(crate) fn opencode_models_from_cli_output(text: &str) -> Vec<serde_json::Val
     models
 }
 
+fn opencode_default_thinking_options() -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({ "id": "default", "label": "Default" }),
+        serde_json::json!({ "id": "low", "label": "Low" }),
+        serde_json::json!({ "id": "medium", "label": "Medium" }),
+        serde_json::json!({ "id": "high", "label": "High" }),
+        serde_json::json!({ "id": "max", "label": "Max" }),
+    ]
+}
+
 pub(crate) fn opencode_models_from_plain_cli_output(text: &str) -> Vec<serde_json::Value> {
     let mut models = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -8425,7 +8434,12 @@ pub(crate) fn opencode_models_from_plain_cli_output(text: &str) -> Vec<serde_jso
         if trimmed.contains('/') {
             if seen.insert(trimmed.to_string()) {
                 let label = trimmed.rsplit('/').next().unwrap_or(trimmed);
-                let model = dynamic_model("opencode", trimmed, Some(label), None, false, None);
+                let mut model = dynamic_model("opencode", trimmed, Some(label), None, false, None);
+                set_model_thinking_options(
+                    &mut model,
+                    opencode_default_thinking_options(),
+                    Some("default"),
+                );
                 models.push(model);
             }
         }
@@ -8454,7 +8468,7 @@ fn opencode_model_definition(
             .unwrap_or(false),
         extract_context_window(details),
     );
-    if let Some(variants) = details
+    let thinking_options = if let Some(variants) = details
         .get("variants")
         .and_then(serde_json::Value::as_object)
         .filter(|variants| {
@@ -8472,10 +8486,22 @@ fn opencode_model_definition(
             variants
                 .keys()
                 .filter(|id| id.as_str() != "default")
-                .map(|id| thinking_option(id, None)),
+                .map(|id| {
+                    let label = match id.as_str() {
+                        "low" => "Low",
+                        "medium" => "Medium",
+                        "high" => "High",
+                        "max" => "Max",
+                        other => other,
+                    };
+                    serde_json::json!({ "id": id, "label": label })
+                }),
         );
-        set_model_thinking_options(&mut model, options, Some("default"));
-    }
+        options
+    } else {
+        opencode_default_thinking_options()
+    };
+    set_model_thinking_options(&mut model, thinking_options, Some("default"));
     Some(model)
 }
 async fn discover_ollama_models() -> Vec<serde_json::Value> {
