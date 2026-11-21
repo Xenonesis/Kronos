@@ -20,6 +20,17 @@ export function configureChromiumMemoryFlags(commandLine: CommandLineInterface):
   if (!commandLine.hasSwitch("js-flags")) {
     commandLine.appendSwitch("js-flags", "--max-old-space-size=256");
   }
+  if (process.platform === "win32") {
+    if (!commandLine.hasSwitch("disable-features")) {
+      commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion,msWebOOUI");
+    }
+    if (!commandLine.hasSwitch("disable-backgrounding-occluded-windows")) {
+      commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+    }
+    if (!commandLine.hasSwitch("disable-renderer-backgrounding")) {
+      commandLine.appendSwitch("disable-renderer-backgrounding");
+    }
+  }
 }
 
 export function registerMemoryPressureHandlers(app: {

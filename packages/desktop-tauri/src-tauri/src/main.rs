@@ -193,11 +193,18 @@ pub fn apply_windows_window_decorations<R: tauri::Runtime>(win: &WebviewWindow<R
 
 #[cfg(target_os = "windows")]
 pub fn trim_process_memory() {
-    unsafe {
-        use windows_sys::Win32::System::ProcessStatus::EmptyWorkingSet;
-        use windows_sys::Win32::System::Threading::GetCurrentProcess;
-        let _ = EmptyWorkingSet(GetCurrentProcess());
-    }
+    // Delay memory trimming to avoid destabilizing WebView2 when the window is
+    // about to be restored shortly after hiding.  EmptyWorkingSet forces every
+    // working-set page to the page file; faulting them all back in on restore
+    // can cause visible stalls and GPU process timeouts.
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        unsafe {
+            use windows_sys::Win32::System::ProcessStatus::EmptyWorkingSet;
+            use windows_sys::Win32::System::Threading::GetCurrentProcess;
+            let _ = EmptyWorkingSet(GetCurrentProcess());
+        }
+    });
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -251,7 +258,6 @@ pub(crate) fn create_desktop_window<'a>(
             .theme(Some(tauri::Theme::Dark))
             .inner_size(1280.0, 800.0)
             .min_inner_size(800.0, 600.0)
-            .shadow(false)
             .visible(false)
             .initialization_script(bridge_script);
         if let Some(dir) = data_directory.clone() {
@@ -3150,10 +3156,19 @@ fn run_desktop() {
 
     #[cfg(target_os = "windows")]
     {
-        // Prevent DWM occlusion freezes, Intel GPU driver watchdog timeouts, and memory/disk bloat
+        // Prevent DWM occlusion freezes, Intel GPU driver watchdog timeouts, renderer
+        // backgrounding (which can cause the GPU process to become unrecoverable after
+        // sleep/wake or display reconnect), and memory/disk bloat.
         std::env::set_var(
             "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-            "--disable-features=CalculateNativeWinOcclusion --disable-gpu-watchdog --disk-cache-size=104857600 --renderer-process-limit=4",
+            "--disable-features=CalculateNativeWinOcclusion,msWebOOUI \
+             --disable-backgrounding-occluded-windows \
+             --disable-renderer-backgrounding \
+             --disable-gpu-watchdog \
+             --enable-features=WinRetrieveSuggestionsOnlyOnDemand \
+             --disk-cache-size=104857600 \
+             --renderer-process-limit=4 \
+             --force-dark-mode",
         );
     }
 
@@ -3870,7 +3885,8 @@ try {{
       }} catch (_) {{}}
     }});
   }} catch (e) {{}}
-  // Active UI Watchdog Heartbeat
+  // Active UI Watchdog Heartbeat — isolated from the main bridge try/catch so
+  // it always starts even when other bridge initialization fails.
   try {{
     setInterval(() => {{
       try {{
@@ -3880,7 +3896,20 @@ try {{
       }} catch (_) {{}}
     }}, 4000);
   }} catch (_) {{}}
-}} catch (e) {{}}
+}} catch (e) {{
+  // Outer catch — log the error so it's visible in devtools; still try to start
+  // the heartbeat to avoid an indefinite frozen-window state.
+  console.error('[kronos-bridge] Critical bridge init error:', e);
+  try {{
+    setInterval(() => {{
+      try {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          window.__TAURI_INTERNALS__.invoke('ping_watchdog').catch(() => {{}});
+        }}
+      }} catch (_) {{}}
+    }}, 4000);
+  }} catch (_) {{}}
+}}
 }})();
 "#
     );
@@ -3946,6 +3975,9 @@ try {{
                     }
                 }
             } else {
+                // No main window found — the original instance may have crashed.
+                // Instead of silently exiting, try to recreate the window.
+                eprintln!("[single-instance] Main window not found — previous instance may have crashed. Exiting so user can relaunch.");
                 app.exit(0);
             }
         }));
@@ -3958,6 +3990,24 @@ try {{
                 .lock()
                 .unwrap()
                 .destroy_surface(window.label());
+        }
+        // Auto-recover from impossibly small window dimensions (crash symptom:
+        // window collapses to a tiny rect in the taskbar).
+        if let tauri::WindowEvent::Resized(size) = event {
+            if window.label() == "main" {
+                let visible = window.is_visible().unwrap_or(false);
+                if visible && (size.width > 0 && size.width < 100 || size.height > 0 && size.height < 100) {
+                    eprintln!(
+                        "[window] Detected degenerate window size {}x{}, restoring to 1280x800",
+                        size.width, size.height
+                    );
+                    let _ = window.set_size(tauri::LogicalSize::new(1280.0, 800.0));
+                    let _ = window.center();
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
         }
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             let _ = window.hide();
@@ -4014,8 +4064,15 @@ try {{
                 if let tauri::webview::PageLoadEvent::Started = payload.event() {
                     page_ipc.register_window(&win);
                 }
-                if page_trace {
-                    if let tauri::webview::PageLoadEvent::Finished = payload.event() {
+                if let tauri::webview::PageLoadEvent::Finished = payload.event() {
+                    // Ensure the window is always shown once the page finishes loading,
+                    // even if `mark_first_paint` was never called (e.g. frontend JS crash).
+                    if !win.is_visible().unwrap_or(true) {
+                        eprintln!("[window] on_page_load Finished: showing window");
+                        let _ = win.show();
+                        let _ = win.set_focus();
+                    }
+                    if page_trace {
                         println!(
                             "[trace:startup] Webview page loaded (Finished) after {:?}",
                             page_start.elapsed()
@@ -4039,11 +4096,36 @@ try {{
             }
 
             let fallback_handle = app.handle().clone();
+            let secondary_fallback = app.handle().clone();
             if os_integrations {
+                // Primary fallback: show window after 3s if `mark_first_paint` hasn't fired yet
                 std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    std::thread::sleep(std::time::Duration::from_millis(3000));
                     if let Some(win) = fallback_handle.get_webview_window("main") {
                         if !win.is_visible().unwrap_or(true) {
+                            eprintln!("[window] Primary fallback: showing window after 3 s");
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                    }
+                });
+                // Secondary fallback: at 6s check if window exists and has non-degenerate
+                // dimensions; if it's still invisible or tiny, force show + resize
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(6000));
+                    if let Some(win) = secondary_fallback.get_webview_window("main") {
+                        let visible = win.is_visible().unwrap_or(false);
+                        let size_ok = win
+                            .inner_size()
+                            .map(|s| s.width >= 100 && s.height >= 100)
+                            .unwrap_or(false);
+                        if !visible || !size_ok {
+                            eprintln!(
+                                "[window] Secondary fallback: force-showing window (visible={}, size_ok={})",
+                                visible, size_ok
+                            );
+                            let _ = win.set_size(tauri::LogicalSize::new(1280.0, 800.0));
+                            let _ = win.center();
                             let _ = win.show();
                             let _ = win.set_focus();
                         }
@@ -4244,7 +4326,32 @@ try {{
             Ok(())
         })
         .build(context)
-        .expect("error while running tauri application")
+        .unwrap_or_else(|err| {
+            eprintln!("[fatal] Tauri application failed to build: {err}");
+            #[cfg(target_os = "windows")]
+            {
+                use std::ffi::OsStr;
+                use std::os::windows::ffi::OsStrExt;
+                let title: Vec<u16> = OsStr::new("Kronos — Startup Error\0")
+                    .encode_wide()
+                    .collect();
+                let msg_text = format!(
+                    "Kronos could not start.\n\n{}\n\nPlease ensure WebView2 Runtime is installed and try again.\0",
+                    err
+                );
+                let msg: Vec<u16> = OsStr::new(&msg_text).encode_wide().collect();
+                unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
+                        std::ptr::null_mut() as _,
+                        msg.as_ptr(),
+                        title.as_ptr(),
+                        windows_sys::Win32::UI::WindowsAndMessaging::MB_OK
+                            | windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
+                    );
+                }
+            }
+            std::process::exit(1);
+        })
         .run(|app_handle, event| match event {
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {
                 let should_kill = std::env::var("KRONOS_STOP_ON_EXIT").map(|v| v == "1" || v == "true").unwrap_or(true);

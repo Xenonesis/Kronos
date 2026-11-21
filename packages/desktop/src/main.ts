@@ -781,7 +781,7 @@ async function createWindow(
   });
 
   showWindowWhenReady(mainWindow, {
-    showOnLoad: process.platform === "linux",
+    showOnLoad: process.platform === "linux" || process.platform === "win32",
   });
 
   if (!app.isPackaged) {

@@ -78,9 +78,10 @@ const languageFactories: Record<string, () => Language> = {
   // Rust
   rs: () => language(rustParser),
   // Swift
-  swift: () => StreamLanguage.define(swift),
+  swift: () =>
+    StreamLanguage.define(swift as unknown as Parameters<typeof StreamLanguage.define>[0]),
   // Dart
-  dart: () => StreamLanguage.define(dart),
+  dart: () => StreamLanguage.define(dart as unknown as Parameters<typeof StreamLanguage.define>[0]),
   // C#
   cs: () => csharpLanguage,
   // Nix
