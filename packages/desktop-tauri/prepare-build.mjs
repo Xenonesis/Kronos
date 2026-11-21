@@ -22,15 +22,15 @@ function npm(args, cwd = rootDir, env = process.env) {
 // Tauri invokes this for every build, including direct `tauri build` and CI.
 // Never use the presence of dist or a Git diff as evidence of a current export.
 npm(["run", "build:app-deps"]);
-npm(
-  ["exec", "--", "expo", "export", "--platform", "web", "--clear"],
-  path.join(rootDir, "packages/app"),
-  {
-    ...process.env,
-    NODE_ENV: "production",
-    PASEO_WEB_PLATFORM: "electron",
-  },
-);
+const expoExportArgs = ["exec", "--", "expo", "export", "--platform", "web"];
+if (process.env.EXPO_CLEAR_CACHE === "1" || process.env.CLEAR_CACHE === "1") {
+  expoExportArgs.push("--clear");
+}
+npm(expoExportArgs, path.join(rootDir, "packages/app"), {
+  ...process.env,
+  NODE_ENV: "production",
+  PASEO_WEB_PLATFORM: "electron",
+});
 const budgetCheck = spawnSync(
   process.execPath,
   [path.join(rootDir, "scripts/check-bundle-budget.mjs")],

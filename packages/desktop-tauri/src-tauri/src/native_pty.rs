@@ -448,6 +448,12 @@ impl NativePtyManager {
                             let _ = channel.send(TerminalEvent::Data(text));
                         }
                         let _ = channel.send(TerminalEvent::Exit(code));
+                        let mut lock = sessions_clone.lock().unwrap_or_else(|e| e.into_inner());
+                        if let Some(active) = lock.get(&session_id) {
+                            if active.instance_id == instance_id {
+                                lock.remove(&session_id);
+                            }
+                        }
                         break;
                     }
                     RawPtyMsg::Error(err) => {
@@ -456,20 +462,39 @@ impl NativePtyManager {
                             let _ = channel.send(TerminalEvent::Data(text));
                         }
                         let _ = channel.send(TerminalEvent::Error(err));
+                        let mut lock = sessions_clone.lock().unwrap_or_else(|e| e.into_inner());
+                        if let Some(active) = lock.get(&session_id) {
+                            if active.instance_id == instance_id {
+                                lock.remove(&session_id);
+                            }
+                        }
                         break;
                     }
                 }
             }
 
-            let mut lock = sessions_clone.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(active) = lock.get(&session_id) {
-                if active.instance_id == instance_id {
-                    lock.remove(&session_id);
-                }
-            }
+            // Note: If the channel receiver was dropped (e.g. UI tab unmounted or refreshed)
+            // while the child process is still running, do NOT remove the session here.
+            // The PTY reader thread cleans up when the child terminates, preserving the
+            // session and its backlog across frontend reconnects.
         });
 
         Ok(())
+    }
+
+    pub fn has_active_terminal(&self, id: &str) -> bool {
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(active) = sessions.get_mut(id) {
+            match active.child.try_wait() {
+                Ok(None) => true,
+                _ => {
+                    sessions.remove(id);
+                    false
+                }
+            }
+        } else {
+            false
+        }
     }
 
     pub fn write_terminal(&self, id: &str, data: &str) -> Result<(), String> {
@@ -597,6 +622,11 @@ pub fn get_pty_manager() -> &'static NativePtyManager {
     PTY_MANAGER.get_or_init(NativePtyManager::new)
 }
 
+#[cfg(test)]
+pub(crate) fn test_output_sender() -> tokio::sync::broadcast::Sender<TerminalOutputChunk> {
+    get_pty_manager().output_broadcaster.clone()
+}
+
 #[tauri::command]
 pub async fn spawn_native_terminal(
     manager: tauri::State<'_, NativePtyManager>,
@@ -610,6 +640,18 @@ pub async fn spawn_native_terminal(
         return Err(e);
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn attach_native_terminal(
+    manager: tauri::State<'_, NativePtyManager>,
+    id: String,
+    on_event: Channel<TerminalEvent>,
+) -> Result<(), String> {
+    if !manager.has_active_terminal(&id) {
+        return Err(format!("Terminal session '{id}' not found or has terminated"));
+    }
+    manager.attach_reader_channel(id, on_event)
 }
 
 #[tauri::command]
@@ -693,6 +735,27 @@ mod tests {
         assert!(manager.write_terminal(nonexistent, "test").is_err());
         assert!(manager.resize_terminal(nonexistent, 80, 24).is_err());
         assert!(manager.kill_terminal(nonexistent).is_ok());
+    }
+
+    #[test]
+    fn test_native_pty_has_active_terminal() {
+        let manager = NativePtyManager::new();
+        let session_id = "test-active-session".to_string();
+        assert!(!manager.has_active_terminal(&session_id));
+        let spawn_res = manager.spawn_terminal(
+            session_id.clone(),
+            TerminalSpawnOptions {
+                command: None,
+                args: vec![],
+                cwd: None,
+                cols: 80,
+                rows: 24,
+            },
+        );
+        assert!(spawn_res.is_ok());
+        assert!(manager.has_active_terminal(&session_id));
+        assert!(manager.kill_terminal(&session_id).is_ok());
+        assert!(!manager.has_active_terminal(&session_id));
     }
 
     #[test]

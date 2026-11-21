@@ -49,7 +49,8 @@ export const ShadowLinterPill = memo(function ShadowLinterPill({
       >
         <Text style={styles.alertIcon}>⚠️</Text>
         <Text style={styles.alertText}>
-          {diagnostic.system}: {diagnostic.errorCount} {diagnostic.errorCount === 1 ? "error" : "errors"}
+          {diagnostic.system}: {diagnostic.errorCount}{" "}
+          {diagnostic.errorCount === 1 ? "error" : "errors"}
           {diagnostic.primaryFile ? ` in ${diagnostic.primaryFile.split("/").pop()}` : ""}
         </Text>
         <View style={styles.healBadge}>

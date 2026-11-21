@@ -66,6 +66,24 @@ For the rules about which code runs where, read the platform gating section in [
 
 App and daemon versions also drift, in both directions. That has its own contract: [protocol-compatibility.md](protocol-compatibility.md).
 
+## Isolated desktop IPC acceptance
+
+Opt-in acceptance runs a receipt-bound private build inside a run-owned home/profile/workspace. It never touches the default home, never switches the default transport, and never regenerates an installer.
+
+Build once, then run cases against that exact binary:
+
+```bash
+node scripts/smoke-native-desktop.mjs --gui-acceptance   --exe <receipt-bound-private-binary>   --build-receipt <build-receipt.json>   --case <caseId> --transport ipc   --receipt-dir .superpowers/sdd/2026-11-18-desktop-ipc-acceptance-isolation/task-4-final2
+```
+
+- Case IDs: `preflight`, `native-smoke`, `trust-reload`, `turn-history`, `approval`, `terminal`, `files-watch-plugins`, `network-independent`, `backpressure`, `remote-recovery`, `remote-peer`, `measurements`.
+- Exit codes: `0` pass, `3` blocked (recorded reason, never an implicit pass), non-zero otherwise. Every run writes `run.json`, `cleanup.json` and `result.json`; only the Node evidence join certifies an outcome.
+- The receipt binds the executable, native sources, assets and driver hashes. Editing any bound file fails the run closed with `Build receipt hash mismatch`; re-issue the receipt for the same executable/capture only when the change is harness-only.
+- The owned child opts into its descriptor transport through `KRONOS_DESKTOP_LOCAL_TRANSPORT`; normal boots keep the existing default.
+- Cleanup is proven, not assumed: Job assigned before resume, leader reaped, process tree empty. A temp root that stays locked is retained with `retained-root.json` instead of discarding certified evidence.
+
+Current status (2026-11-20, binary `3c95f103bc75497f920a247f076a5fe8`, sha256 `33a4d7ffcdf21c4ad72bd515ab04870a32a6834165446745d8fde3c5000525d1`): `preflight`, `native-smoke`, `trust-reload` and `backpressure` pass; eight cases remain blocked with source-verified reasons — native provider permission requests, PTY snapshot/replay and plugin traffic do not exist yet, and the remaining scenarios need harness work. Matrix: `.superpowers/sdd/2026-11-18-desktop-ipc-acceptance-isolation/task-5-matrix.json` (4 pass / 8 blocked). An NSIS installer is built and copied to `dist/`, but it is unsigned and has not been installed, launched or acceptance-certified. The original "Local (This Device)" disconnect is still unreproduced, so no repair is claimed.
+
 ## Automated coverage that means something
 
 Tests are evidence only when they exercise the real thing.
@@ -73,6 +91,8 @@ Tests are evidence only when they exercise the real thing.
 - A bug fix needs a regression test that fails on the old code for the reported reason.
 - A feature needs tests that go through the same interface a user or a caller uses.
 - Web flows need an actual Playwright run, not a mocked-out approximation of one.
+- Native bridge changes need actual caller/window and streaming callback delivery, including guest rejection, reload and slow consumption. Executing injected JavaScript in a VM or faking RPC does not cover the WebView/native boundary. See [managed desktop transport](architecture.md#managed-desktop-transport).
+- A built installer is not an installation or runtime smoke test. Keep build, isolated installation and live-app replacement evidence separate; obtain approval before replacing a running app.
 - Agent provider work needs manual verification against the real provider by someone who can tell that it worked. A fixture and a mock prove the fixture parses, nothing more.
 
 Tests that mock away the behavior, assert on internals, or pass against the broken code claim coverage that isn't there.

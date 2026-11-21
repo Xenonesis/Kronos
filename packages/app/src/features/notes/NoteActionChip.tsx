@@ -13,7 +13,9 @@ const ThemedStickyNote = withUnistyles(StickyNote, (theme) => ({
 
 export interface NoteActionChipProps {
   onInsertText?: (text: string) => void;
-  style?: StyleProp<ViewStyle> | ((state: { hovered?: boolean; pressed?: boolean }) => StyleProp<ViewStyle>);
+  style?:
+    | StyleProp<ViewStyle>
+    | ((state: { hovered?: boolean; pressed?: boolean }) => StyleProp<ViewStyle>);
   testID?: string;
   size?: number;
 }

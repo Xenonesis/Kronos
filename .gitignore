@@ -43,6 +43,10 @@ tsconfig.tsbuildinfo
 coverage/
 .vitest-attachments/
 **/.vitest-attachments/
+.artifacts/
+**/.artifacts/
+.superpowers/builds/
+**/.superpowers/builds/
 
 # Playwright
 test-results/

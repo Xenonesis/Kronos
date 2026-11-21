@@ -18,9 +18,11 @@ describe("paseo logs JSON output", () => {
     host = `127.0.0.1:${daemon.port}`;
     const client = await connectToDaemon({ target: { kind: "endpoint", host } });
     try {
+      const available = await client.listAvailableProviders();
+      const readyProvider = available.providers.find((p) => p.available)?.provider ?? "claude";
       // Creating an idle agent needs no inference or external provider connection.
       const agent = await client.createAgent({
-        provider: "claude",
+        provider: readyProvider,
         cwd: daemon.workDir,
         title: "JSON logs",
       });

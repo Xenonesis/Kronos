@@ -309,7 +309,8 @@ export const ArtifactInspectorModal = memo(function ArtifactInspectorModal({
                 No Artifact Selected
               </div>
               <div style={{ fontSize: "12px", maxWidth: "400px" }}>
-                Generate or detect an HTML, SVG, or React snippet to preview it in this sandboxed frame.
+                Generate or detect an HTML, SVG, or React snippet to preview it in this sandboxed
+                frame.
               </div>
             </div>
           ) : (

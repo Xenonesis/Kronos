@@ -92,7 +92,11 @@ fn sanitize_windows_stdio() {}
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod daemon;
+mod desktop_acceptance;
 mod editor;
+mod local_transport;
+#[cfg(test)]
+mod local_transport_test;
 
 pub mod agent;
 pub mod kernel;
@@ -117,7 +121,8 @@ use attachments::{
 };
 use native_diff::{apply_diff_hunk, compute_file_diff};
 use native_pty::{
-    kill_native_terminal, resize_native_terminal, spawn_native_terminal, write_native_terminal,
+    attach_native_terminal, kill_native_terminal, resize_native_terminal, spawn_native_terminal,
+    write_native_terminal,
 };
 
 use daemon::{start_daemon, stop_daemon, wait_for_daemon_health, DaemonState};
@@ -125,7 +130,7 @@ use dialogs::{ask_confirmation_dialog, pick_file, pick_folder};
 use editor::open_in_editor;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_updater::UpdaterExt;
@@ -225,6 +230,44 @@ pub fn toggle_window<R: tauri::Runtime>(win: &WebviewWindow<R>) {
 pub fn toggle_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(win) = app.get_webview_window("main") {
         toggle_window(&win);
+    }
+}
+
+/// Shared desktop window builder: identical shell for the normal, icon-fallback and
+/// private acceptance paths, with an acceptance-owned WebView2 profile when active.
+pub(crate) fn create_desktop_window<'a>(
+    app: &'a tauri::AppHandle,
+    label: &'a str,
+    bridge_script: &'a str,
+    data_directory: Option<std::path::PathBuf>,
+) -> tauri::WebviewWindowBuilder<'a, tauri::Wry, tauri::AppHandle> {
+    let window_icon = app
+        .default_window_icon()
+        .cloned()
+        .or_else(|| tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png")).ok());
+    let build = |icon: Option<tauri::image::Image<'a>>| {
+        let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::default())
+            .title("Kronos")
+            .theme(Some(tauri::Theme::Dark))
+            .inner_size(1280.0, 800.0)
+            .min_inner_size(800.0, 600.0)
+            .shadow(false)
+            .visible(false)
+            .initialization_script(bridge_script);
+        if let Some(dir) = data_directory.clone() {
+            builder = builder.data_directory(dir);
+        }
+        match icon {
+            Some(icon) => builder.icon(icon),
+            None => Ok(builder),
+        }
+    };
+    match build(window_icon) {
+        Ok(builder) => builder,
+        Err(err) => {
+            eprintln!("[window] Failed to apply icon to builder: {err}");
+            build(None).expect("desktop window builder is valid without an icon")
+        }
     }
 }
 
@@ -428,6 +471,10 @@ fn get_kernel_telemetry() -> crate::kernel::telemetry::KernelTelemetry {
 
 #[tauri::command]
 async fn mark_first_paint(app: tauri::AppHandle) -> Result<(), String> {
+    // A supervised acceptance window stays hidden and never takes input focus.
+    if !desktop_acceptance::os_integrations_enabled() {
+        return Ok(());
+    }
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.set_focus();
@@ -1715,54 +1762,121 @@ fn get_daemon_status_json() -> String {
     let home = get_data_dir();
 
     let server_id = get_or_create_server_id();
-    let mut local_credential = String::new();
-    let credential_file = home.join("local-credential");
-    if let Ok(content) = fs::read_to_string(&credential_file) {
-        let trimmed = content.trim();
-        if !trimmed.is_empty() {
-            local_credential = trimmed.to_string();
-        }
-    }
-
-    let port = daemon::get_active_daemon_port();
-    let is_healthy = wait_for_daemon_health(1);
-    let listen = format!("127.0.0.1:{}", port);
-    let hostname = "Local (This Device)".to_string();
-    let detected_pid = if is_healthy {
-        daemon::find_pid_listening_on_port(port)
+    let node_engine = std::env::var("KRONOS_DAEMON_ENGINE")
+        .is_ok_and(|engine| engine.eq_ignore_ascii_case("node"));
+    let phase = daemon::embedded_phase();
+    let network = daemon::embedded_network_status();
+    // Managed Rust core readiness never waits on an HTTP probe.
+    let (port, is_healthy) = if node_engine {
+        let healthy = wait_for_daemon_health(1);
+        (daemon::get_active_daemon_port(), healthy)
+    } else {
+        (network.port.unwrap_or(0), network.port.is_some())
+    };
+    let listen = if is_healthy && port != 0 {
+        Some(format!("127.0.0.1:{}", port))
     } else {
         None
     };
-    let status = if is_healthy { "running" } else { "stopped" };
+    let hostname = "Local (This Device)".to_string();
+    let detected_pid = if is_healthy {
+        daemon::find_pid_listening_on_port(port).or_else(|| Some(std::process::id()))
+    } else {
+        None
+    };
+    let (status, error) = if node_engine {
+        (if is_healthy { "running" } else { "stopped" }, None)
+    } else {
+        match &phase {
+            daemon::EnginePhase::Stopped => ("stopped", None),
+            daemon::EnginePhase::Starting => ("starting", None),
+            daemon::EnginePhase::Failed { reason } => ("errored", Some(reason.clone())),
+            daemon::EnginePhase::Ready if is_healthy => ("running", None),
+            daemon::EnginePhase::Ready if network.error.is_some() => {
+                ("errored", network.error.clone())
+            }
+            daemon::EnginePhase::Ready => ("starting", None),
+        }
+    };
 
     serde_json::json!({
         "serverId": server_id,
         "status": status,
-        "listen": Some(listen),
+        "listen": listen,
         "hostname": hostname,
         "pid": detected_pid,
-        "localCredential": local_credential,
         "home": home.to_string_lossy().to_string(),
         "version": env!("CARGO_PKG_VERSION"),
         "desktopManaged": true,
         "ownedByDesktop": true,
-        "startedAt": if is_healthy { Some(DAEMON_PROCESS_STARTED_AT.as_str()) } else { None },
-        "error": null
+        "startedAt": if is_healthy || (!node_engine && phase == daemon::EnginePhase::Ready) { Some(DAEMON_PROCESS_STARTED_AT.as_str()) } else { None },
+        "error": error,
+        "engine": if node_engine { "node" } else { "rust" },
+        "enginePhase": if node_engine { None } else { Some(phase) },
+        "networkAvailable": is_healthy,
+        "networkError": network.error
     })
     .to_string()
 }
 
 #[tauri::command]
-fn get_live_daemon_status() -> serde_json::Value {
-    serde_json::from_str(&get_daemon_status_json()).unwrap_or(serde_json::Value::Null)
+fn get_live_daemon_status(
+    window: tauri::WebviewWindow,
+    ipc: tauri::State<'_, Arc<local_transport::IpcState>>,
+) -> Result<serde_json::Value, String> {
+    ipc.authorize_window(&window)?;
+    let mut status: serde_json::Value =
+        serde_json::from_str(&get_daemon_status_json()).map_err(|error| error.to_string())?;
+    let setting = std::env::var("KRONOS_DESKTOP_LOCAL_TRANSPORT").ok();
+    status["localTransport"] = serde_json::json!(local_transport::managed_transport(
+        status["engine"].as_str().unwrap_or(""),
+        setting.as_deref(),
+    )?);
+    Ok(status)
 }
 
 #[tauri::command]
-fn get_live_local_credential(listen: String) -> Option<String> {
-    if !kernel::access::is_managed_target(&listen) {
-        return None;
+fn get_live_local_credential(
+    listen: String,
+    server_id: String,
+    window: tauri::WebviewWindow,
+    ipc: tauri::State<'_, Arc<local_transport::IpcState>>,
+    daemon: tauri::State<'_, DaemonState>,
+) -> Result<Option<String>, String> {
+    ipc.authorize_window(&window)?;
+    let node = std::env::var("KRONOS_DAEMON_ENGINE")
+        .is_ok_and(|engine| engine.eq_ignore_ascii_case("node"));
+    let owned = if node {
+        daemon
+            .process
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_mut()
+            .is_some_and(|child| child.try_wait().is_ok_and(|status| status.is_none()))
+    } else {
+        daemon::embedded_phase() == daemon::EnginePhase::Ready
+    };
+    let setting = std::env::var("KRONOS_DESKTOP_LOCAL_TRANSPORT").ok();
+    let transport =
+        local_transport::managed_transport(if node { "node" } else { "rust" }, setting.as_deref())?;
+    let port = if node {
+        daemon::get_active_daemon_port()
+    } else {
+        daemon::embedded_network_status().port.unwrap_or(0)
+    };
+    if !owned
+        || !local_transport::credential_matches(
+            &get_or_create_server_id(),
+            &server_id,
+            &listen,
+            port,
+            transport,
+            node,
+        )
+    {
+        return Ok(None);
     }
-    kernel::auth::read_local_credential(&get_data_dir())
+    Ok(kernel::auth::read_local_credential(&get_data_dir()))
 }
 
 static DAEMON_BROWSER_CLIENT: std::sync::LazyLock<reqwest::Client> =
@@ -1834,7 +1948,6 @@ static LOCAL_TRANSPORT_SESSIONS: std::sync::LazyLock<
 #[serde(rename_all = "camelCase")]
 struct OpenTransportInput {
     session_id: String,
-    #[allow(dead_code)]
     target: serde_json::Value,
 }
 
@@ -1894,7 +2007,16 @@ async fn open_local_daemon_transport(
     use tauri::Emitter;
 
     let session_id = input.session_id;
-    let port = daemon::get_active_daemon_port();
+    let port = if std::env::var("KRONOS_DAEMON_ENGINE")
+        .is_ok_and(|engine| engine.eq_ignore_ascii_case("node"))
+    {
+        daemon::get_active_daemon_port()
+    } else {
+        daemon::embedded_network_status()
+            .port
+            .ok_or("Managed network listener is unavailable")?
+    };
+    local_transport::validate_legacy_target(&input.target, port)?;
     let ws_url = format!("ws://127.0.0.1:{}/ws", port);
 
     let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url)
@@ -2198,7 +2320,25 @@ fn fast_validate_directory(path: String) -> DirectoryValidationResult {
     }
 }
 #[tauri::command]
-fn start_desktop_daemon(state: tauri::State<DaemonState>) -> serde_json::Value {
+async fn start_desktop_daemon(
+    state: tauri::State<'_, DaemonState>,
+    window: tauri::WebviewWindow,
+    ipc: tauri::State<'_, Arc<local_transport::IpcState>>,
+) -> Result<serde_json::Value, String> {
+    ipc.authorize_window(&window)?;
+    local_transport::managed_transport(
+        "rust",
+        std::env::var("KRONOS_DESKTOP_LOCAL_TRANSPORT")
+            .ok()
+            .as_deref(),
+    )?;
+    if !std::env::var("KRONOS_DAEMON_ENGINE")
+        .is_ok_and(|engine| engine.eq_ignore_ascii_case("node"))
+    {
+        daemon::start_daemon(None);
+        let _ = daemon::ensure_embedded_ready().await;
+        return get_live_daemon_status(window, ipc);
+    }
     let mut lock = state.process.lock().unwrap_or_else(|e| e.into_inner());
     let is_running = if let Some(child) = lock.as_mut() {
         child
@@ -2215,11 +2355,16 @@ fn start_desktop_daemon(state: tauri::State<DaemonState>) -> serde_json::Value {
         let _ = wait_for_daemon_health(40);
     }
     drop(lock);
-    get_live_daemon_status()
+    get_live_daemon_status(window, ipc)
 }
 
 #[tauri::command]
-fn stop_desktop_daemon(state: tauri::State<DaemonState>) -> serde_json::Value {
+fn stop_desktop_daemon(
+    state: tauri::State<'_, DaemonState>,
+    window: tauri::WebviewWindow,
+    ipc: tauri::State<'_, Arc<local_transport::IpcState>>,
+) -> Result<serde_json::Value, String> {
+    ipc.authorize_window(&window)?;
     stop_daemon(&state);
     let mut status: serde_json::Value =
         serde_json::from_str(&get_daemon_status_json()).unwrap_or(serde_json::Value::Null);
@@ -2227,16 +2372,33 @@ fn stop_desktop_daemon(state: tauri::State<DaemonState>) -> serde_json::Value {
         obj.insert("status".to_string(), serde_json::json!("stopped"));
         obj.insert("pid".to_string(), serde_json::Value::Null);
     }
-    status
+    Ok(status)
 }
 
 #[tauri::command]
-fn restart_desktop_daemon(state: tauri::State<DaemonState>) -> serde_json::Value {
+async fn restart_desktop_daemon(
+    state: tauri::State<'_, DaemonState>,
+    window: tauri::WebviewWindow,
+    ipc: tauri::State<'_, Arc<local_transport::IpcState>>,
+) -> Result<serde_json::Value, String> {
+    ipc.authorize_window(&window)?;
+    local_transport::managed_transport(
+        "rust",
+        std::env::var("KRONOS_DESKTOP_LOCAL_TRANSPORT")
+            .ok()
+            .as_deref(),
+    )?;
     let success = daemon::restart_daemon(&state);
     if success {
-        let _ = wait_for_daemon_health(30);
+        if std::env::var("KRONOS_DAEMON_ENGINE")
+            .is_ok_and(|engine| engine.eq_ignore_ascii_case("node"))
+        {
+            let _ = wait_for_daemon_health(30);
+        } else {
+            let _ = daemon::ensure_embedded_ready().await;
+        }
     }
-    get_live_daemon_status()
+    get_live_daemon_status(window, ipc)
 }
 
 fn is_running_under_arm64_translation() -> bool {
@@ -2775,6 +2937,191 @@ async fn get_recent_agent_timeline_sqlite(
 }
 
 fn main() {
+    let args: Vec<_> = std::env::args_os().collect();
+    match desktop_acceptance::enter(&args, run_desktop) {
+        Ok(0) => {}
+        Ok(code) => std::process::exit(code),
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    }
+}
+
+// Registration list has one source. Private acceptance commands are added only to the
+// feature-gated wrapper, so a normal build never exposes them.
+macro_rules! desktop_commands {
+    ($($extra:path),* $(,)?) => {
+        tauri::generate_handler![
+            $($extra,)*
+            open_in_editor,
+            pick_folder,
+            pick_file,
+            update_active_agents,
+            show_notification,
+            notify_task_complete,
+            get_live_daemon_status,
+            get_live_local_credential,
+            browser_proxy_url,
+            browser_proxy_cookies,
+            get_log_contents,
+            log_desktop_event,
+            fast_validate_directory,
+            start_desktop_daemon,
+            stop_desktop_daemon,
+            restart_desktop_daemon,
+            get_system_idle_time,
+            fast_inspect_path,
+            write_attachment_base64,
+            write_attachment_bytes,
+            copy_attachment_file,
+            read_file_base64,
+            delete_attachment_file,
+            garbage_collect_attachment_files,
+            spawn_native_terminal,
+            attach_native_terminal,
+            write_native_terminal,
+            resize_native_terminal,
+            kill_native_terminal,
+            compute_file_diff,
+            apply_diff_hunk,
+            check_app_update,
+            install_app_update,
+            get_kernel_telemetry,
+            mark_first_paint,
+            workspace_search,
+            create_turn_checkpoint,
+            restore_turn_checkpoint,
+            watch_directory,
+            unwatch_directory,
+            analyze_ast,
+            crdt_doc_action,
+            get_ioring_status,
+            transcribe_audio_chunk,
+            get_speech_engine_status,
+            get_shm_status,
+            push_shm_chunk,
+            local_transport::open_embedded_transport,
+            local_transport::send_embedded_transport,
+            local_transport::ack_embedded_transport,
+            local_transport::close_embedded_transport,
+            open_local_daemon_transport,
+            send_local_daemon_transport_message,
+            close_local_daemon_transport,
+            desktop_window_minimize,
+            desktop_window_toggle_maximize,
+            desktop_window_close,
+            desktop_window_is_maximized,
+            desktop_window_is_fullscreen,
+            desktop_window_set_fullscreen,
+            trim_memory,
+            set_window_progress,
+            ping_watchdog,
+            discover_local_ai_providers,
+            web_search_query,
+            web_scrape_url,
+            get_repo_map,
+            list_turn_checkpoints,
+            get_workspace_git_diff_files,
+            revert_workspace_files,
+            suggest_semantic_commit,
+            execute_semantic_commit,
+            mcp_list_tools,
+            mcp_call_tool,
+            scan_kronos_workspace_docs,
+            save_kronos_workspace_doc,
+            get_dependency_graph,
+            discover_workspace_databases,
+            execute_sqlite_query,
+            workspace_text_search,
+            workspace_batch_replace,
+            get_github_pr_draft,
+            create_github_pr,
+            detect_cloud_project,
+            deploy_cloud_project,
+            semantic_search_codebase,
+            verify_web_ui_url,
+            run_codebase_bug_audit,
+            detect_workspace_preview_url,
+            load_workspace_env_vars,
+            save_workspace_env_vars,
+            set_permission_policy,
+            get_permission_policy,
+            set_budget_policy,
+            get_budget_policy,
+            reset_agent_budget_usage,
+            ask_confirmation_dialog,
+            get_desktop_settings,
+            patch_desktop_settings,
+            get_cli_install_status,
+            install_cli,
+            uninstall_cli,
+            desktop_update_diagnostics,
+            desktop_sandbox_diagnostics,
+            desktop_get_runtime_info,
+            get_local_daemon_version,
+            run_local_daemon_update,
+            cli_daemon_status,
+            mcp_list_servers,
+            mcp_save_servers,
+            mcp_probe_server,
+            mcp_sync_all_servers,
+            list_available_ai_models,
+            run_inline_code_edit,
+            synthesize_terminal_command,
+            run_inline_completion,
+            generate_ai_semantic_commit,
+            run_model_arena_comparison,
+            synthesize_consensus_patch,
+            get_speech_status,
+            download_whisper_model,
+            transcribe_voice_pcm,
+            run_workspace_test_command,
+            set_agent_execution_mode,
+            start_preview_tunnel,
+            stop_preview_tunnel,
+            get_preview_tunnel_state,
+            scaffold_project_template,
+            load_workspace_memories,
+            save_workspace_memories,
+            browser_automation_execute,
+            browser_register_attached,
+            browser_unregister_tab,
+            browser_focus_tab,
+            browser_clear_profile,
+            search_agent_timeline_sqlite,
+            get_recent_agent_timeline_sqlite,
+            list_notes,
+            save_note,
+            delete_note,
+            ci_check_status,
+            ci_get_failure_log,
+            open_quick_composer
+        ]
+    };
+}
+#[cfg(feature = "ipc-acceptance")]
+macro_rules! desktop_handler {
+    () => {
+        desktop_commands![
+            crate::desktop_acceptance::commands::ipc_acceptance_control,
+            crate::desktop_acceptance::commands::ipc_acceptance_report
+        ]
+    };
+}
+#[cfg(not(feature = "ipc-acceptance"))]
+macro_rules! desktop_handler {
+    () => {
+        desktop_commands![]
+    };
+}
+
+fn run_desktop() {
+    let mut context = tauri::generate_context!();
+    if let Err(error) = desktop_acceptance::configure_startup(context.config_mut()) {
+        eprintln!("[acceptance] {error}");
+        std::process::exit(1);
+    }
     let startup_trace = std::env::var("KRONOS_STARTUP_TRACE")
         .map(|v| v == "1" || v == "true")
         .unwrap_or(false);
@@ -2786,14 +3133,20 @@ fn main() {
     }
 
     sanitize_windows_stdio();
-    detect_and_configure_portable_mode();
+    if desktop_acceptance::os_integrations_enabled() {
+        detect_and_configure_portable_mode();
+    }
 
-    if let Some(code) = kernel::cli::parse_and_dispatch() {
-        std::process::exit(code);
+    if desktop_acceptance::os_integrations_enabled() {
+        if let Some(code) = kernel::cli::parse_and_dispatch() {
+            std::process::exit(code);
+        }
     }
 
     setup_panic_hook();
-    check_and_log_crashpad_dumps();
+    if desktop_acceptance::os_integrations_enabled() {
+        check_and_log_crashpad_dumps();
+    }
 
     #[cfg(target_os = "windows")]
     {
@@ -2810,7 +3163,7 @@ fn main() {
         process: Mutex::new(daemon_child),
     };
     let daemon_server_id = server_id.clone();
-    let _ = wait_for_daemon_health(2);
+    let _ = wait_for_daemon_health(60);
     let mut public_status: serde_json::Value =
         serde_json::from_str(&get_daemon_status_json()).unwrap_or_default();
     if let Some(status) = public_status.as_object_mut() {
@@ -2830,6 +3183,10 @@ try {{
   const daemonData = {status_json};
   const listenEndpoint = (daemonData.listen || '127.0.0.1:6767').replace(/^http:\/\//, '').replace(/\/.*$/, '');
   const endpoint = listenEndpoint;
+  window.__PASEO_INITIAL_DAEMON_CONNECTION__ = {{
+    listen: listenEndpoint,
+    useTls: false
+  }};
 
   class TauriBridgeChannel {{
     constructor(onmessage) {{
@@ -3158,6 +3515,14 @@ try {{
         }}
         throw new Error('Native terminal unavailable');
       }},
+      attach: async function(id, onEvent) {{
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+          const ChannelCtor = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.Channel) ? window.__TAURI__.core.Channel : TauriBridgeChannel;
+          const channel = new ChannelCtor(onEvent);
+          return await window.__TAURI_INTERNALS__.invoke('attach_native_terminal', {{ id, onEvent: channel }});
+        }}
+        throw new Error('Native terminal unavailable');
+      }},
       write: async function(id, data) {{
         if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
           return await window.__TAURI_INTERNALS__.invoke('write_native_terminal', {{ id, data }});
@@ -3234,23 +3599,9 @@ try {{
       }}
     }},
     invoke: async function(command, args) {{
-      if (command === 'start_desktop_daemon') {{
-        try {{
-          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
-            const res = await window.__TAURI_INTERNALS__.invoke('start_desktop_daemon');
-            if (res) return res;
-          }}
-        }} catch (e) {{}}
-        return daemonData;
-      }}
-      if (command === 'desktop_daemon_status') {{
-        try {{
-          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
-            const live = await window.__TAURI_INTERNALS__.invoke('get_live_daemon_status');
-            if (live) return live;
-          }}
-        }} catch (e) {{}}
-        return daemonData;
+      if (command === 'start_desktop_daemon' || command === 'desktop_daemon_status') {{
+        return await window.__TAURI_INTERNALS__.invoke(command === 'desktop_daemon_status'
+          ? 'get_live_daemon_status' : 'start_desktop_daemon');
       }}
       if (command === 'desktop_daemon_logs') {{
         try {{
@@ -3279,23 +3630,8 @@ try {{
         }} catch (e) {{}}
         return {{ logPath: daemonData.home + '/crash.log', contents: '' }};
       }}
-      if (command === 'stop_desktop_daemon') {{
-        try {{
-          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
-            const res = await window.__TAURI_INTERNALS__.invoke('stop_desktop_daemon');
-            if (res) return res;
-          }}
-        }} catch (e) {{}}
-        return daemonData;
-      }}
-      if (command === 'restart_desktop_daemon') {{
-        try {{
-          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
-            const res = await window.__TAURI_INTERNALS__.invoke('restart_desktop_daemon');
-            if (res) return res;
-          }}
-        }} catch (e) {{}}
-        return daemonData;
+      if (command === 'stop_desktop_daemon' || command === 'restart_desktop_daemon') {{
+        return await window.__TAURI_INTERNALS__.invoke(command);
       }}
       if (command === 'get_cli_install_status') {{
         return await window.__TAURI_INTERNALS__.invoke('get_cli_install_status');
@@ -3361,7 +3697,7 @@ try {{
         return await window.__TAURI_INTERNALS__.invoke('restore_turn_checkpoint', args || {{}});
       }}
       if (command === 'desktop_local_credential') {{
-        return await window.__TAURI_INTERNALS__.invoke('get_live_local_credential', {{ listen: args && args.listen || '' }});
+        return await window.__TAURI_INTERNALS__.invoke('get_live_local_credential', {{ listen: args && args.listen || '', serverId: args && args.serverId || '' }});
       }}
       if (command === 'get_desktop_settings') {{
         return await window.__TAURI_INTERNALS__.invoke('get_desktop_settings');
@@ -3481,73 +3817,7 @@ try {{
     }}
   }};
 
-  // Seed/reconcile valid StoredHostProfile matching StoredHostProfileSchema
-  try {{
-    const REGISTRY_KEY = '@paseo:daemon-registry';
-    let registry = [];
-    try {{
-      const raw = localStorage.getItem(REGISTRY_KEY);
-      if (raw) registry = JSON.parse(raw) || [];
-    }} catch (e) {{}}
-
-    // Remove any stale loopback entries that do not match the current daemon's serverId
-    registry = registry.filter(h => {{
-      if (!h || !h.connections) return true;
-      const isLoopback = h.label === 'Local (This Device)' || h.connections.some(c =>
-        (c.type === 'directTcp' && (c.endpoint.includes('127.0.0.1') || c.endpoint.includes('localhost')))
-        || c.type === 'directPipe'
-        || c.type === 'directSocket'
-      );
-      return !isLoopback || h.serverId === daemonData.serverId;
-    }});
-
-    const isWin = typeof navigator !== 'undefined' && navigator.platform && navigator.platform.toLowerCase().includes('win');
-    const localConn = isWin
-      ? {{ id: 'pipe:\\\\.\\pipe\\kronos-ipc', type: 'directPipe', path: '\\\\.\\pipe\\kronos-ipc' }}
-      : {{ id: 'socket:/tmp/kronos-ipc.sock', type: 'directSocket', path: '/tmp/kronos-ipc.sock' }};
-    const tcpConn = {{ id: 'direct:' + endpoint, type: 'directTcp', endpoint: endpoint, useTls: false }};
-
-    const existing = registry.find(h => h && h.serverId === daemonData.serverId);
-    if (!existing) {{
-      registry.unshift({{
-        serverId: daemonData.serverId,
-        label: 'Local (This Device)',
-        appearance: {{ color: 'none', badgeDisplay: null }},
-        lifecycle: {{}},
-        connections: [localConn, tcpConn],
-        preferredConnectionId: localConn.id,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }});
-    }} else {{
-      existing.label = 'Local (This Device)';
-      if (!existing.connections) existing.connections = [];
-      const hasLocalConn = existing.connections.some(c => c.type === 'directPipe' || c.type === 'directSocket');
-      if (!hasLocalConn) {{
-        existing.connections.unshift(localConn);
-      }}
-      existing.preferredConnectionId = localConn.id;
-      const conn = existing.connections.find(c => c.type === 'directTcp');
-      if (conn) {{
-        conn.endpoint = endpoint;
-      }} else {{
-        existing.connections.push(tcpConn);
-      }}
-    }}
-    localStorage.setItem(REGISTRY_KEY, JSON.stringify(registry));
-  }} catch (e) {{}}
-  // Migrate or sync last-workspace-route-selection so it points to the active serverId
-  try {{
-    const LAST_WS_KEY = 'paseo:last-workspace-route-selection';
-    const rawWs = localStorage.getItem(LAST_WS_KEY);
-    if (rawWs) {{
-      const parsed = JSON.parse(rawWs);
-      if (parsed && parsed.serverId && parsed.serverId !== daemonData.serverId) {{
-        parsed.serverId = daemonData.serverId;
-        localStorage.setItem(LAST_WS_KEY, JSON.stringify(parsed));
-      }}
-    }}
-  }} catch (e) {{}}
+  // HostRuntimeStore reconciles only the native managed identity after fresh status.
   // Reset launchTarget to chat so New workspace composer opens in Chat mode
   try {{
     const PREF_KEY = '@paseo:create-agent-preferences';
@@ -3615,8 +3885,36 @@ try {{
 "#
     );
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+    #[cfg(feature = "ipc-acceptance")]
+    if desktop_acceptance::active().is_some() {
+        // Private windows must run the real bridge, not a reduced copy.
+        if let Err(error) = desktop_acceptance::set_bridge_script(bridge_script.clone()) {
+            eprintln!("[acceptance] {error}");
+        }
+    }
+
+    let dev_origin = if cfg!(debug_assertions) {
+        context
+            .config()
+            .build
+            .dev_url
+            .as_ref()
+            .map(ToString::to_string)
+    } else {
+        None
+    };
+    let ipc_state = std::sync::Arc::new(local_transport::IpcState::new(dev_origin));
+    let channel_state = ipc_state.clone();
+    let os_integrations = desktop_acceptance::os_integrations_enabled();
+    let mut builder = tauri::Builder::default()
+        .channel_interceptor(move |webview, callback, index, body| {
+            channel_state.intercept(webview.label(), callback.0, index, body, |script| {
+                webview.eval(script).map_err(|error| error.to_string())
+            })
+        })
+        .manage(ipc_state.clone());
+    if os_integrations {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
                 if win.is_minimized().unwrap_or(false) {
                     let _ = win.unminimize();
@@ -3650,175 +3948,51 @@ try {{
             } else {
                 app.exit(0);
             }
-        }))
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                trim_process_memory();
-                api.prevent_close();
-            }
-        })
-        .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        }));
+    }
+    builder = builder.on_window_event(|window, event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            window
+                .state::<std::sync::Arc<local_transport::IpcState>>()
+                .registry
+                .lock()
+                .unwrap()
+                .destroy_surface(window.label());
+        }
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            let _ = window.hide();
+            trim_process_memory();
+            api.prevent_close();
+        }
+    });
+    if os_integrations {
+        builder = builder
+            .plugin(tauri_plugin_deep_link::init())
+            .plugin(tauri_plugin_notification::init())
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_window_state::Builder::default().build())
+            .plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    }
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
         .manage(std::sync::Arc::new(crate::process_job::JobSupervisor::new().ok()))
         .manage(crate::native_pty::get_pty_manager().clone())
         .manage(UpdateState::default())
-        .invoke_handler(tauri::generate_handler![
-            open_in_editor,
-            pick_folder,
-            pick_file,
-            update_active_agents,
-            show_notification,
-            notify_task_complete,
-            get_live_daemon_status,
-            get_live_local_credential,
-            browser_proxy_url,
-            browser_proxy_cookies,
-            get_log_contents,
-            log_desktop_event,
-            fast_validate_directory,
-            start_desktop_daemon,
-            stop_desktop_daemon,
-            restart_desktop_daemon,
-            get_system_idle_time,
-            fast_inspect_path,
-            write_attachment_base64,
-            write_attachment_bytes,
-            copy_attachment_file,
-            read_file_base64,
-            delete_attachment_file,
-            garbage_collect_attachment_files,
-            spawn_native_terminal,
-            write_native_terminal,
-            resize_native_terminal,
-            kill_native_terminal,
-            compute_file_diff,
-            apply_diff_hunk,
-            check_app_update,
-            install_app_update,
-            get_kernel_telemetry,
-            mark_first_paint,
-            workspace_search,
-            create_turn_checkpoint,
-            restore_turn_checkpoint,
-            watch_directory,
-            unwatch_directory,
-            analyze_ast,
-            crdt_doc_action,
-            get_ioring_status,
-            transcribe_audio_chunk,
-            get_speech_engine_status,
-            get_shm_status,
-            push_shm_chunk,
-            open_local_daemon_transport,
-            send_local_daemon_transport_message,
-            close_local_daemon_transport,
-            desktop_window_minimize,
-            desktop_window_toggle_maximize,
-            desktop_window_close,
-            desktop_window_is_maximized,
-            desktop_window_is_fullscreen,
-            desktop_window_set_fullscreen,
-            trim_memory,
-            set_window_progress,
-            ping_watchdog,
-            discover_local_ai_providers,
-            web_search_query,
-            web_scrape_url,
-            get_repo_map,
-            list_turn_checkpoints,
-            get_workspace_git_diff_files,
-            revert_workspace_files,
-            suggest_semantic_commit,
-            execute_semantic_commit,
-            mcp_list_tools,
-            mcp_call_tool,
-            scan_kronos_workspace_docs,
-            save_kronos_workspace_doc,
-            get_dependency_graph,
-            discover_workspace_databases,
-            execute_sqlite_query,
-            workspace_text_search,
-            workspace_batch_replace,
-            get_github_pr_draft,
-            create_github_pr,
-            detect_cloud_project,
-            deploy_cloud_project,
-            semantic_search_codebase,
-            verify_web_ui_url,
-            run_codebase_bug_audit,
-            detect_workspace_preview_url,
-            load_workspace_env_vars,
-            save_workspace_env_vars,
-            set_permission_policy,
-            get_permission_policy,
-            set_budget_policy,
-            get_budget_policy,
-            reset_agent_budget_usage,
-            ask_confirmation_dialog,
-            get_desktop_settings,
-            patch_desktop_settings,
-            get_cli_install_status,
-            install_cli,
-            uninstall_cli,
-            desktop_update_diagnostics,
-            desktop_sandbox_diagnostics,
-            desktop_get_runtime_info,
-            get_local_daemon_version,
-            run_local_daemon_update,
-            cli_daemon_status,
-            mcp_list_servers,
-            mcp_save_servers,
-            mcp_probe_server,
-            mcp_sync_all_servers,
-            list_available_ai_models,
-            run_inline_code_edit,
-            synthesize_terminal_command,
-            run_inline_completion,
-            generate_ai_semantic_commit,
-            run_model_arena_comparison,
-            synthesize_consensus_patch,
-            get_speech_status,
-            download_whisper_model,
-            transcribe_voice_pcm,
-            run_workspace_test_command,
-            set_agent_execution_mode,
-            start_preview_tunnel,
-            stop_preview_tunnel,
-            get_preview_tunnel_state,
-            scaffold_project_template,
-            load_workspace_memories,
-            save_workspace_memories,
-            browser_automation_execute,
-            browser_register_attached,
-            browser_unregister_tab,
-            browser_focus_tab,
-            browser_clear_profile,
-            search_agent_timeline_sqlite,
-            get_recent_agent_timeline_sqlite,
-            list_notes,
-            save_note,
-            delete_note,
-            ci_check_status,
-            ci_get_failure_log,
-            open_quick_composer
-        ])
+        .invoke_handler(desktop_handler!())
         .setup(move |app| {
             crate::browser_automation::init_app_handle(app.handle().clone());
             crate::kernel::watchdog::start_watchdog(app.handle().clone());
-            let _ = setup_tray(app.handle());
-            setup_notification_listeners(app.handle());
-            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-            {
-                use tauri_plugin_deep_link::DeepLinkExt;
-                if let Err(err) = app.deep_link().register_all() {
-                    eprintln!("[deep-link] Failed to register schemes: {err}");
+            if desktop_acceptance::os_integrations_enabled() {
+                let _ = setup_tray(app.handle());
+                setup_notification_listeners(app.handle());
+                #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+                {
+                    use tauri_plugin_deep_link::DeepLinkExt;
+                    if let Err(err) = app.deep_link().register_all() {
+                        eprintln!("[deep-link] Failed to register schemes: {err}");
+                    }
                 }
             }
             let page_trace = startup_trace;
@@ -3826,35 +4000,20 @@ try {{
             let window_icon = app.default_window_icon().cloned().or_else(|| {
                 tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png")).ok()
             });
-            let win_builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-                .title("Kronos")
-                .theme(Some(tauri::Theme::Dark))
-                .inner_size(1280.0, 800.0)
-                .min_inner_size(800.0, 600.0)
-                .shadow(false)
-                .visible(false)
-                .initialization_script(&bridge_script);
+            let win_builder = create_desktop_window(
+                app.handle(),
+                "main",
+                &bridge_script,
+                desktop_acceptance::window_data_directory(0),
+            );
 
-            let win_builder = if let Some(ref icon) = window_icon {
-                match win_builder.icon(icon.clone()) {
-                    Ok(b) => b,
-                    Err(err) => {
-                        eprintln!("[window] Failed to apply icon to builder: {err}");
-                        WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-                            .title("Kronos")
-                            .theme(Some(tauri::Theme::Dark))
-                            .inner_size(1280.0, 800.0)
-                            .min_inner_size(800.0, 600.0)
-                            .shadow(false)
-                            .visible(false)
-                            .initialization_script(&bridge_script)
-                    }
+            let navigation_ipc = ipc_state.clone();
+            let page_ipc = ipc_state.clone();
+            let win_builder = win_builder.on_navigation(move |url| navigation_ipc.navigate("main", url))
+                .on_page_load(move |win, payload| {
+                if let tauri::webview::PageLoadEvent::Started = payload.event() {
+                    page_ipc.register_window(&win);
                 }
-            } else {
-                win_builder
-            };
-
-            let win_builder = win_builder.on_page_load(move |_win, payload| {
                 if page_trace {
                     if let tauri::webview::PageLoadEvent::Finished = payload.event() {
                         println!(
@@ -3865,7 +4024,13 @@ try {{
                 }
             });
 
-            let win = win_builder.build().ok();
+            // Private startup creates its own hidden main surface after setup; the
+            // ordinary window would race it and may acquire focus.
+            let win = if desktop_acceptance::os_integrations_enabled() {
+                win_builder.build().ok()
+            } else {
+                None
+            };
             if let Some(main_window) = &win {
                 if let Some(ref icon) = window_icon {
                     let _ = main_window.set_icon(icon.clone());
@@ -3874,15 +4039,17 @@ try {{
             }
 
             let fallback_handle = app.handle().clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(1500));
-                if let Some(win) = fallback_handle.get_webview_window("main") {
-                    if !win.is_visible().unwrap_or(true) {
-                        let _ = win.show();
-                        let _ = win.set_focus();
+            if os_integrations {
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    if let Some(win) = fallback_handle.get_webview_window("main") {
+                        if !win.is_visible().unwrap_or(true) {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
                     }
-                }
-            });
+                });
+            }
 
             let handle_for_daemon = app.handle().clone();
             let daemon_id = daemon_server_id.clone();
@@ -3957,6 +4124,7 @@ try {{
                 }
             });
 
+            if desktop_acceptance::os_integrations_enabled() {
             // Register global shortcuts to toggle main window visibility
             let window_clone = win.clone();
             for shortcut in ["Alt+Space", "CommandOrControl+Shift+K", "CommandOrControl+Shift+P"] {
@@ -4038,6 +4206,7 @@ try {{
                     }
                 }
             });
+            }
 
             let handle_for_watcher = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -4069,9 +4238,12 @@ try {{
                 }
             }
 
+            #[cfg(feature = "ipc-acceptance")]
+            desktop_acceptance::acceptance_preflight_startup(app.handle().clone())
+                .map_err(std::io::Error::other)?;
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while running tauri application")
         .run(|app_handle, event| match event {
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {

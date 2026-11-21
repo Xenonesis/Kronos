@@ -156,9 +156,8 @@ export class AgentStorage {
 
   async listActive(options?: { includeArchived?: boolean }): Promise<StoredAgentRecord[]> {
     await this.load();
-    return Array.from(
-      options?.includeArchived ? this.cache.keys() : this.activeIds,
-      (id) => this.cache.get(id)!,
+    return Array.from(options?.includeArchived ? this.cache.keys() : this.activeIds, (id) =>
+      this.cache.get(id)!,
     );
   }
 

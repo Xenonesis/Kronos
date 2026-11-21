@@ -71,7 +71,7 @@ export const useArtifactsStore = create<ArtifactsState>((set, get) => ({
 
   selectArtifact: (id) => {
     set((state) => {
-      const found = id ? state.artifacts.find((a) => a.id === id) ?? null : null;
+      const found = id ? (state.artifacts.find((a) => a.id === id) ?? null) : null;
       return {
         selectedArtifactId: id,
         currentArtifact: found,
@@ -83,7 +83,7 @@ export const useArtifactsStore = create<ArtifactsState>((set, get) => ({
     set((state) => {
       const targetId = id ?? state.selectedArtifactId ?? state.artifacts[0]?.id ?? null;
       const targetArtifact = targetId
-        ? state.artifacts.find((a) => a.id === targetId) ?? state.currentArtifact
+        ? (state.artifacts.find((a) => a.id === targetId) ?? state.currentArtifact)
         : state.currentArtifact;
 
       return {
@@ -111,10 +111,7 @@ export const useArtifactsStore = create<ArtifactsState>((set, get) => ({
 /**
  * Extracts any HTML, SVG, React, or Markdown artifacts from message text or raw snippet.
  */
-export function extractArtifactsFromSnippet(
-  text: string,
-  sourceId: string = "source",
-): Artifact[] {
+export function extractArtifactsFromSnippet(text: string, sourceId: string = "source"): Artifact[] {
   const artifacts: Artifact[] = [];
   let count = 0;
 

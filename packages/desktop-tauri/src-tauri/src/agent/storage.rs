@@ -263,13 +263,16 @@ impl AgentStorage {
 
     fn load_records(home: &Path) -> io::Result<RecordStore> {
         let path = home.join("agents/records.json");
-        let Some(bytes) = read_optional(&path)? else {
+        let Some(mut bytes) = read_optional(&path)? else {
             return Ok(RecordStore {
                 format: 1,
                 records: HashMap::new(),
                 timeline_generations: HashMap::new(),
             });
         };
+        if bytes.starts_with(b"\xEF\xBB\xBF") {
+            bytes = bytes[3..].to_vec();
+        }
         #[derive(Deserialize)]
         #[serde(untagged)]
         enum Loaded {

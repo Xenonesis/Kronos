@@ -105,11 +105,7 @@ export const NotePickerModal = memo(function NotePickerModal({
               </View>
             ) : (
               filtered.map((note) => (
-                <PressHighlight
-                  key={note.id}
-                  style={styles.item}
-                  onPress={() => handlePick(note)}
-                >
+                <PressHighlight key={note.id} style={styles.item} onPress={() => handlePick(note)}>
                   <View style={styles.itemHeader}>
                     <Text style={styles.itemTitle} numberOfLines={1}>
                       {note.title}

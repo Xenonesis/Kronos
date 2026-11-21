@@ -131,17 +131,20 @@ describe("Hub deployment bundle discovery", () => {
     });
   });
 
-  it("rejects symlinked workflow and partial paths without reading their targets", async () => {
-    const cwd = await canonicalProject();
-    const outside = path.join(cwd, "outside.yml");
-    await writeFile(outside, workflow("linked", "codex-safe"));
-    await symlink(outside, path.join(cwd, ".paseo", "workflows", "linked.yml"));
+  it.skipIf(process.platform === "win32")(
+    "rejects symlinked workflow and partial paths without reading their targets",
+    async () => {
+      const cwd = await canonicalProject();
+      const outside = path.join(cwd, "outside.yml");
+      await writeFile(outside, workflow("linked", "codex-safe"));
+      await symlink(outside, path.join(cwd, ".paseo", "workflows", "linked.yml"));
 
-    await expect(discoverHubBundle({ cwd, project: "studio-api" })).rejects.toMatchObject({
-      code: "HUB_BUNDLE_UNSAFE_PATH",
-      message: expect.stringContaining(".paseo/workflows/linked.yml"),
-    });
-  });
+      await expect(discoverHubBundle({ cwd, project: "studio-api" })).rejects.toMatchObject({
+        code: "HUB_BUNDLE_UNSAFE_PATH",
+        message: expect.stringContaining(".paseo/workflows/linked.yml"),
+      });
+    },
+  );
 
   it("requires an explicit valid project slug outside the authored bundle", async () => {
     const cwd = await canonicalProject();

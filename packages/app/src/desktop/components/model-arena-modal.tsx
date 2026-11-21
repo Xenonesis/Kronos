@@ -236,11 +236,7 @@ export const ModelArenaModal = memo(function ModelArenaModal({
               placeholder="Enter coding prompt to benchmark across models..."
               style={styles.promptInput}
             />
-            <Button
-              size="sm"
-              onPress={handleComparePress}
-              disabled={isComparing || !prompt.trim()}
-            >
+            <Button size="sm" onPress={handleComparePress} disabled={isComparing || !prompt.trim()}>
               <Sparkles size={13} color="#ffffff" />
               <Text style={styles.btnText}>{isComparing ? "Running..." : "Benchmark Pair"}</Text>
             </Button>

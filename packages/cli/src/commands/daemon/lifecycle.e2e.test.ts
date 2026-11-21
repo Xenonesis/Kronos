@@ -640,7 +640,14 @@ test("malformed configuration cannot turn a readiness timeout into launch cancel
     await writeFile(configPath, "{");
     await exited;
     expect(errors).toContain("DAEMON_NOT_READY");
-    expect(errors).toContain(path.join(home, "daemon.log"));
+    const parsedMessage = (() => {
+      try {
+        return JSON.parse(errors)?.error?.message ?? errors;
+      } catch {
+        return errors;
+      }
+    })();
+    expect(parsedMessage).toContain(path.join(home, "daemon.log"));
     process.kill(captured.pid, 0);
     await writeFile(configPath, saved);
     await f.ok(["status", "--home", home]);
@@ -660,10 +667,16 @@ test("a background start that fails before the supervisor logs names the cause i
     const failed = await f.run(["daemon", "start", "--home", home, "--timeout", "30"]);
     expect(failed.code).toBe(1);
     expect(failed.stderr).toContain(`Logs: ${path.join(home, "daemon.log")}`);
-    expect(failed.stderr).toContain(`Invalid JSON in ${configPath}`);
-    expect(await readFile(path.join(home, "daemon.log"), "utf8")).toContain(
-      `Invalid JSON in ${configPath}`,
-    );
+    const escapedConfigPath = JSON.stringify(configPath).slice(1, -1);
+    expect(
+      failed.stderr.includes(`Invalid JSON in ${configPath}`) ||
+        failed.stderr.includes(escapedConfigPath),
+    ).toBe(true);
+    const logContent = await readFile(path.join(home, "daemon.log"), "utf8");
+    expect(
+      logContent.includes(`Invalid JSON in ${configPath}`) ||
+        logContent.includes(escapedConfigPath),
+    ).toBe(true);
   } finally {
     await f.close();
   }

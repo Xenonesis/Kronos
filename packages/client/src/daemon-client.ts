@@ -6311,6 +6311,7 @@ export class DaemonClient {
       if (
         !active ||
         !("payload" in message) ||
+        !message.payload ||
         !("requestId" in message.payload) ||
         message.payload.requestId !== requestId
       )

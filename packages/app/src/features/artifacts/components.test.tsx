@@ -133,26 +133,14 @@ describe("HtmlArtifactFrame Component", () => {
 
 describe("ArtifactSnippetChip Component", () => {
   it("renders sleek preview badge with title and type", () => {
-    render(
-      <ArtifactSnippetChip
-        title="Vector Logo"
-        type="svg"
-        content="<svg></svg>"
-      />,
-    );
+    render(<ArtifactSnippetChip title="Vector Logo" type="svg" content="<svg></svg>" />);
     expect(screen.getByTestId("artifact-snippet-chip")).toBeTruthy();
     expect(screen.getByText(/Vector Logo/)).toBeTruthy();
     expect(screen.getByText(/svg/i)).toBeTruthy();
   });
 
   it("opens inspector store on click", () => {
-    render(
-      <ArtifactSnippetChip
-        title="Vector Logo"
-        type="svg"
-        content="<svg></svg>"
-      />,
-    );
+    render(<ArtifactSnippetChip title="Vector Logo" type="svg" content="<svg></svg>" />);
     const chip = screen.getByTestId("artifact-snippet-chip");
     fireEvent.click(chip);
 
@@ -170,13 +158,7 @@ describe("ArtifactInspectorModal Component", () => {
 
   it("renders modal when visible is true with header and close action", () => {
     const onCloseMock = vi.fn();
-    render(
-      <ArtifactInspectorModal
-        visible={true}
-        artifact={mockArtifact}
-        onClose={onCloseMock}
-      />,
-    );
+    render(<ArtifactInspectorModal visible={true} artifact={mockArtifact} onClose={onCloseMock} />);
 
     expect(screen.getByTestId("artifact-inspector-modal")).toBeTruthy();
     expect(screen.getByText("Interactive Calculator")).toBeTruthy();
@@ -187,12 +169,7 @@ describe("ArtifactInspectorModal Component", () => {
   });
 
   it("toggles fullscreen mode", () => {
-    render(
-      <ArtifactInspectorModal
-        visible={true}
-        artifact={mockArtifact}
-      />,
-    );
+    render(<ArtifactInspectorModal visible={true} artifact={mockArtifact} />);
     const fullscreenBtn = screen.getByTestId("artifact-fullscreen-btn");
     fireEvent.click(fullscreenBtn);
     fireEvent.click(fullscreenBtn);

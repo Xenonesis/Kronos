@@ -14,7 +14,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
 #[path = "turn_process.rs"]
-mod turn_process;
+pub(crate) mod turn_process;
 
 /// Replacement notifications and authoritative reads must name the same timeline epoch.
 pub fn broadcast_timeline_replacement(agent_id: &str) {
@@ -567,8 +567,8 @@ fn provider_arguments(
     if let Some(thinking) = thinking.filter(|thinking| !thinking.is_empty()) {
         match provider {
             "omp" | "pi" => args.extend(["--thinking".into(), thinking.into()]),
-            "opencode" => {
-                // OpenCode variant is passed as `provider/model#variant` in the `-m` flag above
+            "opencode" if matches!(thinking, "max" | "minimal" | "high") => {
+                args.extend(["--variant".into(), thinking.into()]);
             }
             "codex" => args.extend([
                 "-c".into(),
@@ -771,10 +771,17 @@ async fn run_reserved_turn(mut turn: ReservedTurn, command: Option<Command>) {
                 .or_else(|| output.error.clone());
             if output.has_assistant_message() {
                 if let Some(ref e) = err {
-                    eprintln!(
-                        "[Runner] Provider {provider} reported post-turn condition ({e}) but assistant message was generated; suppressing error notice."
-                    );
-                    err = None;
+                    if (e.contains("Cancelled a request for input")
+                        || e.contains("this run cannot answer")
+                        || e.contains("exited with exit code: 1"))
+                        && !e.contains("durable session identity")
+                        && !e.contains("explicit session handle")
+                    {
+                        eprintln!(
+                            "[Runner] Provider {provider} produced assistant message; suppressing non-fatal exit notice: {e}"
+                        );
+                        err = None;
+                    }
                 }
             }
             (err, output.cleanup_confirmed, output.usage.clone())
@@ -1478,6 +1485,66 @@ async fn execute_provider_turn(
             context_prefix.push_str("\n\n");
         }
     }
+
+    let mut handle = provider_handle(&agent)?;
+    if handle.is_none() && agent.runtime_info.is_none() && agent.provider != "opencode" {
+        let prior_conversation = turn
+            .manager()
+            .storage()
+            .with_timeline(&agent.id, |items| {
+                items
+                    .iter()
+                    .filter(|item| {
+                        matches!(
+                            item,
+                            crate::agent::types::AgentTimelineItem::UserMessage { .. }
+                        )
+                    })
+                    .take(2)
+                    .count()
+                    > 1
+                    || items.iter().any(|item| {
+                        matches!(
+                            item,
+                            crate::agent::types::AgentTimelineItem::AssistantMessage { .. }
+                                | crate::agent::types::AgentTimelineItem::Thinking { .. }
+                        )
+                    })
+            })
+            .map_err(|e| format!("Cannot check existing provider continuity: {e}"))?;
+        if prior_conversation {
+            return Err("Existing agent transcript has no durable provider session identity. Import its explicit session handle or create a new agent; refusing to continue in a fresh conversation.".into());
+        }
+    }
+    #[cfg(not(feature = "ipc-acceptance"))]
+    if handle.is_none() {
+        if let Ok(history_text) = turn.manager().storage().with_timeline(&agent.id, |items| {
+            let mut summary = String::new();
+            for item in items {
+                match item {
+                    crate::agent::types::AgentTimelineItem::UserMessage { text, .. } => {
+                        if text != &turn.prompt {
+                            summary.push_str(&format!("\nUser: {text}\n"));
+                        }
+                    }
+                    crate::agent::types::AgentTimelineItem::AssistantMessage { text, .. } => {
+                        summary.push_str(&format!("\nAssistant: {text}\n"));
+                    }
+                    _ => {}
+                }
+            }
+            summary
+        }) {
+            let trimmed = history_text.trim();
+            if !trimmed.is_empty() {
+                let capped: String = trimmed.chars().take(8000).collect();
+                context_prefix.push_str("[PREVIOUS CONVERSATION CONTEXT]\n");
+                context_prefix.push_str(&capped);
+                context_prefix.push_str("\n\n");
+            }
+        }
+    }
+
     let system_context = (!context_prefix.is_empty()).then(|| context_prefix.trim().to_string());
 
     if provider == "ollama" || provider == "lmstudio" {
@@ -1508,36 +1575,6 @@ async fn execute_provider_turn(
             &enabled_mcp_servers,
         )
         .await;
-    }
-    let mut handle = provider_handle(&agent)?;
-    if handle.is_none() && agent.runtime_info.is_none() {
-        let prior_conversation = turn
-            .manager()
-            .storage()
-            .with_timeline(&agent.id, |items| {
-                items
-                    .iter()
-                    .filter(|item| {
-                        matches!(
-                            item,
-                            crate::agent::types::AgentTimelineItem::UserMessage { .. }
-                        )
-                    })
-                    .take(2)
-                    .count()
-                    > 1
-                    || items.iter().any(|item| {
-                        matches!(
-                            item,
-                            crate::agent::types::AgentTimelineItem::AssistantMessage { .. }
-                                | crate::agent::types::AgentTimelineItem::Thinking { .. }
-                        )
-                    })
-            })
-            .map_err(|e| format!("Cannot check existing provider continuity: {e}"))?;
-        if prior_conversation {
-            return Err("Existing agent transcript has no durable provider session identity. Import its explicit session handle or create a new agent; refusing to continue in a fresh conversation.".into());
-        }
     }
     let session_dir = turn
         .manager()
@@ -1587,8 +1624,10 @@ async fn execute_provider_turn(
             let bin = resolve_command(provider).ok_or_else(|| {
                 format!("Provider '{provider}' is not installed or available on this system.")
             })?;
-            let mut command = Command::new(bin);
-            command.args(args);
+            let (real_bin, mut init_args) = crate::agent::registry::resolve_executable_with_args(&bin);
+            let mut command = Command::new(real_bin);
+            init_args.extend(args);
+            command.args(init_args);
             command
         }
     };
@@ -1607,6 +1646,8 @@ async fn execute_provider_turn(
             cleanup_failed_provider_start(&mut *turn, &mut tree, &mut child, &agent, error).await,
         );
     }
+    #[cfg(feature = "ipc-acceptance")]
+    crate::desktop_acceptance::record_provider_start(child.id());
     let stdout = child
         .stdout
         .take()

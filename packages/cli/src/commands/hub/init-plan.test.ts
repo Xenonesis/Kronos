@@ -1,3 +1,4 @@
+import path from "node:path";
 import YAML from "yaml";
 import { describe, expect, it } from "vitest";
 import {
@@ -94,7 +95,7 @@ describe("Hub init scaffold", () => {
       if (provider === "discord") expect(event.connection).toBe("discord-paseo");
       expect(event.filters.channels).toBeUndefined();
       expect(parsed.run).toMatchObject({
-        target: { daemon: "build-studio", cwd: "/workspace" },
+        target: { daemon: "build-studio", cwd: path.resolve("/workspace") },
         agent: { provider: "codex", model: "gpt-5", mode: "full-access" },
         continuation: { mode: "conversation" },
         max_runtime: "90m",

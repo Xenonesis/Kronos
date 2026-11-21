@@ -228,7 +228,8 @@ async function resolveNoteMentions(text: string): Promise<string> {
       return toAttach
         .filter(Boolean)
         .map(
-          (n) => `\n\n[Attached Context: Note - ${n.title}]\n\`\`\`markdown\n${n.content.trim()}\n\`\`\`\n`,
+          (n) =>
+            `\n\n[Attached Context: Note - ${n.title}]\n\`\`\`markdown\n${n.content.trim()}\n\`\`\`\n`,
         )
         .join("\n");
     });

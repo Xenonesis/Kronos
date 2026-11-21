@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonClientConfig } from "@getpaseo/client/internal/daemon-client";
-import { DaemonAuthenticationError } from "@getpaseo/client/internal/daemon-client";
+import { DaemonAuthenticationError, DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { DaemonConnectionDependencies, DaemonProbeClient } from "./test-daemon-connection";
 import { createHostLogger } from "@/runtime/host-logger";
 
@@ -58,6 +58,7 @@ class FakeDaemonProbe {
     resolveAppVersion: () => null,
     createDesktopTransportFactory: () => null,
     buildDesktopTransportUrl: (target) => {
+      if (target.transportType === "embedded") return "paseo+desktop://embedded";
       if (target.transportType === "ssh") {
         return `paseo+desktop://ssh?host=${encodeURIComponent(target.host)}`;
       }
@@ -80,12 +81,131 @@ class FakeDaemonProbe {
   }
 }
 
+async function seedNativeStatus(overrides: Record<string, unknown> = {}) {
+  const invokeModule = await import("@/desktop/electron/invoke");
+  const { getDesktopDaemonStatus } = await import("@/desktop/daemon/desktop-daemon");
+  const spy = vi.spyOn(invokeModule, "invokeDesktopCommand").mockResolvedValue({
+    serverId: "managed",
+    engine: "rust",
+    enginePhase: { phase: "ready" },
+    desktopManaged: true,
+    ownedByDesktop: true,
+    localTransport: "ipc",
+    listen: null,
+    ...overrides,
+  });
+  try {
+    await getDesktopDaemonStatus();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
 describe("test-daemon-connection connectToDaemon", () => {
   let probe: FakeDaemonProbe;
+
+  // Cold dependency transforms belong to setup, not the 5-second connection assertions.
+  beforeAll(async () => {
+    vi.stubGlobal("__DEV__", false);
+    await import("./test-daemon-connection");
+  }, 15_000);
 
   beforeEach(() => {
     vi.stubGlobal("__DEV__", false);
     probe = new FakeDaemonProbe();
+  });
+
+  it("managed Rust host selects IPC without a network listener", async () => {
+    const invokeModule = await import("@/desktop/electron/invoke");
+    const { getDesktopDaemonStatus } = await import("@/desktop/daemon/desktop-daemon");
+    const spy = vi.spyOn(invokeModule, "invokeDesktopCommand").mockResolvedValue({
+      serverId: "managed",
+      engine: "rust",
+      enginePhase: { phase: "ready" },
+      desktopManaged: true,
+      ownedByDesktop: true,
+      localTransport: "ipc",
+      listen: null,
+    });
+    const transportFactory: NonNullable<DaemonClientConfig["transportFactory"]> = () => {
+      throw new Error("IPC unavailable");
+    };
+    try {
+      await getDesktopDaemonStatus();
+      const { buildClientConfig } = await import("./test-daemon-connection");
+      const config = await buildClientConfig(
+        { id: "socket:ipc://embedded", type: "directSocket", path: "ipc://embedded" },
+        "managed",
+        {},
+        { ...probe.deps, createDesktopTransportFactory: () => transportFactory },
+      );
+      expect(config.url).toBe("paseo+desktop://embedded");
+      expect(config.transportFactory).toBe(transportFactory);
+    } finally {
+      spy.mockResolvedValue({ serverId: "", status: "stopped" });
+      await getDesktopDaemonStatus();
+      spy.mockRestore();
+    }
+  });
+
+  it("Node host retains network transport", async () => {
+    await seedNativeStatus({
+      engine: "node",
+      localTransport: "websocket",
+      listen: "127.0.0.1:19117",
+    });
+    const { buildClientConfig } = await import("./test-daemon-connection");
+    const config = await buildClientConfig(
+      { id: "direct:localhost:19117", type: "directTcp", endpoint: "localhost:19117" },
+      "managed",
+      {},
+      probe.deps,
+    );
+    expect(config.url).toBe("ws://localhost:19117/ws");
+    expect(config.transportFactory).toBeUndefined();
+  });
+
+  it("explicit loopback host is not silently managed", async () => {
+    await seedNativeStatus();
+    const { buildClientConfig } = await import("./test-daemon-connection");
+    const config = await buildClientConfig(
+      { id: "direct:localhost:6767", type: "directTcp", endpoint: "localhost:6767" },
+      "other",
+      {},
+      probe.deps,
+    );
+    expect(config.url).toBe("ws://localhost:6767/ws");
+    expect(config.transportFactory).toBeUndefined();
+    await expect(
+      buildClientConfig(
+        { id: "socket:ipc://embedded", type: "directSocket", path: "ipc://embedded" },
+        "other",
+        {},
+        probe.deps,
+      ),
+    ).rejects.toThrow("unavailable");
+  });
+
+  it("IPC failure does not fallback to WebSocket", async () => {
+    await seedNativeStatus();
+    const { connectToDaemon } = await import("./test-daemon-connection");
+    let attempts = 0;
+    const transportFactory: NonNullable<DaemonClientConfig["transportFactory"]> = () => {
+      attempts++;
+      throw new Error("injected IPC failure");
+    };
+    await expect(
+      connectToDaemon(
+        { id: "socket:ipc://embedded", type: "directSocket", path: "ipc://embedded" },
+        { serverId: "managed", timeoutMs: 1000 },
+        {
+          ...probe.deps,
+          createDesktopTransportFactory: () => transportFactory,
+          createClient: (config) => new DaemonClient(config),
+        },
+      ),
+    ).rejects.toThrow("injected IPC failure");
+    expect(attempts).toBe(1);
   });
 
   it.each([undefined, "srv_probe_test"])(

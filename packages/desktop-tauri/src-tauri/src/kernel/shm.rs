@@ -180,7 +180,7 @@ fn recover_ring_state(
 }
 
 #[cfg(windows)]
-fn create_or_open_mapping(name: &str, capacity: usize) -> std::io::Result<(ShmMappings, bool)> {
+fn create_or_open_mapping(name: &str, capacity: usize, exclusive: bool) -> std::io::Result<(ShmMappings, bool)> {
     use std::io::{Error, ErrorKind};
     use windows_sys::Win32::Foundation::{
         CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, INVALID_HANDLE_VALUE,
@@ -224,6 +224,10 @@ fn create_or_open_mapping(name: &str, capacity: usize) -> std::io::Result<(ShmMa
     }
 
     let already_exists = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+    if exclusive && already_exists {
+        unsafe { CloseHandle(file_mapping_handle); }
+        return Err(Error::new(ErrorKind::AlreadyExists, "Acceptance mapping already exists"));
+    }
 
     let view = unsafe { MapViewOfFile(file_mapping_handle, FILE_MAP_ALL_ACCESS, 0, 0, 0) };
 
@@ -241,21 +245,29 @@ fn create_or_open_mapping(name: &str, capacity: usize) -> std::io::Result<(ShmMa
     let wide_mtx: Vec<u16> = mtx_name.encode_utf16().chain(std::iter::once(0)).collect();
     let mutex_handle = unsafe { CreateMutexW(core::ptr::null(), 0, wide_mtx.as_ptr()) };
 
-    Ok((
-        ShmMappings {
-            ptr,
-            total_size,
-            capacity,
-            file_mapping_handle,
-            mutex_handle,
-        },
-        already_exists,
-    ))
+    let mutex_error = unsafe { GetLastError() };
+    let mapping = ShmMappings {
+        ptr,
+        total_size,
+        capacity,
+        file_mapping_handle,
+        mutex_handle,
+    };
+    if exclusive && mutex_handle.is_null() {
+        return Err(Error::from_raw_os_error(mutex_error as i32));
+    }
+    if exclusive && mutex_error == ERROR_ALREADY_EXISTS {
+        return Err(Error::new(ErrorKind::AlreadyExists, "Acceptance mutex already exists"));
+    }
+    Ok((mapping, already_exists))
 }
 
 #[cfg(not(windows))]
-fn create_or_open_mapping(_name: &str, capacity: usize) -> std::io::Result<(ShmMappings, bool)> {
+fn create_or_open_mapping(_name: &str, capacity: usize, exclusive: bool) -> std::io::Result<(ShmMappings, bool)> {
     use std::io::{Error, ErrorKind};
+    if exclusive {
+        return Err(Error::new(ErrorKind::Unsupported, "Exclusive acceptance mappings require Windows"));
+    }
     if capacity < 64 {
         return Err(Error::new(
             ErrorKind::InvalidInput,
@@ -291,9 +303,18 @@ pub struct ShmRingBuffer {
 }
 
 impl ShmRingBuffer {
+    #[cfg(feature = "ipc-acceptance")]
+    pub fn new_exclusive(name: &str, capacity: usize) -> std::io::Result<Self> {
+        Self::open(name, capacity, true)
+    }
+
     /// Creates or opens a named shared memory ring buffer with the specified body capacity.
     pub fn new(name: &str, capacity: usize) -> std::io::Result<Self> {
-        let (mut mapping, already_exists) = create_or_open_mapping(name, capacity)?;
+        Self::open(name, capacity, false)
+    }
+
+    fn open(name: &str, capacity: usize, exclusive: bool) -> std::io::Result<Self> {
+        let (mut mapping, already_exists) = create_or_open_mapping(name, capacity, exclusive)?;
 
         if already_exists {
             unsafe {
@@ -583,8 +604,58 @@ impl ShmRingBuffer {
     }
 }
 
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normal_mapping_constructor_reopens_owned_objects() {
+        let temporary = tempfile::tempdir().unwrap();
+        let name = format!("kronos-ipc-acceptance-{}-{}-normal", std::process::id(), temporary.path().file_name().unwrap().to_string_lossy());
+        let owner = ShmRingBuffer::new(&name, 64 * 1024).unwrap();
+        owner.write(b"normal sentinel").unwrap();
+        let reopened = ShmRingBuffer::new(&name, 64 * 1024).unwrap();
+        assert_eq!(reopened.read_latest().unwrap(), b"normal sentinel");
+        reopened.write(b"peer update").unwrap();
+        assert_eq!(owner.read_latest().unwrap(), b"peer update");
+    }
+
+    #[cfg(feature = "ipc-acceptance")]
+    #[test]
+    fn test_acceptance_collision_never_opens_existing_object() {
+        // Reusing either an owned mapping or its independently existing mutex must fail.
+        let temporary = tempfile::tempdir().unwrap();
+        let run = format!("{}-{}", std::process::id(), temporary.path().file_name().unwrap().to_string_lossy());
+        let name = format!("kronos-ipc-acceptance-{run}-daemon");
+        let owner = ShmRingBuffer::new_exclusive(&name, 64 * 1024).unwrap();
+        owner.write(b"sentinel").unwrap();
+        assert!(ShmRingBuffer::new_exclusive(&name, 64 * 1024).is_err(), "existing mapping was reused");
+        let sentinel = owner.read_latest().unwrap();
+        assert_eq!(sentinel, b"sentinel");
+        drop(owner);
+        // An error must release its temporary handle: owned name can be claimed again.
+        drop(ShmRingBuffer::new_exclusive(&name, 64 * 1024).unwrap());
+
+        use std::os::windows::io::{FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::System::Threading::CreateMutexW;
+        let name = format!("kronos-ipc-acceptance-{run}-telemetry");
+        let mutex_name: Vec<u16> = format!("Local\\{name}_mtx").encode_utf16().chain(Some(0)).collect();
+        let raw = unsafe { CreateMutexW(std::ptr::null(), 0, mutex_name.as_ptr()) };
+        assert!(!raw.is_null());
+        let mutex = unsafe { OwnedHandle::from_raw_handle(raw as _) };
+        assert!(ShmRingBuffer::new_exclusive(&name, 64 * 1024).is_err(), "existing mutex was reused");
+        drop(mutex);
+        // Partial construction on a mutex collision must release the new mapping too.
+        drop(ShmRingBuffer::new_exclusive(&name, 64 * 1024).unwrap());
+    }
+}
+
 /// Global production Shared-Memory Ring Buffer for zero-copy kernel/daemon throughput telemetry.
 fn global_telemetry_shm() -> Option<&'static ShmRingBuffer> {
+    #[cfg(feature = "ipc-acceptance")]
+    if crate::desktop_acceptance::active().is_some() {
+        return Some(crate::desktop_acceptance::owned_telemetry_ring());
+    }
     static GLOBAL_SHM: std::sync::OnceLock<Option<ShmRingBuffer>> = std::sync::OnceLock::new();
     GLOBAL_SHM
         .get_or_init(|| ShmRingBuffer::new("kronos_production_telemetry_ring", 64 * 1024).ok())

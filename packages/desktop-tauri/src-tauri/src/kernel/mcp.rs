@@ -141,6 +141,28 @@ pub struct ExternalMcpServerStatus {
     pub last_error: Option<String>,
 }
 
+#[cfg(all(test, feature = "ipc-acceptance"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_acceptance_mcp_path_is_owned() {
+        // A run must select its config without consulting the platform home.
+        let fixture = crate::desktop_acceptance::tests::Fixture::new();
+        let context = crate::desktop_acceptance::AcceptanceContext::from_descriptor(&fixture.descriptor).unwrap();
+        let fallback_called = std::cell::Cell::new(false);
+        let decoy = fixture.root.parent().unwrap().join("decoy-home");
+        let actual = McpHub::scoped_servers_config_path(Some(&context), || {
+            fallback_called.set(true);
+            Some(decoy.clone())
+        }).unwrap();
+        assert_eq!(actual, context.root.join("home/mcp_servers.json"));
+        assert!(!fallback_called.get());
+        assert_eq!(McpHub::scoped_servers_config_path(None, || Some(decoy.clone())), Some(decoy.join(".paseo/mcp_servers.json")));
+        assert!(McpHub::scoped_servers_config_path(None, || None).is_none());
+    }
+}
+
 impl Default for McpHub {
     fn default() -> Self {
         Self::new()
@@ -904,9 +926,22 @@ impl McpHub {
         );
     }
 
-    fn servers_config_path() -> Option<std::path::PathBuf> {
-        let base = dirs::home_dir()?.join(".paseo");
-        Some(base.join("mcp_servers.json"))
+    pub(crate) fn servers_config_path() -> Option<std::path::PathBuf> {
+        #[cfg(feature = "ipc-acceptance")]
+        { return Self::scoped_servers_config_path(crate::desktop_acceptance::active(), dirs::home_dir); }
+        #[cfg(not(feature = "ipc-acceptance"))]
+        { Some(dirs::home_dir()?.join(".paseo/mcp_servers.json")) }
+    }
+
+    #[cfg(feature = "ipc-acceptance")]
+    fn scoped_servers_config_path(
+        context: Option<&crate::desktop_acceptance::AcceptanceContext>,
+        fallback: impl FnOnce() -> Option<std::path::PathBuf>,
+    ) -> Option<std::path::PathBuf> {
+        if let Some(context) = context {
+            return Some(context.resource_plan().mcp);
+        }
+        Some(fallback()?.join(".paseo/mcp_servers.json"))
     }
 
     pub fn load_external_servers() -> Vec<ExternalMcpServerConfig> {

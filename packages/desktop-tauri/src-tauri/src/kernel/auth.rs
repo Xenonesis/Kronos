@@ -71,6 +71,15 @@ pub fn read_local_credential(home: &Path) -> Option<String> {
     }
 }
 
+/// Ensures a valid local credential exists in `{home}/local-credential`.
+/// Reuses existing valid token if present; generates and writes a new one if missing or invalid.
+pub fn ensure_local_credential(home: &Path) -> std::io::Result<String> {
+    if let Some(token) = read_local_credential(home) {
+        return Ok(token);
+    }
+    write_local_credential(home)
+}
+
 /// Deletes `{home}/local-credential`.
 pub fn delete_local_credential(home: &Path) -> std::io::Result<()> {
     let path = home.join(LOCAL_CREDENTIAL_FILE);

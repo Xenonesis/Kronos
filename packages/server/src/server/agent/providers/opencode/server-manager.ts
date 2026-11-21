@@ -27,7 +27,7 @@ export const DEFAULT_OPENCODE_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 /** Budget for the OpenCode HTTP server to become usable after spawn. */
 export const OPENCODE_SERVER_STARTUP_TIMEOUT_MS = 30_000;
 /** One stalled SSE attempt plus enough time for the consumer's retry. */
-export const OPENCODE_EVENT_STREAM_READY_TIMEOUT_MS = 45_000;
+export const OPENCODE_EVENT_STREAM_READY_TIMEOUT_MS = 15_000;
 const OPENCODE_SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 5_000;
 const OPENCODE_SERVER_FORCE_SHUTDOWN_TIMEOUT_MS = 1_000;
 

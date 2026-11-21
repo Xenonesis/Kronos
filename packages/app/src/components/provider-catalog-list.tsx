@@ -14,8 +14,55 @@ import {
   type AcpProviderCatalogItem,
 } from "@/hooks/use-acp-provider-catalog";
 import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
+import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import { SPACING, type Theme } from "@/styles/theme";
 import { settingsStyles } from "@/styles/settings";
+
+const BUILTIN_RESTORE_CATALOG: Record<
+  string,
+  { title: string; description: string; installLink: string }
+> = {
+  claude: {
+    title: "Claude",
+    description: "Anthropic's multi-tool assistant with MCP support, streaming, and deep reasoning",
+    installLink: "https://docs.anthropic.com/en/docs/agents-and-tools/claude-code",
+  },
+  codex: {
+    title: "Codex",
+    description: "OpenAI's Codex workspace agent with sandbox controls and optional network access",
+    installLink: "https://openai.com",
+  },
+  copilot: {
+    title: "Copilot",
+    description: "GitHub Copilot via Agent Client Protocol with dynamic modes and session support",
+    installLink: "https://github.com/features/copilot",
+  },
+  opencode: {
+    title: "OpenCode",
+    description: "Open-source coding assistant with multi-provider model support",
+    installLink: "https://github.com/opencode-ai/opencode",
+  },
+  pi: {
+    title: "Pi",
+    description: "Minimal terminal-based coding agent with multi-provider LLM support",
+    installLink: "https://github.com/mariozechner/pi",
+  },
+  omp: {
+    title: "Oh My Pi",
+    description: "Multi-provider coding agent with native approvals, host tools, and subagents",
+    installLink: "https://github.com/can1357/oh-my-pi",
+  },
+  ollama: {
+    title: "Ollama",
+    description: "Local neural engine running on http://127.0.0.1:11434",
+    installLink: "https://ollama.com",
+  },
+  lmstudio: {
+    title: "LM Studio",
+    description: "Local LLM inference server running on http://127.0.0.1:1234",
+    installLink: "https://lmstudio.ai",
+  },
+};
 
 interface ProviderCatalogListProps {
   serverId: string;
@@ -112,21 +159,54 @@ export function ProviderCatalogList({
   const { t } = useTranslation();
   const { entries: catalogEntries } = useAcpProviderCatalog();
   const { entries: providerEntries } = useProvidersSnapshot(serverId);
+  const { config } = useDaemonConfig(serverId);
   const [search, setSearch] = useState("");
   const [gridWidth, setGridWidth] = useState<number | null>(null);
 
-  const installedIds = useMemo(
-    () => new Set(providerEntries?.map((entry) => entry.provider) ?? []),
-    [providerEntries],
+  const installedIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const entry of providerEntries ?? []) {
+      const isHidden = Boolean(
+        (config?.providers?.[entry.provider] as { hidden?: boolean } | undefined)?.hidden,
+      );
+      if (!isHidden) {
+        ids.add(entry.provider);
+      }
+    }
+    return ids;
+  }, [providerEntries, config?.providers]);
+
+  const hiddenBuiltinEntries = useMemo(() => {
+    const list: AcpProviderCatalogItem[] = [];
+    if (!config?.providers) return list;
+    for (const [id, prov] of Object.entries(config.providers)) {
+      if ((prov as { hidden?: boolean })?.hidden && BUILTIN_RESTORE_CATALOG[id]) {
+        list.push({
+          id,
+          title: BUILTIN_RESTORE_CATALOG[id].title,
+          description: BUILTIN_RESTORE_CATALOG[id].description,
+          version: "1.0.0",
+          iconSvg: null,
+          installLink: BUILTIN_RESTORE_CATALOG[id].installLink,
+          command: [id],
+        });
+      }
+    }
+    return list;
+  }, [config?.providers]);
+
+  const allCatalogEntries = useMemo(
+    () => [...hiddenBuiltinEntries, ...catalogEntries],
+    [hiddenBuiltinEntries, catalogEntries],
   );
 
   const availableEntries = useMemo(
     () =>
       rankProviderCatalog(
-        catalogEntries.filter((entry) => !installedIds.has(entry.id)),
+        allCatalogEntries.filter((entry) => !installedIds.has(entry.id)),
         search,
       ),
-    [catalogEntries, installedIds, search],
+    [allCatalogEntries, installedIds, search],
   );
 
   const handleGridLayout = useCallback((event: LayoutChangeEvent) => {

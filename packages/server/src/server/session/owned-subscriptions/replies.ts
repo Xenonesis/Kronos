@@ -51,6 +51,7 @@ export function isReply(request: SessionInboundMessage, message: SessionOutbound
   if (
     !("requestId" in request) ||
     !("payload" in message) ||
+    !message.payload ||
     !("requestId" in message.payload) ||
     message.payload.requestId !== request.requestId
   )

@@ -76,6 +76,11 @@ fn extract_primary_file(output: &str) -> Option<String> {
 /// Runs a fast non-destructive diagnostic probe against the workspace.
 /// Returns Some(DiagnosticErrorSummary) if compilation/typecheck failures exist.
 pub fn run_workspace_diagnostic_probe(workspace_root: &Path) -> Option<DiagnosticErrorSummary> {
+    // Only run heavy diagnostic probes if explicitly opted-in via env var to prevent laptop CPU saturation and UI freezes
+    if !std::env::var("KRONOS_AUTONOMOUS_DIAGNOSTICS").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false) {
+        return None;
+    }
+
     if !workspace_root.is_dir() {
         return None;
     }

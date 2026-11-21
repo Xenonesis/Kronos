@@ -1,6 +1,7 @@
 pub mod generated_types;
 pub mod protocol;
 pub mod server;
+pub mod session;
 
 pub mod git;
 pub mod shm;
@@ -34,6 +35,8 @@ pub mod lsp;
 pub mod notes_store;
 pub mod ci_repair;
 
+#[cfg(test)]
+mod session_test;
 #[cfg(test)]
 mod protocol_test;
 #[cfg(test)]

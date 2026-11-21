@@ -155,7 +155,9 @@ fn is_path_ignored(path: &Path, root: &Path, custom_patterns: &[String]) -> bool
     let rel_path = relative_to_root(path, root);
 
     // Default ignore rules for development workspaces
-    const DEFAULT_IGNORES: &[&str] = &[".git", "node_modules", "target"];
+    const DEFAULT_IGNORES: &[&str] = &[
+        ".git", "node_modules", "target", "dist", "build", ".next", ".expo", ".turbo", ".cache", ".idea", ".vscode"
+    ];
     for default_pat in DEFAULT_IGNORES {
         if matches_pattern(&rel_path, default_pat) {
             return true;

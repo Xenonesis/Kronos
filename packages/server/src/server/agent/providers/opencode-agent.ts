@@ -820,9 +820,27 @@ function buildOpenCodeModelDefinition(
         { id: OPENCODE_DEFAULT_VARIANT_ID, label: "Default", isDefault: true },
         ...rawVariants
           .filter((id) => id !== OPENCODE_DEFAULT_VARIANT_ID)
-          .map((id) => ({ id, label: id })),
+          .map((id) => ({
+            id,
+            label:
+              id === "low"
+                ? "Low"
+                : id === "medium"
+                  ? "Medium"
+                  : id === "high"
+                    ? "High"
+                    : id === "max"
+                      ? "Max"
+                      : id,
+          })),
       ]
-    : [];
+    : [
+        { id: OPENCODE_DEFAULT_VARIANT_ID, label: "Default", isDefault: true },
+        { id: "low", label: "Low" },
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+        { id: "max", label: "Max" },
+      ];
 
   return {
     provider: "opencode",
@@ -4016,7 +4034,7 @@ class OpenCodeAgentSession implements AgentSession {
     }
     await this.reconnectIfServerExited();
     try {
-      await this.awaitRunnerQuiescence();
+      await withTimeout(this.awaitRunnerQuiescence(), 10_000, "OpenCode runner quiescence");
     } catch (error) {
       this.rethrowRunnerWaitError(error);
     }

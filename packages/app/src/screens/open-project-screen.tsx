@@ -4,7 +4,14 @@ import { useTranslation } from "react-i18next";
 import { View, Text, Pressable, ScrollView, TextInput } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useRouter } from "expo-router";
-import { FolderOpen, Inbox, Plug, Smartphone, MessageSquarePlus, Sparkles } from "lucide-react-native";
+import {
+  FolderOpen,
+  Inbox,
+  Plug,
+  Smartphone,
+  MessageSquarePlus,
+  Sparkles,
+} from "lucide-react-native";
 import { PaseoLogo } from "@/components/icons/paseo-logo";
 import { CommunityLinks } from "@/components/community-links";
 import { MenuHeader } from "@/components/headers/menu-header";

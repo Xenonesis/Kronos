@@ -13,11 +13,10 @@ export interface TranslationOptions {
 }
 export type TranslationKey<Resource> = {
   [Key in keyof Resource & string]: Resource[Key] extends string
-    ?
-        | Key
-        | (Key extends `${infer Base}_${"zero" | "one" | "two" | "few" | "many" | "other"}`
-            ? Base
-            : never)
+    ? | Key
+      | (Key extends `${infer Base}_${"zero" | "one" | "two" | "few" | "many" | "other"}`
+          ? Base
+          : never)
     : Resource[Key] extends TranslationResource
       ? `${Key}.${TranslationKey<Resource[Key]>}`
       : never;

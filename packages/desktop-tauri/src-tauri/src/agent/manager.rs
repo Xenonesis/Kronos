@@ -51,8 +51,9 @@ impl ReservedTurn {
                     .and_then(|config| config["providerHandleId"].as_str())
             })
             .map(str::to_owned);
+        let continuity_required = record.provider != "opencode";
         record.runtime_info = Some(serde_json::json!({
-            "provider": record.provider, "continuityRequired": true, "providerHandleId": handle
+            "provider": record.provider, "continuityRequired": continuity_required, "providerHandleId": handle
         }));
         self.manager
             .storage
@@ -257,6 +258,11 @@ impl AgentManager {
             deleting: Arc::new(Mutex::new(HashSet::new())),
             home_dir,
         })
+    }
+
+    #[cfg(feature = "ipc-acceptance")]
+    pub(crate) fn acceptance_home(&self) -> &std::path::Path {
+        self.home_dir.as_path()
     }
 
     pub fn storage(&self) -> &Arc<AgentStorage> {

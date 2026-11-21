@@ -67,19 +67,17 @@ function agentHistory(
 }
 
 function projects(...rootPaths: Array<{ rootPath: string; archived?: boolean }>) {
-  const records = rootPaths.map(
-    ({ rootPath, archived }, index): PersistedProjectRecord => ({
-      projectId: `project-${index}`,
-      rootPath,
-      kind: "git",
-      displayName: path.basename(rootPath),
-      projectKey: null,
-      customName: null,
-      createdAt: NOW.toISOString(),
-      updatedAt: NOW.toISOString(),
-      archivedAt: archived ? NOW.toISOString() : null,
-    }),
-  );
+  const records = rootPaths.map(({ rootPath, archived }, index): PersistedProjectRecord => ({
+    projectId: `project-${index}`,
+    rootPath,
+    kind: "git",
+    displayName: path.basename(rootPath),
+    projectKey: null,
+    customName: null,
+    createdAt: NOW.toISOString(),
+    updatedAt: NOW.toISOString(),
+    archivedAt: archived ? NOW.toISOString() : null,
+  }));
   return { list: async () => records };
 }
 

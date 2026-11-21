@@ -370,17 +370,19 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         voiceRuntime?.onTurnEvent(serverId, agentId, event.type);
       }
       if (event.type === "turn_completed") {
-        const usage = (event as {
-          type: string;
-          turnId?: string;
-          usage?: {
-            inputTokens?: number;
-            outputTokens?: number;
-            cachedInputTokens?: number;
-            cacheReadTokens?: number;
-            totalCostUsd?: number;
-          };
-        }).usage;
+        const usage = (
+          event as {
+            type: string;
+            turnId?: string;
+            usage?: {
+              inputTokens?: number;
+              outputTokens?: number;
+              cachedInputTokens?: number;
+              cacheReadTokens?: number;
+              totalCostUsd?: number;
+            };
+          }
+        ).usage;
         const turnId = (event as { turnId?: string }).turnId;
         if (usage && ((usage.inputTokens ?? 0) > 0 || (usage.outputTokens ?? 0) > 0)) {
           const agentModel =

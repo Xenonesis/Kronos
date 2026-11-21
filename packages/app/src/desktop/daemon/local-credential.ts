@@ -1,12 +1,13 @@
 import type { HostConnection } from "@/types/host-connection";
 import { getDesktopHost } from "@/desktop/host";
+import { getManagedDesktopStatus, getManagedDesktopTransport } from "./desktop-daemon";
 
 function connectionListen(connection: HostConnection): string | null {
   switch (connection.type) {
     case "directTcp":
       return connection.endpoint;
     case "directSocket":
-      return `unix://${connection.path}`;
+      return connection.path === "ipc://embedded" ? connection.path : `unix://${connection.path}`;
     case "directPipe":
       return `pipe://${connection.path}`;
     case "remoteSsh":
@@ -16,15 +17,17 @@ function connectionListen(connection: HostConnection): string | null {
   }
 }
 
-// Desktop main checks that this target matches the live desktop-managed daemon.
-// A plain browser has no bridge and falls back to its saved host password.
+// Native rechecks actual caller, daemon identity, ownership and current target on every hello.
 export async function readDesktopManagedLocalCredential(
   connection: HostConnection,
-  invoke: (listen: string) => Promise<unknown> = async (listen) =>
-    getDesktopHost()?.invoke?.("desktop_local_credential", { listen }),
+  serverId: string,
+  invoke: (input: { listen: string; serverId: string }) => Promise<unknown> = async (input) =>
+    getDesktopHost()?.invoke?.("desktop_local_credential", input),
 ): Promise<string | undefined> {
+  if (!serverId || getManagedDesktopStatus()?.serverId !== serverId) return undefined;
+  getManagedDesktopTransport(connection, serverId);
   const listen = connectionListen(connection);
   if (!listen) return undefined;
-  const credential = await invoke(listen);
+  const credential = await invoke({ listen, serverId });
   return typeof credential === "string" ? credential : undefined;
 }

@@ -189,7 +189,9 @@ export const GlobalSearchReplaceModal = memo(function GlobalSearchReplaceModal({
         >
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <Search size={16} color="#60a5fa" />
-            <span style={{ fontWeight: 600, fontSize: "14px" }}>Search and Replace in Workspace</span>
+            <span style={{ fontWeight: 600, fontSize: "14px" }}>
+              Search and Replace in Workspace
+            </span>
           </div>
           <button
             onClick={onClose}
@@ -442,7 +444,14 @@ export const GlobalSearchReplaceModal = memo(function GlobalSearchReplaceModal({
                             <span style={{ color: "#71717a", width: "32px", textAlign: "right" }}>
                               {m.lineNumber}
                             </span>
-                            <span style={{ color: "#d4d4d8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            <span
+                              style={{
+                                color: "#d4d4d8",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
                               {m.lineText}
                             </span>
                           </div>

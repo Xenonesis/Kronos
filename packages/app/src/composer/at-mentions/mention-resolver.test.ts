@@ -112,7 +112,7 @@ describe("mention-resolver", () => {
       ],
     });
 
-    const prompt = "Please review our architecture from @note:\"System Design\"";
+    const prompt = 'Please review our architecture from @note:"System Design"';
     const resolved = await resolvePromptMentionsAsync(prompt);
 
     expect(resolved).toContain("[Attached Context: Note - System Design]");

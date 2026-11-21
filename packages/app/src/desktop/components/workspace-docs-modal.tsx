@@ -381,9 +381,9 @@ export const WorkspaceDocsModal = memo(function WorkspaceDocsModal({
     [crdtRoomFor, selectedPath],
   );
 
-function bumpCounter(value: number): number {
-  return value + 1;
-}
+  function bumpCounter(value: number): number {
+    return value + 1;
+  }
 
   const handleManualSyncCrdt = useCallback(() => {
     void (async () => {

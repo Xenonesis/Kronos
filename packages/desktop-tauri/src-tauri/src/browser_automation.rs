@@ -383,11 +383,15 @@ fn ensure_or_create_window(
     let parsed = url::Url::parse(initial_url)
         .map_err(|e| format!("Invalid URL '{initial_url}': {e}"))?;
 
-    let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(parsed))
+    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(parsed))
         .title(format!("Kronos Browser - {initial_url}"))
         .inner_size(1280.0, 800.0)
         .visible(visible)
-        .initialization_script(INIT_SCRIPT)
+        .initialization_script(INIT_SCRIPT);
+    if let Some(directory) = crate::desktop_acceptance::window_data_directory(2) {
+        builder = builder.data_directory(directory);
+    }
+    let win = builder
         .build()
         .map_err(|e| format!("Failed creating WebView2 window: {e}"))?;
 

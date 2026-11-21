@@ -347,8 +347,14 @@ pub fn execute_schedule_run(id: &str) -> Result<Value, String> {
     Ok(schedule)
 }
 
+static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(feature = "ipc-acceptance")]
+pub(crate) fn scheduler_registered() -> bool {
+    STARTED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 pub fn start_scheduler_engine() {
-    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }

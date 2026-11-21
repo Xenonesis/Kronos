@@ -11,11 +11,19 @@ static START_TIME: LazyLock<Instant> = LazyLock::new(Instant::now);
 static TRACING_GUARD: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
     std::sync::OnceLock::new();
 
+pub(crate) fn log_directory(owned: Option<&std::path::Path>) -> std::path::PathBuf {
+    match owned {
+        Some(path) => path.to_path_buf(),
+        None => dirs::data_local_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("Kronos")
+            .join("logs"),
+    }
+}
+
 pub fn init_tracing(startup_trace: bool) {
-    let log_dir = dirs::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("Kronos")
-        .join("logs");
+    let owned_logs = crate::desktop_acceptance::acceptance_logs_dir();
+    let log_dir = log_directory(owned_logs.as_deref());
     let _ = std::fs::create_dir_all(&log_dir);
 
     let file_appender = tracing_appender::rolling::daily(&log_dir, "kronos.log");
@@ -193,5 +201,23 @@ mod tests {
             assert!(telemetry.mica_enabled);
             assert!(telemetry.memory_working_set_bytes > 0);
         }
+    }
+
+    #[cfg(feature = "ipc-acceptance")]
+    #[test]
+    fn test_acceptance_log_directory_is_owned() {
+        let temporary = tempfile::tempdir().unwrap();
+        let context = crate::desktop_acceptance::AcceptanceContext {
+            root: temporary.path().to_path_buf(),
+            run_id: "0123456789abcdef0123456789abcdef".to_string(),
+            transport: crate::desktop_acceptance::AcceptanceTransport::Ipc,
+            case_id: crate::desktop_acceptance::AcceptanceCase::Preflight,
+        };
+        let plan = context.resource_plan();
+        assert_eq!(log_directory(Some(&plan.logs)), plan.logs);
+        assert!(plan.logs.starts_with(temporary.path()));
+        assert_ne!(log_directory(None), plan.logs);
+        // No context is installed until supervised startup exists; logging stays on the normal path.
+        assert!(crate::desktop_acceptance::acceptance_logs_dir().is_none());
     }
 }

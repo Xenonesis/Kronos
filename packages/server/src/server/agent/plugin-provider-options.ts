@@ -26,25 +26,24 @@ export function readPluginOptionState(config: ProviderConfigState): PluginOption
   }
   const settings = config.settings ?? [];
   return {
-    controls: settings.map(
-      (setting): AgentOptionControl =>
-        setting.type === "toggle"
-          ? {
-              type: "toggle",
-              key: setting.id,
-              label: setting.label,
-              ...(setting.description ? { description: setting.description } : {}),
-            }
-          : {
-              type: "select",
-              key: setting.id,
-              label: setting.label,
-              ...(setting.description ? { description: setting.description } : {}),
-              choices: setting.options.map((option) => ({
-                value: option.value,
-                label: option.label,
-              })),
-            },
+    controls: settings.map((setting): AgentOptionControl =>
+      setting.type === "toggle"
+        ? {
+            type: "toggle",
+            key: setting.id,
+            label: setting.label,
+            ...(setting.description ? { description: setting.description } : {}),
+          }
+        : {
+            type: "select",
+            key: setting.id,
+            label: setting.label,
+            ...(setting.description ? { description: setting.description } : {}),
+            choices: setting.options.map((option) => ({
+              value: option.value,
+              label: option.label,
+            })),
+          },
     ),
     options: Object.fromEntries(settings.map((setting) => [setting.id, setting.value])),
     legacySettings: true,

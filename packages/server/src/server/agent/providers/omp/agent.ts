@@ -610,7 +610,7 @@ function createRuntime(
     runtimeSettings,
     command: ["omp"],
     commandsRpcName: "get_available_commands",
-    readyTimeoutMs: providerOptions.readyTimeoutMs,
+    readyTimeoutMs: providerOptions.readyTimeoutMs ?? 10_000,
     requestTimeoutMs: providerOptions.rpcTimeoutMs,
   });
 }

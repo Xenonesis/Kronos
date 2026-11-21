@@ -25,6 +25,109 @@ function makeHost(serverId: string): HostProfile {
   };
 }
 
+describe("managed desktop normalization", () => {
+  it("deduplicates old managed routes, preserves explicit sockets, and is idempotent after reload", () => {
+    const external = {
+      id: "socket:/tmp/other.sock",
+      type: "directSocket" as const,
+      path: "/tmp/other.sock",
+    };
+    const local = {
+      ...makeHost("managed"),
+      label: "My workstation",
+      password: "saved-password",
+      connections: [
+        { id: "direct:localhost:44111", type: "directTcp" as const, endpoint: "localhost:44111" },
+        {
+          id: "socket:/tmp/kronos-ipc.sock",
+          type: "directSocket" as const,
+          path: "/tmp/kronos-ipc.sock",
+        },
+        {
+          id: "socket:/tmp/kronos-ipc-44111.sock",
+          type: "directSocket" as const,
+          path: "/tmp/kronos-ipc-44111.sock",
+        },
+        external,
+      ],
+    };
+    const connection = {
+      id: "socket:ipc://embedded",
+      type: "directSocket" as const,
+      path: "ipc://embedded",
+    };
+    const next = upsertHostConnectionInProfiles({
+      profiles: [local, { ...local }],
+      serverId: "managed",
+      desktopManaged: true,
+      connection,
+    });
+    expect(next).toHaveLength(1);
+    expect(next[0]).toMatchObject({
+      serverId: "managed",
+      label: "My workstation",
+      password: "saved-password",
+      preferredConnectionId: "socket:ipc://embedded",
+    });
+    expect(next[0].connections).toEqual([external, external, connection]);
+    const reloaded = normalizeStoredHostProfile(next[0]);
+    expect(reloaded?.connections).toContainEqual(connection);
+    expect(
+      upsertHostConnectionInProfiles({
+        profiles: next,
+        serverId: "managed",
+        desktopManaged: true,
+        connection,
+      }),
+    ).toBe(next);
+    const rollback = upsertHostConnectionInProfiles({
+      profiles: next,
+      serverId: "managed",
+      desktopManaged: true,
+      connection: { id: "direct:localhost:55111", type: "directTcp", endpoint: "localhost:55111" },
+    });
+    expect(rollback[0].connections).toEqual([
+      external,
+      external,
+      { id: "direct:localhost:55111", type: "directTcp", endpoint: "localhost:55111" },
+    ]);
+    expect(rollback[0].preferredConnectionId).toBe("direct:localhost:55111");
+  });
+  it("normalizes only the exact managed identity, preserving another localhost host", () => {
+    const local = {
+      ...makeHost("managed"),
+      connections: [
+        { id: "direct:localhost:44111", type: "directTcp" as const, endpoint: "localhost:44111" },
+        {
+          id: "socket:/tmp/external.sock",
+          type: "directSocket" as const,
+          path: "/tmp/external.sock",
+        },
+      ],
+    };
+    const unrelated = {
+      ...makeHost("unrelated"),
+      connections: [
+        { id: "direct:localhost:6767", type: "directTcp" as const, endpoint: "localhost:6767" },
+      ],
+    };
+    const next = upsertHostConnectionInProfiles({
+      profiles: [local, unrelated],
+      serverId: "managed",
+      desktopManaged: true,
+      connection: { id: "direct:localhost:6767", type: "directTcp", endpoint: "localhost:6767" },
+    });
+    expect(next).toHaveLength(2);
+    expect(next[1]).toBe(unrelated);
+    expect(next[0].connections.map((connection) => connection.id)).toEqual([
+      "socket:/tmp/external.sock",
+      "direct:localhost:6767",
+    ]);
+    expect(next[0].createdAt).toBe(local.createdAt);
+    expect(next[0].lifecycle).toBe(local.lifecycle);
+  });
+});
+
 describe("orderHostsLocalFirst", () => {
   it("moves the local host to the first position", () => {
     const remote = makeHost("srv_remote");

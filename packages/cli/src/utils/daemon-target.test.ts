@@ -7,12 +7,15 @@ import {
   buildDaemonConnectionCommandError,
 } from "./client.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 test("explicit selectors win over both environment selectors", () => {
   const env = { PASEO_HOME: "/tmp/a", PASEO_HOST: "unused:12345" };
-  expect(selectDaemonTarget({ home: "/tmp/b" }, env)).toEqual({ kind: "instance", home: "/tmp/b" });
+  expect(selectDaemonTarget({ home: "/tmp/b" }, env)).toEqual({
+    kind: "instance",
+    home: resolve("/tmp/b"),
+  });
   expect(selectDaemonTarget({ host: "chosen:23456" }, env)).toEqual({
     kind: "endpoint",
     host: "chosen:23456",
@@ -27,13 +30,13 @@ test("endpoint connections resolve local credentials from PASEO_HOME", () => {
       { kind: "endpoint", host: "localhost:6767" },
       { PASEO_HOME: "/tmp/custom-home" },
     ),
-  ).toBe("/tmp/custom-home");
+  ).toBe(resolve("/tmp/custom-home"));
 });
 
 test("local operations ignore routing environment but reject an explicit endpoint", () => {
   expect(
     selectDaemonTarget({}, { PASEO_HOME: "/tmp/b", PASEO_HOST: "unused:12345" }, true),
-  ).toEqual({ kind: "instance", home: "/tmp/b" });
+  ).toEqual({ kind: "instance", home: resolve("/tmp/b") });
   expect(() => selectDaemonTarget({ host: "chosen:23456" }, {}, true)).toThrow();
 });
 

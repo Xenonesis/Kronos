@@ -182,27 +182,30 @@ describe("Hub guided setup continuation", () => {
     );
   });
 
-  it("rejects a symlinked trigger directory without writing outside the project", async () => {
-    const cwd = await temporaryDirectory();
-    const outside = await temporaryDirectory();
-    await mkdir(path.join(cwd, ".paseo"));
-    await symlink(outside, path.join(cwd, ".paseo", "triggers"));
-    const credentials = new MemoryCredentials();
-    credentials.save({ origin: "https://hub.test", credential: "secret" });
-    const prompts = new PromptAnswers([], ["codex", "gpt-5", "full-access"], ["U123"]);
+  it.skipIf(process.platform === "win32")(
+    "rejects a symlinked trigger directory without writing outside the project",
+    async () => {
+      const cwd = await temporaryDirectory();
+      const outside = await temporaryDirectory();
+      await mkdir(path.join(cwd, ".paseo"));
+      await symlink(outside, path.join(cwd, ".paseo", "triggers"));
+      const credentials = new MemoryCredentials();
+      credentials.save({ origin: "https://hub.test", credential: "secret" });
+      const prompts = new PromptAnswers([], ["codex", "gpt-5", "full-access"], ["U123"]);
 
-    await assert.rejects(
-      runHubGuidedSetup(setupEnvironment(cwd, credentials, new SetupDaemon(), prompts, []), {
-        origin: "https://hub.test",
-        daemonId: "daemon-1",
-        deploy: false,
-      }),
-      (error: unknown) =>
-        error instanceof Error && "code" in error && error.code === "HUB_TRIGGER_UNSAFE_PATH",
-    );
+      await assert.rejects(
+        runHubGuidedSetup(setupEnvironment(cwd, credentials, new SetupDaemon(), prompts, []), {
+          origin: "https://hub.test",
+          daemonId: "daemon-1",
+          deploy: false,
+        }),
+        (error: unknown) =>
+          error instanceof Error && "code" in error && error.code === "HUB_TRIGGER_UNSAFE_PATH",
+      );
 
-    await assert.rejects(readFile(path.join(outside, "slack-help.yml")), { code: "ENOENT" });
-  });
+      await assert.rejects(readFile(path.join(outside, "slack-help.yml")), { code: "ENOENT" });
+    },
+  );
 
   it("writes the explicitly selected Claude mode when the daemon has no default", async () => {
     const cwd = await temporaryDirectory();

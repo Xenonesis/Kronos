@@ -562,7 +562,9 @@ function expandKronosWorkflowPrompt(
 ): string {
   const argTail = slashCommand ? text.slice(slashCommand.end).trim() : "";
   const replaced = content.replace(/\$ARGUMENTS/g, argTail).replace(/\$ACTIVE_FILE/g, cwd);
-  return argTail && !content.includes("$ARGUMENTS") ? `${replaced.trimEnd()}\n\n${argTail}` : replaced;
+  return argTail && !content.includes("$ARGUMENTS")
+    ? `${replaced.trimEnd()}\n\n${argTail}`
+    : replaced;
 }
 
 function resolveSlashSelectionState(input: {

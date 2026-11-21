@@ -1,8 +1,5 @@
 import { describe, expect, test, beforeEach } from "vitest";
-import {
-  useArtifactsStore,
-  extractArtifactsFromSnippet,
-} from "./use-artifacts-store";
+import { useArtifactsStore, extractArtifactsFromSnippet } from "./use-artifacts-store";
 import type { Artifact } from "./types";
 
 describe("features/artifacts - useArtifactsStore", () => {

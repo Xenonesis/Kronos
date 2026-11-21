@@ -30,10 +30,14 @@ export function cleanOldBuildArtifacts() {
             try {
               execFileSync("taskkill", ["/F", "/IM", file, "/T"], { stdio: "ignore" });
               fs.rmSync(fullPath, { force: true, recursive: true });
-              console.log(`[Auto-Clean] Terminated running instance and removed stale artifact: ${file}`);
+              console.log(
+                `[Auto-Clean] Terminated running instance and removed stale artifact: ${file}`,
+              );
               cleanedCount++;
             } catch {
-              console.warn(`[Auto-Clean] Could not remove locked file (currently running): ${file}`);
+              console.warn(
+                `[Auto-Clean] Could not remove locked file (currently running): ${file}`,
+              );
             }
           } else {
             console.warn(`[Auto-Clean] Skipping ${file}: ${err.message}`);

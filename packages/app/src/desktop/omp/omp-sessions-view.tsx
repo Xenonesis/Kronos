@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { mutedIconColorMapping } from "@/components/ui/icon-color";
+import { getDaemonBaseUrl } from "@/desktop/daemon/daemon-endpoint";
 import { OmpSessionInspectorModal, type OmpSessionDetailData } from "./omp-session-inspector-modal";
 
 const ThemedBot = withUnistyles(Bot);
@@ -217,7 +218,8 @@ export function OmpSessionsView({
   const fetchSessions = useCallback(async () => {
     setIsLoading(true);
     try {
-      const url = new URL("http://127.0.0.1:6767/api/omp-sessions");
+      const baseUrl = getDaemonBaseUrl();
+      const url = new URL(`${baseUrl}/api/omp-sessions`);
       if (filterProjectOnly && currentProjectCwd) {
         url.searchParams.set("cwd", currentProjectCwd);
       }
@@ -245,9 +247,8 @@ export function OmpSessionsView({
     setInspectLoading(true);
     setInspectingSessionId(session.id);
     try {
-      const res = await fetch(
-        `http://127.0.0.1:6767/api/omp-sessions/${encodeURIComponent(session.id)}`,
-      );
+      const baseUrl = getDaemonBaseUrl();
+      const res = await fetch(`${baseUrl}/api/omp-sessions/${encodeURIComponent(session.id)}`);
       if (res.ok) {
         const data = (await res.json()) as { ok: boolean; session?: OmpSessionDetailData };
         if (data.ok && data.session) {

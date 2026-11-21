@@ -592,22 +592,52 @@ fn collect_skill_names_in_dir(dir: &Path, out: &mut BTreeSet<String>) {
     }
 }
 
+#[cfg(feature = "ipc-acceptance")]
+fn acceptance_discovery_root(
+    context: Option<&crate::desktop_acceptance::AcceptanceContext>,
+    workspace: bool,
+    fallback: impl FnOnce() -> PathBuf,
+) -> PathBuf {
+    if let Some(context) = context {
+        let plan = context.resource_plan();
+        return if workspace { plan.workspace } else { plan.home };
+    }
+    fallback()
+}
+
+fn discovery_home() -> PathBuf {
+    let fallback = || dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    #[cfg(feature = "ipc-acceptance")]
+    { acceptance_discovery_root(crate::desktop_acceptance::active(), false, fallback) }
+    #[cfg(not(feature = "ipc-acceptance"))]
+    { fallback() }
+}
+
+fn directory_suggestions_home() -> PathBuf {
+    #[cfg(feature = "ipc-acceptance")]
+    { acceptance_discovery_root(crate::desktop_acceptance::active(), true, discovery_home) }
+    #[cfg(not(feature = "ipc-acceptance"))]
+    { discovery_home() }
+}
+
+fn available_skill_names(home: &Path, managed_dir: &Path) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for dir in [
+        home.join(".paseo/skills"), home.join(".kronos/skills"),
+        home.join(".agents/skills"), home.join(".claude/skills"),
+        home.join(".gemini/config/skills"), managed_dir.to_path_buf(),
+    ] {
+        collect_skill_names_in_dir(&dir, &mut names);
+    }
+    names
+}
+
 pub fn handle_agent_skills_rpc(kind: &str, msg: &Value, request_id: &str) -> Value {
     let store = get_config_store();
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let home = discovery_home();
     let managed_dir = crate::get_data_dir().join("skills");
 
-    let mut available_set = BTreeSet::new();
-    for dir in [
-        home.join(".paseo").join("skills"),
-        home.join(".kronos").join("skills"),
-        home.join(".agents").join("skills"),
-        home.join(".claude").join("skills"),
-        home.join(".gemini").join("config").join("skills"),
-        managed_dir.clone(),
-    ] {
-        collect_skill_names_in_dir(&dir, &mut available_set);
-    }
+    let available_set = available_skill_names(&home, &managed_dir);
 
     if kind == "save_selection" {
         if let Some(sel) = msg.get("selection").or_else(|| msg.pointer("/payload/selection")) {
@@ -727,8 +757,10 @@ pub fn handle_agent_skills_rpc(kind: &str, msg: &Value, request_id: &str) -> Val
 }
 
 pub fn handle_plugin_list_or_catalog(catalog: bool, request_id: &str) -> Value {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let data_dir = crate::get_data_dir();
+    plugin_list_in(catalog, request_id, &discovery_home(), &crate::get_data_dir())
+}
+
+fn plugin_list_in(catalog: bool, request_id: &str, home: &Path, data_dir: &Path) -> Value {
     let state_path = data_dir.join("plugins_state.json");
     let state_overrides: HashMap<String, bool> = std::fs::read_to_string(&state_path)
         .ok()
@@ -997,9 +1029,10 @@ pub fn handle_workspace_setup_run(ws_id: &str, request_id: &str) -> Value {
     let branch_name =
         run_git_trim(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|| "HEAD".to_string());
     let cfg_candidates = [
+        dir.join(".kronos").join("kronos.json"),
+        dir.join("kronos.json"),
         dir.join(".paseo").join("paseo.json"),
         dir.join("paseo.json"),
-        dir.join(".kronos").join("kronos.json"),
     ];
     let mut setup_cmds: Vec<String> = Vec::new();
     for cand in cfg_candidates {
@@ -1570,7 +1603,7 @@ pub fn inspect_project_placement(
             "isGit": is_git,
             "currentBranch": current_branch,
             "remoteUrl": remote_url,
-            "worktreeRoot": if is_paseo_worktree { repo_root } else { None },
+            "worktreeRoot": if is_git { repo_root.clone() } else { None },
             "isPaseoOwnedWorktree": is_paseo_worktree,
             "mainRepoRoot": main_repo_root
         }
@@ -1929,9 +1962,9 @@ pub fn handle_stash_save(msg: &Value, request_id: &str) -> Value {
     let cwd_str = msg_str(msg, "cwd");
     let branch = msg_str(msg, "branch");
     let label = if branch.trim().is_empty() {
-        "paseo-stash".to_string()
+        "kronos-stash".to_string()
     } else {
-        format!("paseo:{branch}")
+        format!("kronos:{branch}")
     };
     let res = resolve_git_dir(cwd_str)
         .and_then(|cwd| run_git_checked(&cwd, &["stash", "push", "-u", "-m", &label]).map(|_| ()));
@@ -1979,16 +2012,23 @@ pub fn handle_stash_list(msg: &Value, request_id: &str) -> Value {
             let mut parts = line.splitn(2, '\x1f');
             let _ref_name = parts.next().unwrap_or("");
             let msg_text = parts.next().unwrap_or("").to_string();
-            let is_paseo = msg_text.contains("paseo:") || msg_text.contains("paseo-stash");
-            if paseo_only && !is_paseo {
+            let is_kronos = msg_text.contains("kronos:") || msg_text.contains("kronos-stash");
+            let is_legacy = msg_text.contains("paseo:") || msg_text.contains("paseo-stash");
+            let is_owned = is_kronos || is_legacy;
+            if paseo_only && !is_owned {
                 continue;
             }
-            let branch = msg_text.split("paseo:").nth(1).map(|s| s.trim().to_string());
+            let branch = msg_text
+                .split("kronos:")
+                .nth(1)
+                .or_else(|| msg_text.split("paseo:").nth(1))
+                .map(|s| s.trim().to_string());
             entries.push(json!({
                 "index": i,
                 "message": msg_text,
                 "branch": branch,
-                "isPaseo": is_paseo
+                "isKronos": is_owned,
+                "isPaseo": is_owned
             }));
         }
         entries
@@ -2516,9 +2556,15 @@ pub fn handle_read_project_config(msg: &Value, request_id: &str) -> Value {
     let cwd_str = msg_str(msg, "cwd");
     let root = if cwd_str.trim().is_empty() { "." } else { cwd_str };
     let root_path = Path::new(root);
+    let kronos_config_path = root_path.join(".kronos").join("kronos.json");
+    let fallback_kronos_path = root_path.join("kronos.json");
     let config_path = root_path.join(".paseo").join("paseo.json");
     let fallback_path = root_path.join("paseo.json");
-    let target = if config_path.exists() {
+    let target = if kronos_config_path.exists() {
+        Some(kronos_config_path)
+    } else if fallback_kronos_path.exists() {
+        Some(fallback_kronos_path)
+    } else if config_path.exists() {
         Some(config_path)
     } else if fallback_path.exists() {
         Some(fallback_path)
@@ -2552,7 +2598,14 @@ pub fn handle_write_project_config(msg: &Value, request_id: &str) -> Value {
         .or_else(|| msg.get("payload").and_then(|p| p.get("config")))
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let target = Path::new(root).join(".paseo").join("paseo.json");
+    let root_path = Path::new(root);
+    let target = if root_path.join(".kronos").exists() || root_path.join("kronos.json").exists() {
+        root_path.join(".kronos").join("kronos.json")
+    } else if root_path.join(".paseo").join("paseo.json").exists() {
+        root_path.join(".paseo").join("paseo.json")
+    } else {
+        root_path.join(".kronos").join("kronos.json")
+    };
     if let Some(parent) = target.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -2590,7 +2643,7 @@ pub fn handle_directory_suggestions(msg: &Value, request_id: &str, is_project: b
     let query = msg_str(msg, "query");
     let include_files = msg_bool(msg, "includeFiles", false);
     let base = if query.trim().is_empty() {
-        dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+        directory_suggestions_home()
     } else {
         let p = PathBuf::from(query);
         if p.is_dir() {
@@ -3019,7 +3072,7 @@ pub fn handle_daemon_get_pairing_offer(request_id: &str) -> Value {
         .unwrap_or_else(|_| "kronos-host".to_string());
     let endpoint = format!("ws://{ip}:{port}/ws");
     let pairing_url = format!(
-        "paseo://pair?endpoint={}&serverId={}&hostname={}",
+        "kronos://pair?endpoint={}&serverId={}&hostname={}",
         endpoint, server_id, hostname
     );
     let qr = render_unicode_qr_matrix(&pairing_url);
@@ -3077,7 +3130,7 @@ pub fn build_provider_features(provider: &str) -> Vec<Value> {
             "type": "toggle",
             "id": "worktree_isolation",
             "label": "Git Worktree Isolation",
-            "description": "Isolate file edits inside dedicated Paseo git worktrees",
+            "description": "Isolate file edits inside dedicated Kronos git worktrees",
             "value": false
         }),
     ];
@@ -3100,18 +3153,6 @@ pub fn build_provider_features(provider: &str) -> Vec<Value> {
 
 pub fn build_provider_option_controls(provider: &str) -> Vec<Value> {
     let mut controls = vec![
-        json!({
-            "type": "select",
-            "key": "effort",
-            "label": "Reasoning Effort",
-            "description": format!("Select reasoning depth for {provider}"),
-            "defaultValue": "medium",
-            "choices": [
-                { "value": "low", "label": "Low", "description": "Fastest turnaround" },
-                { "value": "medium", "label": "Medium", "description": "Balanced depth and speed" },
-                { "value": "high", "label": "High", "description": "Maximum reasoning budget" }
-            ]
-        }),
         json!({
             "type": "toggle",
             "key": "autoApproveSafe",
@@ -3152,6 +3193,53 @@ pub fn handle_list_provider_features(msg: &Value, request_id: &str) -> Value {
             "error": null
         }
     })
+}
+
+#[cfg(all(test, feature = "ipc-acceptance"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_acceptance_discovery_uses_owned_home() {
+        // A host-root fallback must not feed real skill/plugin scans or empty suggestions.
+        let fixture = crate::desktop_acceptance::tests::Fixture::new();
+        let context = crate::desktop_acceptance::AcceptanceContext::from_descriptor(&fixture.descriptor).unwrap();
+        let plan = context.resource_plan();
+        let decoy = fixture.root.parent().unwrap().join("decoy-home");
+        for (home, relative) in [
+            (&plan.home, ".agents/skills/fixture-skill"),
+            (&plan.home, "skills/managed-skill"),
+            (&decoy, ".agents/skills/decoy-skill"),
+        ] {
+            let directory = home.join(relative);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join("SKILL.md"), "owned test skill").unwrap();
+        }
+        for (home, relative, id) in [
+            (&plan.home, ".paseo/plugins/fixture", "fixture-plugin"),
+            (&plan.home, "plugins/managed", "managed-plugin"),
+            (&decoy, ".paseo/plugins/decoy", "decoy-plugin"),
+        ] {
+            let directory = home.join(relative);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join("plugin.json"), json!({"id":id,"name":id}).to_string()).unwrap();
+        }
+        std::fs::write(plan.home.join("plugins_state.json"), br#"{"fixture-plugin":false}"#).unwrap();
+        let fallback_called = std::cell::Cell::new(false);
+        let home = acceptance_discovery_root(Some(&context), false, || {
+            fallback_called.set(true);
+            decoy.clone()
+        });
+        assert_eq!(available_skill_names(&home, &plan.home.join("skills")), BTreeSet::from(["fixture-skill".into(), "managed-skill".into()]));
+        assert!(!fallback_called.get(), "owned lookup evaluated platform fallback");
+        let response = plugin_list_in(false, "fixture-request", &home, &plan.home);
+        let plugins = response["payload"]["plugins"].as_array().unwrap();
+        assert!(plugins.iter().any(|plugin| plugin["id"] == "fixture-plugin" && plugin["enabled"] == false));
+        assert!(plugins.iter().any(|plugin| plugin["id"] == "managed-plugin"));
+        assert!(!plugins.iter().any(|plugin| plugin["id"] == "decoy-plugin"));
+        assert_eq!(acceptance_discovery_root(Some(&context), true, || decoy.clone()), plan.workspace);
+        assert_eq!(acceptance_discovery_root(None, false, || decoy.clone()), decoy);
+    }
 }
 
 pub fn handle_provider_controls_list(msg: &Value, request_id: &str) -> Value {

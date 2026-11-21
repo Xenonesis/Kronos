@@ -16,6 +16,18 @@ export interface DaemonStartServiceDeps {
   startDesktopDaemon?: () => Promise<DesktopDaemonStatus>;
 }
 
+function managedStartupError(daemon: DesktopDaemonStatus, managed: boolean): string | null {
+  if (managed && daemon.engine === "rust" && daemon.enginePhase?.phase !== "ready") {
+    return daemon.enginePhase?.phase === "failed"
+      ? daemon.enginePhase.reason
+      : "Embedded engine is not ready.";
+  }
+  if (daemon.localTransport === "ipc" && (!managed || daemon.engine !== "rust")) {
+    return "IPC requires the managed embedded Rust host.";
+  }
+  return null;
+}
+
 export async function upsertDesktopDaemonConnection(
   store: DaemonConnectionStore,
   daemon: DesktopDaemonStatus,
@@ -24,14 +36,20 @@ export async function upsertDesktopDaemonConnection(
   if (!serverId) {
     return { ok: false, error: "Desktop daemon did not return a server id." };
   }
-  if (store.getHosts().some((host) => host.serverId === serverId)) {
-    return { ok: true };
-  }
-  const listenAddress = daemon.listen?.trim() ?? "";
+  const managed =
+    daemon.desktopManaged && daemon.ownedByDesktop && daemon.localTransport !== undefined;
+  const startupError = managedStartupError(daemon, managed);
+  if (startupError) return { ok: false, error: startupError };
+  const existingHost = store.getHosts().find((host) => host.serverId === serverId);
+  // COMPAT(desktop-managed-status): v0.16.0; remove after 2027-05-17 with legacy desktop bridge.
+  if (!managed && existingHost) return { ok: true };
+  const listenAddress =
+    daemon.localTransport === "ipc" ? "ipc://embedded" : (daemon.listen?.trim() ?? "");
   if (!listenAddress) {
     return { ok: false, error: "Desktop daemon did not return a listen address." };
   }
-  if (!connectionFromListen(listenAddress)) {
+  const newConnection = connectionFromListen(listenAddress);
+  if (!newConnection) {
     return {
       ok: false,
       error: `Desktop daemon returned an unsupported listen address: ${listenAddress}`,
@@ -41,6 +59,7 @@ export async function upsertDesktopDaemonConnection(
     listenAddress,
     serverId,
     hostname: daemon.hostname,
+    ...(managed ? { desktopManaged: true } : {}),
   });
   return { ok: true };
 }

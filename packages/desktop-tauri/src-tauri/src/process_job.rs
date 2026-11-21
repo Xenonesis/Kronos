@@ -4,8 +4,10 @@ use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
     SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PRIORITY_CLASS,
 };
+#[cfg(windows)]
+use windows_sys::Win32::System::Threading::BELOW_NORMAL_PRIORITY_CLASS;
 
 pub struct JobSupervisor {
     #[cfg(windows)]
@@ -25,7 +27,8 @@ impl JobSupervisor {
             }
 
             let mut info = std::mem::zeroed::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>();
-            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PRIORITY_CLASS;
+            info.BasicLimitInformation.PriorityClass = BELOW_NORMAL_PRIORITY_CLASS;
 
             let res = SetInformationJobObject(
                 job,

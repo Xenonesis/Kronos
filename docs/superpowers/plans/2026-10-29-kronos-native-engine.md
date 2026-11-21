@@ -58,9 +58,9 @@ Add to `packages/desktop-tauri/src-tauri/Cargo.toml`:
 portable-pty = "0.8"
 similar = { version = "2.6", features = ["inline"] }
 windows-sys = { version = "0.59", features = [
-    "Win32_System_JobObjects",
-    "Win32_Foundation",
-    "Win32_Security"
+  "Win32_System_JobObjects",
+  "Win32_Foundation",
+  "Win32_Security",
 ] }
 ```
 

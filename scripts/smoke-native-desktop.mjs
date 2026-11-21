@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { copyFile, link, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { seedControlledCodexFixture } from "./desktop-ipc-acceptance-fixture.mjs";
+import {
+  acceptanceExitCode,
+  parseAcceptanceArguments,
+  runDesktopIpcAcceptance,
+} from "./desktop-ipc-acceptance.mjs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
@@ -8,6 +14,12 @@ import http from "node:http";
 import { once } from "node:events";
 import WebSocket from "ws";
 import { WSOutboundMessageSchema } from "@getpaseo/protocol/messages";
+
+if (process.argv.includes("--gui-acceptance")) {
+  const result = await runDesktopIpcAcceptance(parseAcceptanceArguments(process.argv.slice(2)));
+  // Receipt and owned process cleanup are awaited before bypassing legacy daemon-only mode.
+  process.exit(acceptanceExitCode(result));
+}
 
 const executableArg = process.argv.indexOf("--exe");
 if (executableArg < 0 || !process.argv[executableArg + 1]) {
@@ -127,33 +139,7 @@ try {
   );
 
   const port = await allocatePort();
-  // A real local provider process, with no model/network invocation. The native
-  // kernel still owns admission, argv, streams, descendants and resume identity.
-  const controlledProvider = path.join(home, process.platform === "win32" ? "codex.exe" : "codex");
-  try {
-    await link(process.execPath, controlledProvider);
-  } catch (error) {
-    if (error.code !== "EXDEV" && error.code !== "EPERM") throw error;
-    await copyFile(process.execPath, controlledProvider);
-  }
-  await writeFile(
-    path.join(home, "exec"),
-    String.raw`
-const fs = require("node:fs");
-const path = require("node:path");
-const {spawn} = require("node:child_process");
-const args = process.argv.slice(2);
-fs.appendFileSync(path.join(process.cwd(), "provider-argv.jsonl"), JSON.stringify(args) + "\n");
-console.log(JSON.stringify({type:"thread.started", thread_id:"smoke-session"}));
-console.log(JSON.stringify({type:"item.completed", item:{id:"answer",type:"agent_message",
-  text:args.includes("resume") ? "Resumed exact smoke session" : "Partial output before cancellation"}}));
-if (!args.includes("resume")) {
-  const descendant = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {stdio:"ignore", windowsHide:true});
-  fs.writeFileSync(path.join(process.cwd(), "provider-descendant.pid"), String(descendant.pid));
-  setInterval(()=>{},1000);
-}
-`,
-  );
+  await seedControlledCodexFixture(home);
   const daemonEnv = { ...process.env, KRONOS_HOME: home, PASEO_HOME: home };
   const pathKey = Object.keys(daemonEnv).find((key) => key.toUpperCase() === "PATH") || "PATH";
   daemonEnv[pathKey] = `${home}${path.delimiter}${daemonEnv[pathKey] || ""}`;

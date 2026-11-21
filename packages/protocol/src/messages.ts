@@ -873,6 +873,14 @@ export const AgentStreamEventPayloadSchema = z.discriminatedUnion("type", [
       })
       .optional(),
   }),
+  z.object({
+    type: z.literal("shadow_lint_diagnostic"),
+    system: z.string().optional(),
+    errorCount: z.number().optional(),
+    primaryFile: z.string().optional(),
+    rawOutput: z.string().optional(),
+    repairPrompt: z.string().optional(),
+  }),
 ]);
 
 const AgentPersistenceHandleSchema: z.ZodType<AgentPersistenceHandle | null> = z
@@ -6300,8 +6308,16 @@ export const PullRequestTimelineResponseSchema = z.object({
       // daemon floor is >= v0.2.0.
       authState: ForgeAuthStateSchema,
     })
-    .optional()
-    .prefault({}),
+    .default({
+      cwd: "",
+      prNumber: null,
+      items: [],
+      truncated: false,
+      error: null,
+      requestId: "",
+      githubFeaturesEnabled: true,
+      authState: undefined,
+    }),
 });
 
 export const CheckoutSwitchBranchResponseSchema = z.object({

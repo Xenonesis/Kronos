@@ -48,6 +48,7 @@ import { PiRpcAgentClient } from "./providers/pi/agent.js";
 import { TraeACPAgentClient } from "./providers/trae-acp-agent.js";
 import { MockLoadTestAgentClient } from "./providers/mock-load-test-agent.js";
 import { MockSlowProviderClient } from "./providers/mock-slow-provider.js";
+import { LocalAIAgentClient } from "./providers/local-ai-agent.js";
 import { convertLegacyOptions } from "./option-controls.js";
 import { ToolPolicyUnsupportedError, mergeProviderOptions } from "./provider-options.js";
 import {
@@ -225,6 +226,18 @@ const PROVIDER_CLIENT_FACTORIES: Record<string, ProviderClientFactory> = {
       runtimeSettings,
       runtime: options?.ompRuntime,
     }),
+  ollama: (logger, runtimeSettings) =>
+    new LocalAIAgentClient({
+      provider: "ollama",
+      logger,
+      runtimeSettings,
+    }),
+  lmstudio: (logger, runtimeSettings) =>
+    new LocalAIAgentClient({
+      provider: "lmstudio",
+      logger,
+      runtimeSettings,
+    }),
   mock: (logger) => new MockLoadTestAgentClient(logger),
   "mock-slow": () => new MockSlowProviderClient(),
 };
@@ -245,7 +258,12 @@ function getCursorACPCommand(
 function getProviderClientFactory(provider: string): ProviderClientFactory {
   const factory = PROVIDER_CLIENT_FACTORIES[provider];
   if (!factory) {
-    throw new Error(`No provider client factory registered for '${provider}'`);
+    return (logger, runtimeSettings) =>
+      new LocalAIAgentClient({
+        provider: provider as AgentProvider,
+        logger,
+        runtimeSettings,
+      });
   }
   return factory;
 }

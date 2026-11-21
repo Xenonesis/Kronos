@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { getDaemonBaseUrl } from "@/desktop/daemon/daemon-endpoint";
 import type { HistoryScope, HistorySort, UniversalIndexedSessionItem } from "./session-types";
 
 function pickString(candidates: unknown[], fallback = ""): string {
@@ -75,7 +76,8 @@ export function useUniversalSessions(currentProjectCwd?: string) {
   const fetchHistory = useCallback(async () => {
     setIsLoading(true);
     try {
-      const url = new URL("http://127.0.0.1:6767/api/agent-history/indexed");
+      const baseUrl = getDaemonBaseUrl();
+      const url = new URL(`${baseUrl}/api/agent-history/indexed`);
       url.searchParams.set("scope", scope);
       const query = debouncedSearch.trim();
       if (query) {

@@ -6,38 +6,38 @@ This document tracks all 30 features identified from the comprehensive competito
 
 ## Roadmap Overview & Status Matrix
 
-| ID          | Feature                                                                | Competitor Target              |     Priority      |         Status          |
+| ID | Feature | Competitor Target | Priority | Status |
 | :---------- | :--------------------------------------------------------------------- | :----------------------------- | :---------------: | :---------------------: | ----------------------- |
-| **FEAT-1**  | **Background Shadow Linter & Diagnostics Loop**                        | Cursor                         |        P0         | ✅ Completed & Verified |
-| **FEAT-2**  | **Editor Inline `Ctrl+K` Prompt & In-Place Diff Generator**            | Cursor / Windsurf              |        P0         | ✅ Completed & Verified |
-| **FEAT-3**  | **1-Click GitHub Pull Request (PR) Generator with AI Summary**         | Cursor / Devin / Claude Code   |        P0         | ✅ Completed & Verified |
-| **FEAT-4**  | **Global Workspace Search & Replace (Ripgrep + Diff Preview)**         | VS Code / Zed                  |        P1         | ✅ Completed & Verified |
-| **FEAT-5**  | **Visual Artifacts Canvas & Mermaid Architecture Renderer**            | Claude Artifacts / Antigravity |        P1         | ✅ Completed & Verified |
-| **FEAT-6**  | **1-Click Cloud Deployment Engine (Vercel / Netlify / Cloudflare)**    | Bolt.new / Lovable             |        P1         | ✅ Completed & Verified |
-| **FEAT-7**  | **Codebase Semantic Vector Search & Hybrid RAG Indexer**               | Cursor Codebase Indexing       |        P2         | ✅ Completed & Verified |
-| **FEAT-8**  | **Autonomous Browser Testing & Screenshot Verification Loop**          | Cline / Roo Code / Devin       |        P2         | ✅ Completed & Verified |
-| **FEAT-9**  | **Native Web Search & Web Scraping Engine for Any Model**              | Claude Code / Devin / OpenCode |        P0         | ✅ Completed & Verified |
-| **FEAT-10** | **Inline Predictive Ghost-Text Autocomplete ("Cursor Tab")**           | Cursor Copilot++               |        P0         | ✅ Completed & Verified |
-| **FEAT-11** | **Global Codebase Symbol Repo Map Engine**                             | Aider Repo Map                 |        P1         | ✅ Completed & Verified |
-| **FEAT-12** | **Active Tab & Cursor Flow Context Auto-Tracking**                     | Windsurf Cascade Flow          |        P1         | ✅ Completed & Verified |
-| **FEAT-13** | **Live Side-by-Side Webview Preview Panel with Hot-Reload**            | Bolt.new / Lovable / v0        |        P1         | ✅ Completed & Verified |
-| **FEAT-14** | **Specialized Agent Execution Modes (Architect/Code/Ask/Test)**        | Roo Code / Cline               |        P1         | ✅ Completed & Verified |
-| **FEAT-15** | **Terminal YOLO & Command Auto-Approval Permission Selector**          | Claude Code                    |        P2         | ✅ Completed & Verified |
-| **FEAT-16** | **Hands-Free Voice Dictation Mode (Web Speech / Whisper)**             | Cursor Voice                   |        P2         | ✅ Completed & Verified |
-| **FEAT-17** | **Autonomous Multi-Agent Swarm & Subagent Coordinator**                | Antigravity / Devin            |        P2         | ✅ Completed & Verified |
-| **FEAT-18** | **Multi-File Batch Diff Reviewer ("Review All Changes")**              | Cursor Composer                |        P0         | ✅ Completed & Verified |
-| **FEAT-19** | **Timeline Checkpoints & Instant Rollback (`/rewind`, `/checkpoint`)** | Windsurf Cascade / Cursor      |        P0         | ✅ Completed & Verified |
-| **FEAT-20** | **AI Semantic Git Commit Generator (`/commit`)**                       | Cursor / Claude Code           |        P0         | ✅ Completed & Verified |
-| **FEAT-21** | **Terminal Error Auto-Fix Listener ("Debug with Kronos")**             | Windsurf                       |        P1         | ✅ Completed & Verified |
-| **FEAT-22** | **Live Token Usage & USD Cost Budget Tracker HUD (`/cost`)**           | Claude Code                    |        P1         | ✅ Completed & Verified |
-| **FEAT-23** | **Visual Model Context Protocol (MCP) Server Hub (`/mcp`)**            | Cline / Roo Code               |        P1         | ✅ Completed & Verified |
-| **FEAT-24** | **Visual Element Picker for Live Preview ("Click-to-Prompt")**         | Bolt.new / Lovable             |        P1         | ✅ Completed & Verified |
-| **FEAT-25** | **Context Notepads & Persistent Scratchpads (`@notepad`, `/notepad`)** | Cursor                         |        P2         | ✅ Completed & Verified |
-| **FEAT-26** | **Self-Evolving Repository Playbooks (`/playbook`)**                   | Devin                          |        P2         | ✅ Completed & Verified |
-| **FEAT-27** | **Visual Workspace Dependency & Architecture Graph (`/diagram`)**      | Devin / Antigravity            |        P2         | ✅ Completed & Verified |
-| **FEAT-28** | \*\*User-Defined Custom Slash Commands (`.kronos/commands              | prompts`)\*\*                  | Roo Code / Zed AI |           P2            | ✅ Completed & Verified |
-| **FEAT-29** | **Embedded Database Studio & SQL Console (`/db`)**                     | Bolt.new                       |        P2         | ✅ Completed & Verified |
-| **FEAT-30** | **Side-by-Side Multi-Model Arena (`/compare`)**                        | Zed AI                         |        P2         | ✅ Completed & Verified |
+| **FEAT-1** | **Background Shadow Linter & Diagnostics Loop** | Cursor | P0 | ✅ Completed & Verified |
+| **FEAT-2** | **Editor Inline `Ctrl+K` Prompt & In-Place Diff Generator** | Cursor / Windsurf | P0 | ✅ Completed & Verified |
+| **FEAT-3** | **1-Click GitHub Pull Request (PR) Generator with AI Summary** | Cursor / Devin / Claude Code | P0 | ✅ Completed & Verified |
+| **FEAT-4** | **Global Workspace Search & Replace (Ripgrep + Diff Preview)** | VS Code / Zed | P1 | ✅ Completed & Verified |
+| **FEAT-5** | **Visual Artifacts Canvas & Mermaid Architecture Renderer** | Claude Artifacts / Antigravity | P1 | ✅ Completed & Verified |
+| **FEAT-6** | **1-Click Cloud Deployment Engine (Vercel / Netlify / Cloudflare)** | Bolt.new / Lovable | P1 | ✅ Completed & Verified |
+| **FEAT-7** | **Codebase Semantic Vector Search & Hybrid RAG Indexer** | Cursor Codebase Indexing | P2 | ✅ Completed & Verified |
+| **FEAT-8** | **Autonomous Browser Testing & Screenshot Verification Loop** | Cline / Roo Code / Devin | P2 | ✅ Completed & Verified |
+| **FEAT-9** | **Native Web Search & Web Scraping Engine for Any Model** | Claude Code / Devin / OpenCode | P0 | ✅ Completed & Verified |
+| **FEAT-10** | **Inline Predictive Ghost-Text Autocomplete ("Cursor Tab")** | Cursor Copilot++ | P0 | ✅ Completed & Verified |
+| **FEAT-11** | **Global Codebase Symbol Repo Map Engine** | Aider Repo Map | P1 | ✅ Completed & Verified |
+| **FEAT-12** | **Active Tab & Cursor Flow Context Auto-Tracking** | Windsurf Cascade Flow | P1 | ✅ Completed & Verified |
+| **FEAT-13** | **Live Side-by-Side Webview Preview Panel with Hot-Reload** | Bolt.new / Lovable / v0 | P1 | ✅ Completed & Verified |
+| **FEAT-14** | **Specialized Agent Execution Modes (Architect/Code/Ask/Test)** | Roo Code / Cline | P1 | ✅ Completed & Verified |
+| **FEAT-15** | **Terminal YOLO & Command Auto-Approval Permission Selector** | Claude Code | P2 | ✅ Completed & Verified |
+| **FEAT-16** | **Hands-Free Voice Dictation Mode (Web Speech / Whisper)** | Cursor Voice | P2 | ✅ Completed & Verified |
+| **FEAT-17** | **Autonomous Multi-Agent Swarm & Subagent Coordinator** | Antigravity / Devin | P2 | ✅ Completed & Verified |
+| **FEAT-18** | **Multi-File Batch Diff Reviewer ("Review All Changes")** | Cursor Composer | P0 | ✅ Completed & Verified |
+| **FEAT-19** | **Timeline Checkpoints & Instant Rollback (`/rewind`, `/checkpoint`)** | Windsurf Cascade / Cursor | P0 | ✅ Completed & Verified |
+| **FEAT-20** | **AI Semantic Git Commit Generator (`/commit`)** | Cursor / Claude Code | P0 | ✅ Completed & Verified |
+| **FEAT-21** | **Terminal Error Auto-Fix Listener ("Debug with Kronos")** | Windsurf | P1 | ✅ Completed & Verified |
+| **FEAT-22** | **Live Token Usage & USD Cost Budget Tracker HUD (`/cost`)** | Claude Code | P1 | ✅ Completed & Verified |
+| **FEAT-23** | **Visual Model Context Protocol (MCP) Server Hub (`/mcp`)** | Cline / Roo Code | P1 | ✅ Completed & Verified |
+| **FEAT-24** | **Visual Element Picker for Live Preview ("Click-to-Prompt")** | Bolt.new / Lovable | P1 | ✅ Completed & Verified |
+| **FEAT-25** | **Context Notepads & Persistent Scratchpads (`@notepad`, `/notepad`)** | Cursor | P2 | ✅ Completed & Verified |
+| **FEAT-26** | **Self-Evolving Repository Playbooks (`/playbook`)** | Devin | P2 | ✅ Completed & Verified |
+| **FEAT-27** | **Visual Workspace Dependency & Architecture Graph (`/diagram`)** | Devin / Antigravity | P2 | ✅ Completed & Verified |
+| **FEAT-28** | \*\*User-Defined Custom Slash Commands (`.kronos/commands              | prompts`)\*\* | Roo Code / Zed AI | P2 | ✅ Completed & Verified |
+| **FEAT-29** | **Embedded Database Studio & SQL Console (`/db`)** | Bolt.new | P2 | ✅ Completed & Verified |
+| **FEAT-30** | **Side-by-Side Multi-Model Arena (`/compare`)** | Zed AI | P2 | ✅ Completed & Verified |
 
 ---
 

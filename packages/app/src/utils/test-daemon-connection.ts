@@ -19,7 +19,10 @@ import {
   buildDesktopDaemonTransportUrl,
   createDesktopDaemonTransportFactory,
 } from "@/desktop/daemon/desktop-daemon-transport";
-import type { DesktopDaemonTransportTarget } from "@/desktop/daemon/desktop-daemon";
+import {
+  getManagedDesktopTransport,
+  type DesktopDaemonTransportTarget,
+} from "@/desktop/daemon/desktop-daemon";
 
 export interface DaemonProbeClient {
   readonly lastError: string | null;
@@ -166,15 +169,22 @@ export async function buildClientConfig(
     ...(options.capabilities ? { capabilities: options.capabilities } : {}),
     ...(options.trace ? { trace: options.trace } : {}),
     createPluginClientBundleStore: options.createPluginClientBundleStore,
-    ...((connection.type === "directSocket" || connection.type === "directPipe") &&
-    desktopTransportFactory
-      ? { transportFactory: desktopTransportFactory }
-      : {}),
   };
+
+  const managedTarget = getManagedDesktopTransport(connection, serverId);
+  if (managedTarget) {
+    if (!desktopTransportFactory) throw new Error("Embedded IPC requires the desktop transport.");
+    return {
+      ...base,
+      transportFactory: desktopTransportFactory,
+      url: deps.buildDesktopTransportUrl(managedTarget),
+    };
+  }
 
   if (connection.type === "directSocket" || connection.type === "directPipe") {
     return {
       ...base,
+      ...(desktopTransportFactory ? { transportFactory: desktopTransportFactory } : {}),
       url: deps.buildDesktopTransportUrl({
         transportType: connection.type === "directSocket" ? "socket" : "pipe",
         transportPath: connection.path,

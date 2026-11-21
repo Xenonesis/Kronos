@@ -27,11 +27,7 @@ export const ArchitectModeToggle = memo(function ArchitectModeToggle({
       style={[styles.toggleBtn, enabled && styles.toggleBtnActive]}
       accessibilityLabel="Toggle Two-Stage Architect Mode"
     >
-      {enabled ? (
-        <Compass size={13} color="#ffffff" />
-      ) : (
-        <MutedCompassIcon size={13} />
-      )}
+      {enabled ? <Compass size={13} color="#ffffff" /> : <MutedCompassIcon size={13} />}
       <Text style={[styles.btnText, enabled && styles.btnTextActive]}>Architect Mode</Text>
       {enabled && <Check size={11} color="#ffffff" />}
     </PressHighlight>

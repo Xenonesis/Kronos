@@ -352,7 +352,7 @@ async function* readOmpLines(
   const chunkSize = 64 * 1024;
   let fragments: Buffer[] = [];
   let lineOffset = 0;
-  for (let position = 0; position < size; ) {
+  for (let position = 0; position < size;) {
     const chunk = Buffer.allocUnsafe(Math.min(chunkSize, size - position));
     const { bytesRead } = await file.read(chunk, 0, chunk.length, position);
     if (!bytesRead) break;

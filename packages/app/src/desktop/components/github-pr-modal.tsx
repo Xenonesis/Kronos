@@ -232,7 +232,8 @@ export const GitHubPrModal = memo(function GitHubPrModal({
               <CheckCircle2 size={40} color="#22c55e" />
               <div style={{ fontWeight: 600, fontSize: "16px" }}>Pull Request Ready!</div>
               <div style={{ fontSize: "13px", color: "#a1a1aa", maxWidth: "420px" }}>
-                Your commits and PR description have been prepared. Click below to review and merge on GitHub.
+                Your commits and PR description have been prepared. Click below to review and merge
+                on GitHub.
               </div>
               <a
                 href={createdUrl}
@@ -409,7 +410,11 @@ export const GitHubPrModal = memo(function GitHubPrModal({
                 cursor: title.trim() && !isSubmitting ? "pointer" : "default",
               }}
             >
-              {isSubmitting ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+              {isSubmitting ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Sparkles size={14} />
+              )}
               Create Pull Request
             </button>
           )}

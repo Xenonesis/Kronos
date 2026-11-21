@@ -201,6 +201,7 @@ export interface NativeTerminalBridge {
     options: TerminalSpawnOptions,
     onEvent: (event: TerminalEvent) => void,
   ) => Promise<void>;
+  attach?: (id: string, onEvent: (event: TerminalEvent) => void) => Promise<void>;
   write: (id: string, data: string) => Promise<void>;
   resize: (id: string, cols: number, rows: number) => Promise<void>;
   kill: (id: string) => Promise<void>;

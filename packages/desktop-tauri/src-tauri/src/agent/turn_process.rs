@@ -2,7 +2,7 @@ use std::time::Duration;
 use tokio::process::{Child, Command};
 
 /// One tree per foreground turn, never the desktop-wide terminal job.
-pub(super) struct ProcessTree {
+pub(crate) struct ProcessTree {
     #[cfg(windows)]
     job: Option<crate::process_job::JobSupervisor>,
     #[cfg(windows)]
@@ -12,6 +12,19 @@ pub(super) struct ProcessTree {
 }
 
 impl ProcessTree {
+    #[cfg(feature = "ipc-acceptance")]
+    #[allow(dead_code)] // Used by the private acceptance supervisor, not provider fallback.
+    pub(crate) fn spawn_strict(command: &mut Command) -> Result<(Self, Child), String> {
+        let valid = command
+            .as_std()
+            .get_current_dir()
+            .is_some_and(|cwd| cwd.is_absolute() && cwd.is_dir());
+        if !valid {
+            return Err("Acceptance requires an absolute existing working directory".into());
+        }
+        Self::spawn_prepared(command)
+    }
+
     /// Capture group ownership in the same synchronous operation as spawn, before
     /// any persistence or other fallible startup work can run.
     pub fn spawn(command: &mut Command) -> Result<(Self, Child), String> {
@@ -32,6 +45,10 @@ impl ProcessTree {
                 }
             }
         }
+        Self::spawn_prepared(command)
+    }
+
+    fn spawn_prepared(command: &mut Command) -> Result<(Self, Child), String> {
         let tree = Self::prepare(command)?;
         let child = command.spawn().map_err(|error| {
             let cwd_desc = command
@@ -54,7 +71,8 @@ impl ProcessTree {
         #[cfg(windows)]
         {
             // Assign before any provider code executes, so even immediate descendants are owned.
-            command.creation_flags(0x08000000 | 0x00000004); // NO_WINDOW | SUSPENDED
+            // 0x08000000 (CREATE_NO_WINDOW) | 0x00000004 (CREATE_SUSPENDED) | 0x00004000 (BELOW_NORMAL_PRIORITY_CLASS)
+            command.creation_flags(0x08000000 | 0x00000004 | 0x00004000);
             Ok(Self {
                 job: Some(crate::process_job::JobSupervisor::new()?),
                 resumed: false,
@@ -179,6 +197,36 @@ mod tests {
     use crate::agent::manager::AgentManager;
     use crate::agent::types::AgentStatus;
     use std::process::Stdio;
+
+    #[cfg(feature = "ipc-acceptance")]
+    #[tokio::test]
+    async fn test_strict_spawn_rejects_missing_or_invalid_cwd() {
+        let owned = tempfile::tempdir().unwrap();
+        let missing = owned.path().join("must-not-be-created");
+        for cwd in [
+            None,
+            Some(missing.as_path()),
+            Some(std::path::Path::new("relative")),
+        ] {
+            // No executable exists: even a broken strict gate cannot execute child code.
+            let mut command = Command::new(owned.path().join("nonexistent-executable.exe"));
+            if let Some(cwd) = cwd {
+                command.current_dir(cwd);
+            }
+            let error = match ProcessTree::spawn_strict(&mut command) {
+                Ok((mut tree, mut child)) => {
+                    tree.cleanup(&mut child).await.unwrap();
+                    panic!("invalid strict CWD was accepted");
+                }
+                Err(error) => error,
+            };
+            assert!(
+                error.contains("absolute existing working directory"),
+                "{error}"
+            );
+            assert!(!missing.exists(), "strict spawn created an invalid CWD");
+        }
+    }
 
     enum FailurePhase {
         Assignment,

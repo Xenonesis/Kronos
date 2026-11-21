@@ -1,6 +1,6 @@
 # Architecture
 
-Paseo is a client-server system for monitoring and controlling local AI coding agents. The daemon runs on your machine, manages agent processes, and streams their output in real time over WebSocket. Clients (mobile app, CLI, desktop app) connect to the daemon to observe and interact with agents.
+Paseo is a client-server system for monitoring and controlling local AI coding agents. Network clients use WebSocket. The Tauri desktop manages an embedded Rust engine by default, with optional Node-engine mode; its managed Rust connection also supports opt-in local IPC.
 
 Your code never leaves your machine. Paseo is local-first.
 
@@ -9,37 +9,41 @@ Daemon-owned outbound connections and routed API scope ownership are described i
 
 ## System overview
 
+```text
+Mobile / browser / CLI
+  -> WebSocket (direct or optional relay) -> daemon -> agent providers
+
+Tauri desktop (shared Expo UI)
+  -> default WebSocket -> managed Rust engine or optional Node child
+  -> opt-in Tauri IPC  -> same managed Rust session core
 ```
-┌─────────────┐    ┌─────────────┐    ┌────────────────┐
-│  Mobile App  │    │     CLI     │    │ Kronos Desktop │
-│   (Expo)     │    │ (Commander) │    │   (Tauri v2)   │
-└──────┬───────┘    └──────┬──────┘    └───────┬────────┘
-       │                   │                  │
-       │    WebSocket      │    WebSocket     │    Managed subprocess
-       │    (direct or     │    (direct)      │    + WebSocket
-       │     via relay)    │                  │
-       └───────────┬───────┴──────────────────┘
-                   │
-            ┌──────▼──────┐
-            │   Daemon    │
-            │  (Node.js)  │
-            └──────┬──────┘
-                   │
-      ┌────────────┼────────────┬────────────┬────────────┐
-      │            │            │            │            │
-┌─────▼─────┐ ┌───▼────┐ ┌──────▼─────┐ ┌────▼─────┐ ┌────▼────┐
-│  Claude   │ │ Codex  │ │  Copilot   │ │ OpenCode │ │   Pi    │
-│  Agent    │ │ Agent  │ │   Agent    │ │  Agent   │ │ Agent   │
-│  SDK      │ │ Server │ │    ACP     │ │          │ │         │
-└───────────┘ └────────┘ └────────────┘ └──────────┘ └─────────┘
-```
+
+### Managed desktop transport
+
+Set `KRONOS_DESKTOP_LOCAL_TRANSPORT=ipc` in the desktop process environment to opt in;
+use `websocket` for explicit rollback. Unset keeps WebSocket. Node-engine mode remains
+network-only; an IPC failure never silently changes transport. Default rollout requires
+[the native acceptance matrix](superpowers/specs/2026-11-17-desktop-local-ipc-design.md#acceptance-matrix).
+Implementation tests and a successful build do not establish those runtime results.
+
+Managed attachment follows native server identity and capability, not a localhost address.
+Registry reconciliation replaces only that managed host's obsolete local routes; explicitly
+saved other hosts and remembered workspace selection remain separate. The reserved stored
+attachment is not authority: native status and credential/session commands still check the
+registered calling surface and intended daemon. Status contains no credential.
+
+The Rust core owns admission, dispatch, subscriptions and terminal routing for both adapters.
+Closing a UI transport releases its session, not engine ownership. Explicit engine restart
+and application exit are different lifecycle operations. Core readiness and network-listener
+availability are separate: HTTP-dependent features still need a live network endpoint even
+when the managed IPC session is available. This is not whole-app port independence.
 
 ## Components at a glance
 
 - **Daemon:** Local server that spawns and manages agent processes and exposes the WebSocket API.
 - **App:** Cross-platform Expo client for iOS, Android, web, and the shared UI used by desktop.
 - **CLI:** Terminal interface for agent workflows that can also start and manage the daemon (dual-invocable via `kronos` or `paseo`).
-- **Desktop app (Kronos):** High-performance native Rust Tauri v2 workstation linked to OS WebView2 (<100MB RAM, sub-second boot), auto-managing the background daemon. Legacy Electron shell is retained under `packages/desktop` for fallback reference.
+- **Desktop app (Kronos):** Tauri v2 workstation managing an embedded Rust engine or optional Node subprocess. Windows uses WebView2. Legacy Electron remains under `packages/desktop` for reference; runtime memory and startup claims require measurements of the actual build.
 - **Relay:** Optional encrypted bridge for remote access without opening ports directly.
 
 ## Packages
@@ -126,7 +130,7 @@ host's client; plugin subprocesses use the same facade over a host-owned IPC tra
 Cross-platform React Native app that connects to one or more daemons.
 
 - Expo Router navigation (`/h/[serverId]/workspace/[workspaceId]`, `/h/[serverId]/agent/[agentId]`, etc.). The `workspaceId` URL segment is an opaque workspace id, not a directly meaningful filesystem path.
-- `HostRuntimeController` manages saved host connections, reconnection, and per-host runtime state. Direct TCP and relay connections use the ordinary client transport; desktop socket, pipe, and SSH connections cross one Electron-owned transport boundary. SSH only tunnels to an already-running daemon.
+- `HostRuntimeController` manages saved host connections, reconnection, and per-host runtime state. Direct TCP and relay connections use the ordinary client transport; desktop-specific routes cross the shell transport boundary. Managed Rust IPC requires fresh native authority. Tauri's legacy loopback bridge rejects unsupported external socket/pipe and SSH targets rather than redirecting them locally; Electron's SSH route only tunnels to an already-running daemon.
 - `runtime/replica-cache` is typed storage behind the directory and timeline owners. It never observes or mutates `SessionStore`.
 - `runtime/directory-sync` owns directory cache selection and network reconciliation. On demand it paints accepted rows for one host, then passes the persisted per-entity cursor through `project.list`, `fetch_workspaces`, and `fetch_agents`; the daemon returns each entity's latest projection when its sequence is newer, plus tombstones.
 - `workspace-labels` owns one sequenced catalog replica per connected host, the deterministic cross-host projection that surfaces spanning hosts use (the filter page, the manager), and the per-host resolution a workspace row's chips use. Two hosts may give one name different colors, so a row resolves against its own host's catalog and a merged answer would be wrong there. Catalogs never synchronize between hosts; assignment creates a missing definition only on the target host. On the daemon, catalog and assignment rewrites share a journaled commit boundary. Startup recovery completes that commit before workspace or catalog publication.

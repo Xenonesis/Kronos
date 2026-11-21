@@ -40,6 +40,7 @@ tantivy = "0.22"
 yrs = "0.21"
 clap = { version = "4", features = ["derive"] }
 rayon = "1.10"
+num_cpus = "1.16"
 whisper-rs = { version = "0.16.0", optional = true }
 mimalloc = { version = "0.1", default-features = false }
 rkyv = { version = "0.7", features = ["validation"] }
@@ -65,6 +66,7 @@ rusqlite = { version = "0.32", features = ["bundled", "backup", "modern_sqlite"]
 [features]
 default = ["local-whisper"]
 local-whisper = ["dep:whisper-rs"]
+ipc-acceptance = ["windows-sys/Win32_System_Pipes"]
 
 [dev-dependencies]
 tempfile = "3"
@@ -91,15 +93,15 @@ features = [
 [profile.release]
 opt-level = 3
 lto = "thin"
-codegen-units = 1
+codegen-units = 16
 panic = "unwind"
 strip = true
-incremental = false
+incremental = true
 
 [profile.release-fast]
 inherits = "release"
 opt-level = 3
-lto = "thin"
+lto = "off"
 codegen-units = 16
 incremental = true
 strip = false

@@ -173,6 +173,17 @@ pub fn build_server_info_payload() -> Value {
             "usageSetting",
             "agentProfiles",
             "agentConfigApply",
+            "timelineFreshnessCheck",
+            "terminalCollection",
+            "diffSubscription",
+            "pluginSubscriptions",
+            "checkoutDiffAll",
+            "agentRequestReceipts",
+            "workspaceRequestReceipts",
+            "hubAgentRpc",
+            "backgroundAgents",
+            "workspaceBaseBranch",
+            "entityMetadata",
         ] {
             obj.insert(key.to_string(), Value::Bool(true));
         }

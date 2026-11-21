@@ -95,12 +95,17 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
     void refresh();
   }, [refresh]);
 
-  // Sort providers: Installed & Available providers appear on TOP
+  // Sort providers: Installed & Available providers appear on TOP; hide providers marked hidden
   const providerDefinitions = useMemo(() => {
     const rawDefs = buildProviderDefinitions(entries);
     if (!rawDefs.length) return [];
 
-    return [...rawDefs].sort((a, b) =>
+    const visibleDefs = rawDefs.filter((def) => {
+      const override = config?.providers?.[def.id] as { hidden?: boolean } | undefined;
+      return override?.hidden !== true;
+    });
+
+    return [...visibleDefs].sort((a, b) =>
       compareProviderDefinitions(a, b, entries, config?.providers),
     );
   }, [entries, config?.providers]);
@@ -150,15 +155,13 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
       try {
         await patchConfig({ providers: { [providerId]: { enabled } } });
       } catch (error) {
-        Alert.alert(
-          t("settings.providers.updateErrorTitle"),
-          error instanceof Error ? error.message : String(error),
-        );
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        toast.error(`${t("settings.providers.updateErrorTitle")}: ${errorMsg}`);
       } finally {
         setPendingProviderId((current) => (current === providerId ? null : current));
       }
     },
-    [patchConfig, t],
+    [patchConfig, t, toast],
   );
 
   const handleRemoveProvider = useCallback(
@@ -177,12 +180,29 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
           return;
         }
 
-        await patchConfig({ removeProviders: [providerId] });
+        const isCustom =
+          isConfigOwnedProvider(providerId) || Boolean(config?.providers?.[providerId]?.extends);
+
+        if (isCustom) {
+          await patchConfig({ removeProviders: [providerId] });
+        } else {
+          // Hide and disable built-in provider so it cleanly disappears from the top list
+          await patchConfig({
+            providers: {
+              [providerId]: {
+                enabled: false,
+                hidden: true,
+              },
+            },
+          });
+        }
+        await refresh();
+        toast.show(`${providerLabel} removed. You can re-add it anytime below.`, {
+          variant: "success",
+        });
       } catch (error) {
-        Alert.alert(
-          t("settings.providers.remove.errorTitle"),
-          error instanceof Error ? error.message : String(error),
-        );
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        toast.error(`Failed to remove ${providerLabel}: ${errorMsg}`);
       } finally {
         if (removingProviderIdRef.current === providerId) {
           removingProviderIdRef.current = null;
@@ -190,7 +210,7 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
         setRemovingProviderId((current) => (current === providerId ? null : current));
       }
     },
-    [patchConfig, t],
+    [config?.providers, isConfigOwnedProvider, patchConfig, refresh, t, toast],
   );
 
   const handleInstall = useCallback(
@@ -198,19 +218,39 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
       if (installingProviderId) return;
       setInstallingProviderId(entry.id);
       try {
-        await patchConfig(
-          buildAcpProviderConfigPatch(entry, (feature) =>
-            selectHostFeature(useSessionStore.getState(), serverId, feature),
-          ),
+        const isHiddenBuiltin = Boolean(
+          config?.providers?.[entry.id] &&
+          (config.providers[entry.id] as { hidden?: boolean }).hidden,
         );
+
+        if (isHiddenBuiltin) {
+          await patchConfig({
+            providers: {
+              [entry.id]: {
+                enabled: true,
+                hidden: false,
+              },
+            },
+          });
+        } else {
+          await patchConfig(
+            buildAcpProviderConfigPatch(entry, (feature) =>
+              selectHostFeature(useSessionStore.getState(), serverId, feature),
+            ),
+          );
+        }
         await refresh([entry.id]);
+        toast.show(`${entry.title} added successfully! Scanning models...`, {
+          variant: "success",
+        });
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : String(error));
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        toast.error(`Could not add ${entry.title}: ${errorMsg}`);
       } finally {
         setInstallingProviderId((current) => (current === entry.id ? null : current));
       }
     },
-    [installingProviderId, patchConfig, refresh, serverId, toast],
+    [config?.providers, installingProviderId, patchConfig, refresh, serverId, toast],
   );
 
   return (
@@ -241,11 +281,7 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
                   enabled={entry.enabled ?? true}
                   isToggling={pendingProviderId === def.id}
                   isRemoving={removingProviderId === def.id}
-                  canRemove={
-                    supportsProviderRemoval &&
-                    entry.source === "custom" &&
-                    isConfigOwnedProvider(def.id)
-                  }
+                  canRemove={supportsProviderRemoval !== false}
                   isFirst={index === 0}
                   onPress={handleOpenProviderSettings}
                   onToggleEnabled={handleToggleEnabled}

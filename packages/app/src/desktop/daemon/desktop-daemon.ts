@@ -3,6 +3,44 @@ import { confirmDialog } from "@/utils/confirm-dialog";
 import { getDesktopHost, isElectronRuntime } from "@/desktop/host";
 import { invokeDesktopCommand } from "@/desktop/electron/invoke";
 import type { AgentSkillSelection } from "@getpaseo/protocol/messages";
+import { isWeb } from "@/constants/platform";
+import type { HostConnection } from "@/types/host-connection";
+
+// Refreshed only by native status/start responses, never persisted endpoint hints.
+let managedDesktopStatus: DesktopDaemonStatus | null = null;
+let daemonStatusRequest = 0;
+
+export function getManagedDesktopStatus(): Readonly<DesktopDaemonStatus> | null {
+  return managedDesktopStatus;
+}
+
+export function getManagedDesktopTransport(
+  connection: HostConnection,
+  serverId: string | undefined,
+): EmbeddedTransportTarget | null {
+  if (connection.type !== "directSocket" || connection.path !== "ipc://embedded") return null;
+  const status = managedDesktopStatus;
+  if (
+    !serverId ||
+    status?.serverId !== serverId ||
+    status.engine !== "rust" ||
+    !status.desktopManaged ||
+    !status.ownedByDesktop ||
+    status.localTransport !== "ipc"
+  ) {
+    throw new Error(
+      "Managed embedded transport is unavailable for this host; refresh desktop status.",
+    );
+  }
+  if (status.enginePhase?.phase !== "ready") {
+    throw new Error(
+      status.enginePhase?.phase === "failed"
+        ? status.enginePhase.reason
+        : "Embedded engine is not ready.",
+    );
+  }
+  return { transportType: "embedded" };
+}
 
 export type DesktopDaemonState = "starting" | "running" | "stopped" | "errored";
 export type DesktopDaemonStopReason =
@@ -13,6 +51,10 @@ export type DesktopDaemonStopReason =
   | "app_update"
   | "version_mismatch"
   | "restart";
+
+export type DesktopEnginePhase =
+  | { phase: "stopped" | "starting" | "ready" }
+  | { phase: "failed"; reason: string };
 
 export interface DesktopDaemonStatus {
   serverId: string;
@@ -26,6 +68,11 @@ export interface DesktopDaemonStatus {
   ownedByDesktop: boolean;
   startedAt: string | null;
   error: string | null;
+  engine?: "rust" | "node";
+  enginePhase?: DesktopEnginePhase;
+  networkAvailable?: boolean;
+  networkError?: string | null;
+  localTransport?: "ipc" | "websocket";
 }
 
 export interface DesktopDaemonLogs {
@@ -75,18 +122,30 @@ export interface RemoteSshTransportTarget {
   daemonPort?: number;
 }
 
-export type DesktopDaemonTransportTarget = LocalTransportTarget | RemoteSshTransportTarget;
+export interface EmbeddedTransportTarget {
+  [key: string]: unknown;
+  transportType: "embedded";
+}
+
+export type DesktopDaemonTransportTarget =
+  | LocalTransportTarget
+  | RemoteSshTransportTarget
+  | EmbeddedTransportTarget;
 
 export interface OpenLocalTransportSessionInput {
   [key: string]: unknown;
   sessionId: string;
   target: DesktopDaemonTransportTarget;
+  generation?: string;
 }
 
 interface LocalTransportEventPayload {
   sessionId: string;
+  generation?: string;
+  sequence?: number;
   kind: "open" | "message" | "close" | "error";
   text?: string | null;
+  messages?: string[] | null;
   binaryBase64?: string | null;
   code?: number | null;
   reason?: string | null;
@@ -123,11 +182,33 @@ function parseDesktopDaemonState(value: unknown): DesktopDaemonState {
   }
 }
 
+function parseDesktopEnginePhase(raw: unknown): DesktopEnginePhase | undefined {
+  if (!isRecord(raw)) return undefined;
+  switch (raw.phase) {
+    case "stopped":
+    case "starting":
+    case "ready":
+      return { phase: raw.phase };
+    case "failed":
+      return typeof raw.reason === "string" ? { phase: "failed", reason: raw.reason } : undefined;
+    default:
+      return undefined;
+  }
+}
+
 function parseDesktopDaemonStatus(raw: unknown): DesktopDaemonStatus {
   if (!isRecord(raw)) {
     throw new Error("Unexpected desktop daemon status response.");
   }
-  return {
+  if (
+    raw.localTransport !== undefined &&
+    raw.localTransport !== "ipc" &&
+    raw.localTransport !== "websocket"
+  ) {
+    throw new Error("Unknown desktop local transport setting.");
+  }
+  const enginePhase = parseDesktopEnginePhase(raw.enginePhase);
+  const status: DesktopDaemonStatus = {
     serverId: toStringOrNull(raw.serverId) ?? "",
     status: parseDesktopDaemonState(raw.status),
     listen: toStringOrNull(raw.listen),
@@ -139,7 +220,19 @@ function parseDesktopDaemonStatus(raw: unknown): DesktopDaemonStatus {
     ownedByDesktop: raw.ownedByDesktop === true,
     startedAt: typeof raw.startedAt === "string" ? raw.startedAt : null,
     error: toStringOrNull(raw.error),
+    ...(raw.engine === "rust" || raw.engine === "node" ? { engine: raw.engine } : {}),
+    ...(enginePhase ? { enginePhase } : {}),
+    ...(raw.localTransport === "ipc" || raw.localTransport === "websocket"
+      ? { localTransport: raw.localTransport }
+      : {}),
+    ...(typeof raw.networkAvailable === "boolean"
+      ? { networkAvailable: raw.networkAvailable }
+      : {}),
+    ...(raw.networkError === null || typeof raw.networkError === "string"
+      ? { networkError: raw.networkError }
+      : {}),
   };
+  return status;
 }
 
 function parseDesktopDaemonLogs(raw: unknown): DesktopDaemonLogs {
@@ -186,18 +279,38 @@ export function shouldUseDesktopDaemon(): boolean {
   return isElectronRuntime();
 }
 
+async function invokeDaemonStatus(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<DesktopDaemonStatus> {
+  const request = ++daemonStatusRequest;
+  try {
+    const status = parseDesktopDaemonStatus(await invokeDesktopCommand(command, args));
+    if (request === daemonStatusRequest) {
+      managedDesktopStatus =
+        status.localTransport && status.desktopManaged && status.ownedByDesktop
+          ? { ...status }
+          : null;
+    }
+    return status;
+  } catch (error) {
+    if (request === daemonStatusRequest) managedDesktopStatus = null;
+    throw error;
+  }
+}
+
 export async function getDesktopDaemonStatus(): Promise<DesktopDaemonStatus> {
-  return parseDesktopDaemonStatus(await invokeDesktopCommand("desktop_daemon_status"));
+  return invokeDaemonStatus("desktop_daemon_status");
 }
 
 export async function startDesktopDaemon(): Promise<DesktopDaemonStatus> {
-  return parseDesktopDaemonStatus(await invokeDesktopCommand("start_desktop_daemon"));
+  return invokeDaemonStatus("start_desktop_daemon");
 }
 
 export async function stopDesktopDaemon(
   reason: DesktopDaemonStopReason = "manual_ipc",
 ): Promise<DesktopDaemonStatus> {
-  return parseDesktopDaemonStatus(await invokeDesktopCommand("stop_desktop_daemon", { reason }));
+  return invokeDaemonStatus("stop_desktop_daemon", { reason });
 }
 
 export async function confirmAndStopDesktopDaemon(): Promise<DesktopDaemonStatus | null> {
@@ -218,17 +331,15 @@ export async function confirmAndStopDesktopDaemon(): Promise<DesktopDaemonStatus
     destructive: true,
   });
   if (!confirmed) return null;
-  return parseDesktopDaemonStatus(
-    await invokeDesktopCommand("stop_desktop_daemon", {
-      reason: "manual_ipc",
-      pid: captured.pid,
-      startedAt: captured.startedAt,
-    }),
-  );
+  return invokeDaemonStatus("stop_desktop_daemon", {
+    reason: "manual_ipc",
+    pid: captured.pid,
+    startedAt: captured.startedAt,
+  });
 }
 
 export async function restartDesktopDaemon(): Promise<DesktopDaemonStatus> {
-  return parseDesktopDaemonStatus(await invokeDesktopCommand("restart_desktop_daemon"));
+  return invokeDaemonStatus("restart_desktop_daemon");
 }
 
 export async function getDesktopDaemonLogs(): Promise<DesktopDaemonLogs> {
@@ -271,9 +382,35 @@ export async function getCliDaemonStatus(): Promise<string> {
 export type LocalTransportEventUnlisten = () => void;
 export type LocalTransportEventHandler = (payload: LocalTransportEventPayload) => void;
 
+interface EmbeddedChannel {
+  onmessage: (payload: LocalTransportEventPayload) => void;
+}
+const embeddedChannels = new Map<string, { generation: string; channel: EmbeddedChannel }>();
+
 export async function listenToLocalTransportEvents(
   handler: LocalTransportEventHandler,
+  scope?: { sessionId: string; generation: string },
 ): Promise<LocalTransportEventUnlisten> {
+  if (scope) {
+    if (!isWeb || typeof window === "undefined")
+      throw new Error("Embedded transport requires a desktop webview");
+    const Channel = (
+      window as unknown as { __TAURI__?: { core?: { Channel?: new () => EmbeddedChannel } } }
+    ).__TAURI__?.core?.Channel;
+    if (!Channel) throw new Error("Tauri session channel API is unavailable");
+    if (embeddedChannels.has(scope.sessionId))
+      throw new Error("Duplicate embedded channel registration");
+    const channel = new Channel();
+    // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Tauri Channel is not an EventTarget.
+    channel.onmessage = handler;
+    const entry = { generation: scope.generation, channel };
+    embeddedChannels.set(scope.sessionId, entry);
+    return () => {
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Tauri Channel is not an EventTarget.
+      channel.onmessage = () => {};
+      if (embeddedChannels.get(scope.sessionId) === entry) embeddedChannels.delete(scope.sessionId);
+    };
+  }
   const listen = getDesktopHost()?.events?.on;
   if (typeof listen !== "function") {
     throw new Error("Desktop events API is unavailable.");
@@ -282,10 +419,14 @@ export async function listenToLocalTransportEvents(
     if (!isRecord(payload)) {
       return;
     }
+    const messages = Array.isArray(payload.messages)
+      ? payload.messages.filter((m): m is string => typeof m === "string" && m.length > 0)
+      : null;
     handler({
       sessionId: toStringOrNull(payload.sessionId) ?? "",
       kind: (toStringOrNull(payload.kind) ?? "error") as LocalTransportEventPayload["kind"],
       text: toStringOrNull(payload.text),
+      messages: messages && messages.length > 0 ? messages : null,
       binaryBase64: toStringOrNull(payload.binaryBase64),
       code: toNumberOrNull(payload.code),
       reason: toStringOrNull(payload.reason),
@@ -298,23 +439,53 @@ export async function listenToLocalTransportEvents(
 export async function openLocalTransportSession(
   input: OpenLocalTransportSessionInput,
 ): Promise<void> {
+  if (input.target.transportType === "embedded") {
+    const entry = embeddedChannels.get(input.sessionId);
+    if (!entry || entry.generation !== input.generation)
+      throw new Error("Embedded session channel is not registered");
+    await invokeDesktopCommand("open_embedded_transport", {
+      input: { sessionId: input.sessionId, generation: input.generation },
+      onEvent: entry.channel,
+    });
+    return;
+  }
   await invokeDesktopCommand("open_local_daemon_transport", input);
 }
 
 export async function sendLocalTransportMessage(input: {
   sessionId: string;
+  generation?: string;
   text?: string;
   binaryBase64?: string;
 }): Promise<void> {
-  await invokeDesktopCommand("send_local_daemon_transport_message", {
+  const payload = {
     sessionId: input.sessionId,
-    ...(input.text ? { text: input.text } : {}),
-    ...(input.binaryBase64 ? { binaryBase64: input.binaryBase64 } : {}),
-  });
+    ...(input.generation ? { generation: input.generation } : {}),
+    ...(input.text !== undefined ? { text: input.text } : {}),
+    ...(input.binaryBase64 !== undefined ? { binaryBase64: input.binaryBase64 } : {}),
+  };
+  await invokeDesktopCommand(
+    input.generation ? "send_embedded_transport" : "send_local_daemon_transport_message",
+    input.generation ? { input: payload } : payload,
+  );
 }
 
-export async function closeLocalTransportSession(sessionId: string): Promise<void> {
-  await invokeDesktopCommand("close_local_daemon_transport", { sessionId });
+export async function acknowledgeLocalTransportMessage(input: {
+  sessionId: string;
+  generation: string;
+  sequence: number;
+}): Promise<void> {
+  await invokeDesktopCommand("ack_embedded_transport", { input });
+}
+
+export async function closeLocalTransportSession(
+  sessionId: string,
+  generation?: string,
+): Promise<void> {
+  await invokeDesktopCommand(
+    generation ? "close_embedded_transport" : "close_local_daemon_transport",
+    generation ? { input: { sessionId, generation } } : { sessionId },
+  );
 }
 
 // ---------------------------------------------------------------------------

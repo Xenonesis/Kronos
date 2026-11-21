@@ -5,6 +5,7 @@ import {
   type ChildProcessWithoutNullStreams,
   type SpawnOptions,
 } from "node:child_process";
+import os from "node:os";
 import { extname } from "node:path";
 import { promisify } from "node:util";
 import {
@@ -64,13 +65,23 @@ export function spawnProcess(
   const resolvedCommand = shouldQuoteForShell ? quoteWindowsCommand(command) : command;
   const resolvedArgs = shouldQuoteForShell ? args.map(quoteWindowsArgument) : args;
 
-  return spawn(resolvedCommand, resolvedArgs, {
+  const child = spawn(resolvedCommand, resolvedArgs, {
     ...spawnOptions,
     env: options?.env,
     shell,
     signal: options?.signal,
     windowsHide: true,
   });
+
+  if (isWindows && child.pid) {
+    try {
+      os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL);
+    } catch {
+      // Ignore if process terminated early or platform restricts priority adjustment
+    }
+  }
+
+  return child;
 }
 
 export async function execCommand(

@@ -608,6 +608,10 @@ impl DaemonConfigStore {
     }
 
     pub fn sanitize_orphaned_workspaces(&self) -> usize {
+        #[cfg(feature = "ipc-acceptance")]
+        let inspect_external_paths = crate::desktop_acceptance::active().is_none();
+        #[cfg(not(feature = "ipc-acceptance"))]
+        let inspect_external_paths = true;
         let project_ids: std::collections::HashSet<String> = {
             let projects = self.projects.read().unwrap_or_else(|e| e.into_inner());
             projects
@@ -619,7 +623,10 @@ impl DaemonConfigStore {
         let initial_count = map.len();
         map.retain(|_, ws| {
             let project_exists = project_ids.contains(&ws.project_id);
-            let path_exists = !ws.path.trim().is_empty() && Path::new(&ws.path).exists();
+            let path_exists = workspace_path_exists_for_sanitization(
+                &ws.path,
+                inspect_external_paths,
+            );
             project_exists || path_exists
         });
         let pruned = initial_count.saturating_sub(map.len());
@@ -681,6 +688,10 @@ pub fn normalize_path_for_match(p: &str) -> String {
     let trimmed = p.trim().trim_end_matches(['/', '\\']);
     let without_verbatim = trimmed.strip_prefix(r"\\?\").unwrap_or(trimmed);
     without_verbatim.replace('\\', "/").to_lowercase()
+}
+
+fn workspace_path_exists_for_sanitization(path: &str, inspect_path: bool) -> bool {
+    inspect_path && !path.trim().is_empty() && Path::new(path).exists()
 }
 
 pub fn paths_match(a: &str, b: &str) -> bool {
@@ -767,6 +778,21 @@ pub fn atomic_write(target_path: &Path, content: &[u8]) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn acceptance_workspace_sanitization_never_probes_external_paths() {
+        let dir = tempdir().unwrap();
+        assert!(dir.path().exists());
+        assert!(!workspace_path_exists_for_sanitization(
+            dir.path().to_str().unwrap(),
+            false
+        ));
+        assert!(workspace_path_exists_for_sanitization(
+            dir.path().to_str().unwrap(),
+            true
+        ));
+        assert!(!workspace_path_exists_for_sanitization("  ", true));
+    }
 
     #[test]
     fn atomic_write_replaces_content_and_cleans_failed_temporary_files() {

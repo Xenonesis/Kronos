@@ -38,14 +38,14 @@ Update `packages/desktop-tauri/src-tauri/Cargo.toml`:
 
 ```toml
 windows-sys = { version = "0.59", features = [
-    "Win32_System_JobObjects",
-    "Win32_System_Threading",
-    "Win32_Foundation",
-    "Win32_Security",
-    "Win32_System_Memory",
-    "Win32_System_LibraryLoader",
-    "Win32_Storage_FileSystem",
-    "Win32_Graphics_Dwm",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Memory",
+  "Win32_System_LibraryLoader",
+  "Win32_Storage_FileSystem",
+  "Win32_Graphics_Dwm",
 ] }
 ```
 

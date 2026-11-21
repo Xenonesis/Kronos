@@ -2,7 +2,7 @@
 
 How terminal output stays low-latency, what the invariants are, and how to measure before/after any change to the pipeline. Read this before touching anything under `packages/server/src/terminal/` or `packages/app/src/terminal/runtime/`.
 
-## The pipeline
+## Node daemon pipeline
 
 ```
 pty (node-pty, forked worker process)
@@ -34,8 +34,23 @@ Terminal frames share the daemon main event loop with all agent traffic. The `ev
 - **Retained terminal tabs in the focused workspace keep their streams.** Hidden mounted terminals continue applying output, so switching tabs does not resubscribe or request a fresh snapshot. The retained-panel LRU bounds the number of live streams; terminals in an unfocused workspace detach.
 - **Terminal size has one daemon-owned claimant.** Focus and direct interaction send a `claim`; later geometry changes from that connection send `update`. A claim transfers ownership even when the dimensions are unchanged, while an update from any other connection is ignored. This lets an owning pane follow splits and keyboard insets without allowing an idle phone or browser to steal the PTY size.
 
+## Embedded Rust pipeline
+
+Native PTY output enters the shared Rust session core, then its WebSocket adapter or
+opt-in managed Tauri IPC adapter, before the existing client decoder and renderer.
+The IPC route preserves terminal binary framing but carries binary data as base64 in JSON;
+it is not zero-copy. Closing a viewer must not transfer ownership of the PTY to the viewer.
+This differs from the Node detached-worker lifetime: no survival of desktop process exit
+is promised for embedded terminals.
+
+IPC pressure spans native queues, callback delivery and frontend consumption. A successful
+Tauri send is not a consumption acknowledgement. Recovery must close for resynchronization
+rather than silently lose ordered bytes; it must not restart the engine. Keep limits and
+accounting next to `src-tauri/src/local_transport.rs` and `kernel/session.rs`.
+
 ## Measuring
 
+- **Managed Rust IPC:** use the same exported frontend, build profile and owned provider/terminal workload for both adapters. Measure callback-to-render delay, retained bytes and RSS as well as request latency. Native queue-limit tests and VM bridge tests are not real WebView latency or memory measurements. Current results and unmeasured cases live in [desktop IPC evidence](superpowers/plans/2026-11-17-desktop-local-ipc-evidence.md).
 - **Node-only benchmark (fast iteration, server pipeline):** `npx tsx scripts/benchmark-terminal-latency.ts`. Boots an isolated daemon (fresh `PASEO_HOME`, random port — never 6767), measures echo latency percentiles, burst jitter, and snapshot counts under ramped mock-agent load. Writes JSON to `/tmp/paseo-terminal-bench/`. Healthy numbers (2026-06): echo p50 ~2.3ms, p95 ~3.3ms, a 2MB burst fully streamed with `snap=0`.
 - **Browser perf specs (user-perceived path):** gated behind `PASEO_TERMINAL_PERF_E2E=1` —
   `packages/app/e2e/browser/terminal-performance.spec.ts` and `packages/app/e2e/browser/terminal-keystroke-stress.spec.ts` (per-stage keydown→xterm-commit breakdown under mock-agent load). Healthy: keydown→commit p50 ~18ms under 600-key burst.

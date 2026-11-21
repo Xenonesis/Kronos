@@ -93,8 +93,7 @@ export const DynamicTaskChecklistHud = memo(function DynamicTaskChecklistHud({
 
   const tasks = externalTasks ?? internalTasks;
   const completedCount = tasks.filter((t) => t.status === "completed").length;
-  const progressPercent =
-    tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
+  const progressPercent = tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
 
   const toggleCollapsed = useCallback(() => setCollapsed((prev) => !prev), []);
   const startAdding = useCallback(() => setIsAdding(true), []);
@@ -140,7 +139,11 @@ export const DynamicTaskChecklistHud = memo(function DynamicTaskChecklistHud({
           </Text>
         </View>
         <View style={styles.headerControls}>
-          <ToolbarButton label="Toggle checklist" onPress={toggleCollapsed} style={styles.iconButton}>
+          <ToolbarButton
+            label="Toggle checklist"
+            onPress={toggleCollapsed}
+            style={styles.iconButton}
+          >
             {collapsed ? <ThemedChevronDownIcon size={14} /> : <ThemedChevronUpIcon size={14} />}
           </ToolbarButton>
           {onClose ? (
@@ -177,7 +180,12 @@ export const DynamicTaskChecklistHud = memo(function DynamicTaskChecklistHud({
                 placeholder="New subtask title..."
                 onSubmitEditing={handleAddTask}
               />
-              <Button size="sm" variant="default" onPress={handleAddTask} style={styles.saveAddButton}>
+              <Button
+                size="sm"
+                variant="default"
+                onPress={handleAddTask}
+                style={styles.saveAddButton}
+              >
                 <Text style={styles.saveAddButtonText}>Add</Text>
               </Button>
             </View>

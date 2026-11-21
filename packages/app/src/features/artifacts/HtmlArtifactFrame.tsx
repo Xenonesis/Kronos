@@ -715,9 +715,7 @@ export const HtmlArtifactFrame: React.FC<HtmlArtifactFrameProps> = ({
             >
               <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                 <Code size={13} color="#a855f7" />
-                <span style={{ fontWeight: 600, color: "#d4d4d8" }}>
-                  Source: {artifact.title}
-                </span>
+                <span style={{ fontWeight: 600, color: "#d4d4d8" }}>Source: {artifact.title}</span>
                 <span
                   style={{
                     backgroundColor: "rgba(168, 85, 247, 0.15)",

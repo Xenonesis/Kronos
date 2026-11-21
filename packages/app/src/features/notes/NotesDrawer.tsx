@@ -352,7 +352,10 @@ export const NotesDrawer = memo(function NotesDrawer({ onInsertToChat }: NotesDr
                 </PressHighlight>
               </View>
 
-              <ScrollView style={styles.notesListScroll} contentContainerStyle={styles.notesListContent}>
+              <ScrollView
+                style={styles.notesListScroll}
+                contentContainerStyle={styles.notesListContent}
+              >
                 {filteredNotes.length === 0 ? (
                   <View style={styles.emptyContainer}>
                     <Text style={styles.emptyText}>No notes found</Text>
@@ -368,10 +371,7 @@ export const NotesDrawer = memo(function NotesDrawer({ onInsertToChat }: NotesDr
                       >
                         <View style={styles.noteItemHeader}>
                           <Text
-                            style={[
-                              styles.noteItemTitle,
-                              isSelected && styles.noteItemTitleActive,
-                            ]}
+                            style={[styles.noteItemTitle, isSelected && styles.noteItemTitleActive]}
                             numberOfLines={1}
                           >
                             {note.title || "Untitled Note"}

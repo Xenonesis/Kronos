@@ -294,12 +294,43 @@ function hasProfileChanged(input: {
   );
 }
 
+function isLoopbackTcp(connection: HostConnection): boolean {
+  return (
+    connection.type === "directTcp" &&
+    (connection.endpoint.startsWith("127.0.0.1:") ||
+      connection.endpoint.startsWith("localhost:") ||
+      connection.endpoint.startsWith("[::1]:"))
+  );
+}
+
+function isManagedLocalConnection(connection: HostConnection): boolean {
+  if (connection.type === "directTcp") {
+    return !connection.useTls && /^(localhost|127\.0\.0\.1|\[::1\]):\d+$/.test(connection.endpoint);
+  }
+  if (connection.type === "directSocket") {
+    return (
+      connection.path === "ipc://embedded" ||
+      /^\/tmp\/kronos-ipc(?:-\d+)?\.sock$/.test(connection.path)
+    );
+  }
+  if (connection.type === "directPipe") {
+    const prefix = String.raw`\\.\pipe\kronos-ipc`;
+    return (
+      connection.path === prefix ||
+      (connection.path.startsWith(`${prefix}-`) &&
+        /^\d+$/.test(connection.path.slice(prefix.length + 1)))
+    );
+  }
+  return false;
+}
+
 export function upsertHostConnectionInProfiles(input: {
   profiles: HostProfile[];
   serverId: string;
   label?: string;
   connection: HostConnection;
   password?: string;
+  desktopManaged?: boolean;
   now?: string;
 }): HostProfile[] {
   const serverId = input.serverId.trim();
@@ -317,7 +348,8 @@ export function upsertHostConnectionInProfiles(input: {
     if (
       daemon.serverId === serverId ||
       // A routed candidate names its origin; its destination belongs to the host profile.
-      (normalizedConnection.type !== "routed" &&
+      (!input.desktopManaged &&
+        normalizedConnection.type !== "routed" &&
         daemon.connections.some((existingConnection) =>
           hostConnectionEquals(existingConnection, normalizedConnection),
         ))
@@ -344,17 +376,28 @@ export function upsertHostConnectionInProfiles(input: {
 
   const matchedProfiles = matchingIndexes.map((index) => existing[index]);
   const prev = matchedProfiles.find((daemon) => daemon.serverId === serverId) ?? matchedProfiles[0];
-  const nextConnections = upsertHostConnectionById(
-    matchedProfiles.flatMap((daemon) => daemon.connections),
-    normalizedConnection,
-  );
+  const isIncomingLoopback = isLoopbackTcp(normalizedConnection);
+  const rawConnections = matchedProfiles.flatMap((daemon) => daemon.connections);
+  let baseConnections = rawConnections;
+  if (input.desktopManaged) {
+    baseConnections = rawConnections.filter((connection) => !isManagedLocalConnection(connection));
+  } else if (isIncomingLoopback) {
+    baseConnections = rawConnections.filter(
+      (connection) => !isLoopbackTcp(connection) || connection.id === normalizedConnection.id,
+    );
+  }
+  const nextConnections = upsertHostConnectionById(baseConnections, normalizedConnection);
   const nextLifecycle = prev.lifecycle;
   const nextLabel = prev.label === prev.serverId ? derivedLabel : prev.label;
-  const nextPreferredConnectionId =
+  let nextPreferredConnectionId = normalizedConnection.id;
+  if (
+    !input.desktopManaged &&
+    !isIncomingLoopback &&
     prev.preferredConnectionId &&
     nextConnections.some((connection) => connection.id === prev.preferredConnectionId)
-      ? prev.preferredConnectionId
-      : normalizedConnection.id;
+  ) {
+    nextPreferredConnectionId = prev.preferredConnectionId;
+  }
   const nextCreatedAt = matchedProfiles.reduce(
     (earliest, daemon) => (daemon.createdAt < earliest ? daemon.createdAt : earliest),
     prev.createdAt,
@@ -398,6 +441,10 @@ export function connectionFromListen(listen: string): HostConnection | null {
   const normalizedListen = listen.trim();
   if (!normalizedListen) {
     return null;
+  }
+
+  if (normalizedListen === "ipc://embedded") {
+    return { id: "socket:ipc://embedded", type: "directSocket", path: "ipc://embedded" };
   }
 
   if (normalizedListen.startsWith("pipe://")) {

@@ -1,3 +1,5 @@
+import { getDaemonBaseUrl } from "@/desktop/daemon/daemon-endpoint";
+
 export function isLocalhostUrl(urlStr: string): boolean {
   try {
     const parsed = new URL(urlStr.startsWith("http") ? urlStr : `https://${urlStr}`);
@@ -70,12 +72,7 @@ export function resolveIframeTargetUrl(rawUrl: string): string {
 
   // For external websites (e.g. google.com, github.com, etc.), route through
   // our daemon browser reverse proxy to strip X-Frame-Options and frame-ancestors!
-  let daemonBase = "http://127.0.0.1:6767";
-  if (typeof window !== "undefined" && window.location?.origin) {
-    if (window.location.hostname !== "tauri.localhost") {
-      daemonBase = window.location.origin;
-    }
-  }
+  const daemonBase = getDaemonBaseUrl();
 
   return `${daemonBase}/api/browser-proxy?url=${encodeURIComponent(url)}`;
 }

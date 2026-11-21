@@ -345,6 +345,10 @@ impl GitEngine {
 
     /// Captures the current working tree state into a shadow ref `refs/kronos/checkpoints/<turn_id>`
     pub async fn create_checkpoint(repo: &Path, turn_id: &str) -> Result<String, String> {
+        let git_dir = repo.join(".git");
+        if !git_dir.exists() || git_dir.join("index.lock").exists() {
+            return Ok(String::new());
+        }
         let clean_id = turn_id.replace(['/', '\\', ' '], "-");
         let ref_name = format!("refs/kronos/checkpoints/{}", clean_id);
         let commit_res = Self::git_exec(

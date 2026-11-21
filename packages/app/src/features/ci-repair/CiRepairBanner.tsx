@@ -38,15 +38,8 @@ export const CiRepairBanner = memo(function CiRepairBanner({
   const toast = useToast();
   const [detailsExpanded, setDetailsExpanded] = useState(false);
 
-  const {
-    ciStatus,
-    isLoading,
-    isRepairing,
-    isDismissed,
-    checkStatus,
-    dismiss,
-    repairWithAgent,
-  } = useCiStore();
+  const { ciStatus, isLoading, isRepairing, isDismissed, checkStatus, dismiss, repairWithAgent } =
+    useCiStore();
 
   const activeWorkspace = useActiveWorkspaceSelection();
   const workspaceSession = useSessionStore((state) =>

@@ -78,9 +78,7 @@ const McpServerRow = memo(function McpServerRow({
         <Text style={styles.serverCmd}>
           {server.command} {server.args.join(" ")}
         </Text>
-        {status?.lastError ? (
-          <Text style={styles.serverCmd}>{status.lastError}</Text>
-        ) : null}
+        {status?.lastError ? <Text style={styles.serverCmd}>{status.lastError}</Text> : null}
       </View>
 
       <View style={styles.actions}>

@@ -2,17 +2,34 @@ use axum::http::{header, HeaderMap, Uri};
 use serde_json::Value;
 use std::path::Path;
 
-use super::auth::{matches_local_credential, verify_daemon_password, write_local_credential};
+use super::auth::{ensure_local_credential, matches_local_credential, verify_daemon_password};
 
 /// Never send this daemon's credential to a saved remote host.
-pub fn is_managed_target(listen: &str) -> bool {
-    #[cfg(windows)]
-    if listen == r"pipe://\\.\pipe\kronos-ipc" || listen == r"\\.\pipe\kronos-ipc" {
-        return true;
+pub fn is_managed_target(listen: &str, active_port: u16) -> bool {
+    #[cfg(feature = "ipc-acceptance")]
+    if let Some(context) = crate::desktop_acceptance::active() {
+        return managed_target_with_pipe(listen, active_port, Some(&context.resource_plan().pipe));
     }
-    #[cfg(not(windows))]
-    if listen == "unix:///tmp/kronos-ipc.sock" || listen == "/tmp/kronos-ipc.sock" {
-        return true;
+    managed_target_with_pipe(listen, active_port, None)
+}
+
+fn managed_target_with_pipe(listen: &str, active_port: u16, owned_pipe: Option<&str>) -> bool {
+    if active_port == 0 {
+        return false;
+    }
+    if let Some(pipe) = owned_pipe {
+        if listen == pipe || listen.strip_prefix("pipe://") == Some(pipe) {
+            return true;
+        }
+    } else {
+        #[cfg(windows)]
+        if listen == r"pipe://\\.\pipe\kronos-ipc" || listen == r"\\.\pipe\kronos-ipc" {
+            return true;
+        }
+        #[cfg(not(windows))]
+        if listen == "unix:///tmp/kronos-ipc.sock" || listen == "/tmp/kronos-ipc.sock" {
+            return true;
+        }
     }
     let normalized;
     let candidate = if listen.contains("://") {
@@ -24,10 +41,10 @@ pub fn is_managed_target(listen: &str) -> bool {
     let Ok(url) = url::Url::parse(candidate) else {
         return false;
     };
-    let active_port = crate::daemon::get_active_daemon_port();
     matches!(url.scheme(), "tcp" | "ws" | "http")
         && matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
-        && (url.port_or_known_default() == Some(6767) || url.port_or_known_default() == Some(active_port))
+        && active_port != 0
+        && url.port_or_known_default() == Some(active_port)
         && url.username().is_empty()
         && url.password().is_none()
         && matches!(url.path(), "" | "/" | "/ws")
@@ -87,11 +104,19 @@ impl AccessControl {
             })
             .collect::<std::io::Result<Vec<_>>>()?;
         Ok(Self {
-            local_credential: write_local_credential(home)?,
+            local_credential: ensure_local_credential(home)?,
             password_hash: config.password_hash,
             port,
             allowed_origins,
         })
+    }
+
+    /// Change the HTTP guard's bound port, not its credential/password authority.
+    pub fn with_network_port(&self, port: u16) -> Self {
+        Self {
+            port,
+            ..self.clone()
+        }
     }
 
     pub fn allows_headers(&self, headers: &HeaderMap) -> bool {
@@ -202,7 +227,7 @@ mod tests {
             "tcp://127.0.0.1:6767",
             "ws://localhost:6767/ws",
         ] {
-            assert!(is_managed_target(target), "{target}");
+            assert!(is_managed_target(target, 6767), "{target}");
         }
         for target in [
             "remote.example:6767",
@@ -212,8 +237,25 @@ mod tests {
             "ws://localhost:6767/ws?target=remote",
             "unix:///tmp/other.sock",
         ] {
-            assert!(!is_managed_target(target), "{target}");
+            assert!(!is_managed_target(target, 6767), "{target}");
         }
+    }
+
+    #[cfg(all(feature = "ipc-acceptance", windows))]
+    #[test]
+    fn test_acceptance_credentials_never_match_canonical_pipe() {
+        // A private listener must not authorize the canonical production pipe.
+        let fixture = crate::desktop_acceptance::tests::Fixture::new();
+        let context = crate::desktop_acceptance::AcceptanceContext::from_descriptor(&fixture.descriptor).unwrap();
+        let owned = context.resource_plan().pipe;
+        for target in [r"\\.\pipe\kronos-ipc", r"pipe://\\.\pipe\kronos-ipc", r"\\.\pipe\other-run", "unix:///tmp/kronos-ipc.sock", "tcp://127.0.0.1:19002"] {
+            assert!(!managed_target_with_pipe(target, 19001, Some(&owned)), "private run accepted {target}");
+        }
+        for target in [owned.clone(), format!("pipe://{owned}"), "ws://127.0.0.1:19001/ws".into()] {
+            assert!(managed_target_with_pipe(&target, 19001, Some(&owned)), "owned target rejected: {target}");
+            assert!(!managed_target_with_pipe(&target, 0, Some(&owned)), "stopped listener accepted {target}");
+        }
+        assert!(managed_target_with_pipe(r"\\.\pipe\kronos-ipc", 19001, None), "normal-build pipe policy changed");
     }
 
     fn authority() -> AccessControl {
@@ -223,6 +265,26 @@ mod tests {
             port: 19102,
             allowed_origins: vec!["http://localhost:19103".into()],
         }
+    }
+
+    #[tokio::test]
+    async fn network_port_view_preserves_admission_authority() {
+        let core = authority();
+        let network = core.with_network_port(19104);
+        let hello = serde_json::json!({"type":"hello","protocolVersion":1,
+            "auth":{"kind":"localCredential","token":"a".repeat(43)}});
+        assert_eq!(core.authenticate_hello(&hello).await, Ok(()));
+        assert_eq!(network.authenticate_hello(&hello).await, Ok(()));
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:19104"));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://localhost:19103"),
+        );
+        assert!(network.allows_headers(&headers));
+        assert!(!core.allows_headers(&headers));
+        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:19102"));
+        assert!(!network.allows_headers(&headers));
     }
 
     #[test]

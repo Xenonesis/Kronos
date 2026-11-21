@@ -34,7 +34,31 @@ import { subscriptionFixture } from "./subscription-fixture";
 import { readDesktopManagedLocalCredential } from "@/desktop/daemon/local-credential";
 import type { HostConfirmationRequest } from "./host-confirmation";
 
+async function seedNativeManagedStatus(
+  serverId: string,
+  listen: string | null,
+  localTransport: "ipc" | "websocket" = "websocket",
+) {
+  const invokeModule = await import("@/desktop/electron/invoke");
+  const { getDesktopDaemonStatus } = await import("@/desktop/daemon/desktop-daemon");
+  const spy = vi.spyOn(invokeModule, "invokeDesktopCommand").mockResolvedValue({
+    serverId,
+    listen,
+    engine: "rust",
+    enginePhase: { phase: "ready" },
+    desktopManaged: true,
+    ownedByDesktop: true,
+    localTransport,
+  });
+  try {
+    await getDesktopDaemonStatus();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
 it("requests the managed connection credential through desktop main without a web hint", async () => {
+  await seedNativeManagedStatus("managed", "127.0.0.1:6767");
   const requests: string[] = [];
   const connection: HostConnection = {
     id: "direct:localhost:6767",
@@ -42,14 +66,93 @@ it("requests the managed connection credential through desktop main without a we
     endpoint: "localhost:6767",
   };
   let token = "local-token";
-  const invoke = async (listen: string) => {
-    requests.push(listen);
+  const invoke = async (input: { listen: string; serverId: string }) => {
+    expect(input.serverId).toBe("managed");
+    requests.push(input.listen);
     return token;
   };
-  expect(await readDesktopManagedLocalCredential(connection, invoke)).toBe("local-token");
+  expect(await readDesktopManagedLocalCredential(connection, "managed", invoke)).toBe(
+    "local-token",
+  );
   token = "rotated-token";
-  expect(await readDesktopManagedLocalCredential(connection, invoke)).toBe("rotated-token");
+  expect(await readDesktopManagedLocalCredential(connection, "managed", invoke)).toBe(
+    "rotated-token",
+  );
   expect(requests).toEqual(["localhost:6767", "localhost:6767"]);
+});
+
+it("does not request a local credential for an unverified loopback host", async () => {
+  let requests = 0;
+  const credential = await readDesktopManagedLocalCredential(
+    { id: "direct:localhost:6767", type: "directTcp", endpoint: "localhost:6767" },
+    "unmanaged-host",
+    async () => {
+      requests++;
+      return "private-token";
+    },
+  );
+  expect(credential).toBeUndefined();
+  expect(requests).toBe(0);
+});
+
+it("reload uses fresh IPC identity before probing a stored endpoint", async () => {
+  const local = makeHost({
+    serverId: "managed",
+    connections: [{ id: "direct:localhost:44111", type: "directTcp", endpoint: "localhost:44111" }],
+  });
+  const unrelated = makeHost({
+    serverId: "other",
+    connections: [
+      { id: "direct:localhost:6767", type: "directTcp", endpoint: "localhost:6767", useTls: false },
+    ],
+  });
+  const storage = createMemoryHostRuntimeStorage();
+  await storage.setItem("@paseo:daemon-registry", JSON.stringify([local, unrelated]));
+  const remembered = JSON.stringify({ serverId: "other", workspaceId: "preserved-workspace" });
+  await storage.setItem("paseo:last-workspace-route-selection", remembered);
+  const seen: HostConnection[] = [];
+  (globalThis as { window?: unknown }).window = {
+    paseoDesktop: {
+      invoke: async () => ({
+        serverId: "managed",
+        engine: "rust",
+        enginePhase: { phase: "ready" },
+        desktopManaged: true,
+        ownedByDesktop: true,
+        localTransport: "ipc",
+        listen: null,
+      }),
+    },
+  };
+  const store = new HostRuntimeStore({
+    storage,
+    deps: {
+      createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
+      connectToDaemon: async ({ host, connection }) => {
+        if (host.serverId === "managed") seen.push(connection);
+        return {
+          client: makeConnectedProbeClient(5) as unknown as DaemonClient,
+          serverId: host.serverId,
+          hostname: host.label,
+        };
+      },
+      getClientId: async () => "reload-test",
+    },
+  });
+  try {
+    await store.boot();
+    expect(store.getHosts().find((host) => host.serverId === "managed")?.connections).toEqual([
+      { id: "socket:ipc://embedded", type: "directSocket", path: "ipc://embedded" },
+    ]);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((connection) => connection.id === "socket:ipc://embedded")).toBe(true);
+    expect(store.getHosts().find((host) => host.serverId === "other")?.connections).toEqual(
+      unrelated.connections,
+    );
+    expect(await storage.getItem("paseo:last-workspace-route-selection")).toBe(remembered);
+  } finally {
+    store.syncHosts([]);
+  }
 });
 
 class FakeDaemonClient {
@@ -4858,6 +4961,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
     }
   });
   it("resolves a local credential for a reopened saved desktop host connection", async () => {
+    await seedNativeManagedStatus("srv_desktop_reopened", "127.0.0.1:6799");
     const host = makeHost({
       serverId: "srv_desktop_reopened",
       connections: [{ id: "direct:localhost:6799", type: "directTcp", endpoint: "localhost:6799" }],
@@ -4871,10 +4975,15 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
         connectToDaemon: async ({ host: probeHost, connection }) => {
           expect(probeHost.password).toBeUndefined();
-          const credential = await readDesktopManagedLocalCredential(connection, async (listen) => {
-            credentialRequests.push(listen);
-            return listen === "localhost:6799" ? "local-token" : null;
-          });
+          const credential = await readDesktopManagedLocalCredential(
+            connection,
+            probeHost.serverId,
+            async ({ listen, serverId }) => {
+              expect(serverId).toBe("srv_desktop_reopened");
+              credentialRequests.push(listen);
+              return listen === "localhost:6799" ? "local-token" : null;
+            },
+          );
           expect(credential).toBe("local-token");
           return {
             client: makeConnectedProbeClient(5) as unknown as DaemonClient,

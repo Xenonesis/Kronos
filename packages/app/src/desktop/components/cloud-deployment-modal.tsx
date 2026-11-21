@@ -77,11 +77,7 @@ export const CloudDeploymentModal = memo(function CloudDeploymentModal({
 
     try {
       const rustProvider =
-        provider === "vercel"
-          ? "vercel"
-          : provider === "netlify"
-            ? "netlify"
-            : "cloudflarePages";
+        provider === "vercel" ? "vercel" : provider === "netlify" ? "netlify" : "cloudflarePages";
       const result = await invokeTauri<{
         success: boolean;
         liveUrl?: string | null;
@@ -347,7 +343,15 @@ export const CloudDeploymentModal = memo(function CloudDeploymentModal({
 
           {/* Terminal Logs */}
           <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#a1a1aa" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                fontSize: "11px",
+                color: "#a1a1aa",
+              }}
+            >
               <Terminal size={12} />
               <span>Deployment Logs</span>
             </div>

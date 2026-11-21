@@ -64,6 +64,71 @@ function makeRelayOnlyHost(serverId: string): HostProfile {
 }
 
 describe("DaemonStartService", () => {
+  it("starts managed IPC from core readiness without a listen address", async () => {
+    const fake = createFakeStore();
+    const service = new DaemonStartService({
+      store: fake.store,
+      startDesktopDaemon: async () =>
+        makeStatus({
+          engine: "rust",
+          enginePhase: { phase: "ready" },
+          localTransport: "ipc",
+          listen: null,
+          networkAvailable: false,
+          status: "errored",
+          error: "network unavailable",
+        }),
+    });
+    expect(await service.start()).toEqual({ ok: true });
+    expect(fake.upserts).toEqual([
+      {
+        serverId: "srv_desktop",
+        hostname: "desktop",
+        listenAddress: "ipc://embedded",
+        desktopManaged: true,
+      },
+    ]);
+    expect(service.getLastError()).toBeNull();
+  });
+  it.each([
+    [{ phase: "failed" as const, reason: "storage unavailable" }, "storage unavailable"],
+    [{ phase: "starting" as const }, "Embedded engine is not ready."],
+  ])("surfaces core phase %j through existing startup error state", async (enginePhase, error) => {
+    const fake = createFakeStore();
+    const service = new DaemonStartService({
+      store: fake.store,
+      startDesktopDaemon: async () =>
+        makeStatus({
+          engine: "rust",
+          enginePhase,
+          localTransport: "ipc",
+          listen: null,
+        }),
+    });
+    expect(await service.start()).toEqual({ ok: false, error });
+    expect(service.getLastError()).toBe(error);
+    expect(service.isRunning()).toBe(false);
+    expect(fake.upserts).toEqual([]);
+  });
+
+  it("keeps managed Node startup on its network endpoint", async () => {
+    const fake = createFakeStore();
+    expect(
+      await upsertDesktopDaemonConnection(
+        fake.store,
+        makeStatus({ engine: "node", localTransport: "websocket" }),
+      ),
+    ).toEqual({ ok: true });
+    expect(fake.upserts).toEqual([
+      {
+        serverId: "srv_desktop",
+        hostname: "desktop",
+        listenAddress: "127.0.0.1:6767",
+        desktopManaged: true,
+      },
+    ]);
+  });
+
   it("upserts the connection on a successful daemon start", async () => {
     const fake = createFakeStore();
     const service = new DaemonStartService({

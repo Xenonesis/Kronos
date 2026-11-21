@@ -68,7 +68,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   openDrawer: (noteId) => {
     set((state) => ({
       isDrawerOpen: true,
-      selectedNoteId: noteId ?? state.selectedNoteId ?? (state.notes[0]?.id ?? null),
+      selectedNoteId: noteId ?? state.selectedNoteId ?? state.notes[0]?.id ?? null,
     }));
   },
 
@@ -132,7 +132,9 @@ export const useNotesStore = create<NotesState>((set, get) => ({
 
       // 3. Fall back to seed notes
       set({ notes: INITIAL_SEED_NOTES, isLoading: false });
-      await AsyncStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(INITIAL_SEED_NOTES)).catch(() => {});
+      await AsyncStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(INITIAL_SEED_NOTES)).catch(
+        () => {},
+      );
     } catch {
       set({ isLoading: false });
     }

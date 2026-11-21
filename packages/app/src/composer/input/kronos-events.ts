@@ -31,11 +31,7 @@ export function registerKronosComposerListeners(options: KronosComposerHandlerOp
 
     const now = Date.now();
     // Prevent double-text concatenation if kronos:dispatch-composer or insert was recently received for the exact same text
-    if (
-      lastEvent &&
-      lastEvent.text === text &&
-      now - lastEvent.timestamp < debounceWindowMs
-    ) {
+    if (lastEvent && lastEvent.text === text && now - lastEvent.timestamp < debounceWindowMs) {
       return;
     }
 
@@ -57,9 +53,7 @@ export function registerKronosComposerListeners(options: KronosComposerHandlerOp
 
     const now = Date.now();
     const wasRecentlyHandled =
-      lastEvent &&
-      lastEvent.text === text &&
-      now - lastEvent.timestamp < debounceWindowMs;
+      lastEvent && lastEvent.text === text && now - lastEvent.timestamp < debounceWindowMs;
 
     lastEvent = {
       text,

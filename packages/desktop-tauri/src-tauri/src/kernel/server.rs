@@ -90,16 +90,42 @@ pub fn get_registered_browser_hosts() -> Vec<serde_json::Value> {
         .collect()
 }
 
-fn discover_default_whisper_model() -> Option<std::path::PathBuf> {
-    let mut dirs_to_check = vec![crate::get_data_dir().join("models")];
-    if let Some(home) = dirs::home_dir() {
+pub(super) fn whisper_model_roots(
+    data: std::path::PathBuf,
+    owned: Option<&std::path::Path>,
+    home: impl FnOnce() -> Option<std::path::PathBuf>,
+    local: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> Vec<std::path::PathBuf> {
+    // Windows known-folder APIs ignore the child's HOME/LOCALAPPDATA overrides.
+    if let Some(owned) = owned {
+        return vec![owned.join("models")];
+    }
+    let mut dirs_to_check = vec![data.join("models")];
+    if let Some(home) = home() {
         dirs_to_check.push(home.join(".paseo").join("models"));
         dirs_to_check.push(home.join(".kronos").join("models"));
     }
-    if let Some(local) = dirs::data_local_dir() {
+    if let Some(local) = local() {
         dirs_to_check.push(local.join("Kronos").join("models"));
     }
-    for dir in dirs_to_check {
+    dirs_to_check
+}
+
+pub(crate) fn current_whisper_model_roots() -> Vec<std::path::PathBuf> {
+    #[cfg(feature = "ipc-acceptance")]
+    let owned = crate::desktop_acceptance::active().map(|context| context.resource_plan().home);
+    #[cfg(not(feature = "ipc-acceptance"))]
+    let owned: Option<std::path::PathBuf> = None;
+    whisper_model_roots(
+        crate::get_data_dir(),
+        owned.as_deref(),
+        dirs::home_dir,
+        dirs::data_local_dir,
+    )
+}
+
+fn discover_default_whisper_model() -> Option<std::path::PathBuf> {
+    for dir in current_whisper_model_roots() {
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -138,6 +164,10 @@ static SHM_RING: std::sync::LazyLock<
 });
 
 pub fn get_shm_ring() -> std::sync::Arc<tokio::sync::Mutex<crate::kernel::shm::ShmRingBuffer>> {
+    #[cfg(feature = "ipc-acceptance")]
+    if crate::desktop_acceptance::active().is_some() {
+        return crate::desktop_acceptance::owned_daemon_ring();
+    }
     SHM_RING.clone()
 }
 
@@ -1789,6 +1819,9 @@ pub fn agent_record_to_snapshot(
         if let Some(opts) = cfg.get("options").filter(|v| v.is_object()) {
             val["options"] = opts.clone();
         }
+        if let Some(perms) = cfg.get("pendingPermissions").filter(|v| v.is_array()) {
+            val["pendingPermissions"] = perms.clone();
+        }
     }
     let handle = record
         .runtime_info
@@ -2420,6 +2453,7 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .collect();
 
             let mut resp_payload = serde_json::json!({
+                "subscriptionId": format!("sub-terminals-{}", request_id),
                 "cwd": cwd,
                 "terminals": terminals,
                 "requestId": request_id
@@ -4503,6 +4537,88 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 }
             })
         }
+        "agent_permission_response" => {
+            let payload = msg.get("payload");
+            let agent_id = payload
+                .and_then(|p| p.get("agentId"))
+                .or_else(|| msg.get("agentId"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let perm_request_id = payload
+                .and_then(|p| p.get("requestId").or_else(|| p.get("id")))
+                .or_else(|| msg.get("permissionRequestId"))
+                .or_else(|| {
+                    // Only fallback to top-level requestId if payload has no requestId field
+                    if payload.is_none() {
+                        msg.get("requestId")
+                    } else {
+                        None
+                    }
+                })
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let response_val = payload
+                .and_then(|p| p.get("response").or_else(|| p.get("resolution")))
+                .or_else(|| msg.get("response"))
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({ "behavior": "allow" }));
+
+            let mgr = get_agent_manager();
+            let mut resolved_agent = None;
+            let _ = mgr.storage().update_agent_record(agent_id, |rec| {
+                if let Some(ref mut cfg) = rec.config {
+                    if let Some(perms) = cfg.get_mut("pendingPermissions").and_then(|p| p.as_array_mut()) {
+                        perms.retain(|p| {
+                            let id_matches = p.get("id").and_then(|v| v.as_str()) == Some(perm_request_id);
+                            let req_id_matches = p.get("requestId").and_then(|v| v.as_str()) == Some(perm_request_id);
+                            !id_matches && !req_id_matches
+                        });
+                    }
+                }
+                rec.updated_at = crate::agent::types::now_iso();
+            });
+            if let Some(updated) = mgr.get_agent(agent_id) {
+                resolved_agent = Some(agent_record_to_snapshot(&updated));
+            }
+
+            // Broadcast resolution frame so session-context immediately drops the pending permission prompt
+            let resolution_frame = serde_json::json!({
+                "type": "session",
+                "message": {
+                    "type": "agent_permission_resolved",
+                    "payload": {
+                        "agentId": agent_id,
+                        "requestId": perm_request_id,
+                        "resolution": response_val
+                    }
+                }
+            });
+            let _ = get_provider_push_tx().send(resolution_frame.to_string());
+
+            // Also broadcast updated agent snapshot so UI state stays in sync
+            if let Some(ref snap) = resolved_agent {
+                let agent_updated_frame = serde_json::json!({
+                    "type": "session",
+                    "message": {
+                        "type": "agent_updated",
+                        "payload": {
+                            "agent": snap
+                        }
+                    }
+                });
+                let _ = get_provider_push_tx().send(agent_updated_frame.to_string());
+            }
+
+            serde_json::json!({
+                "type": "agent_permission_resolved",
+                "requestId": request_id,
+                "payload": {
+                    "agentId": agent_id,
+                    "requestId": perm_request_id,
+                    "resolution": response_val
+                }
+            })
+        }
         "delete_agent_request" => {
             let payload = msg.get("payload");
             let agent_id = msg
@@ -5534,14 +5650,56 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .or_else(|| payload.and_then(|p| p.get("agentIds")))
                 .cloned()
                 .unwrap_or_else(|| serde_json::json!([]));
+            let cursors = msg
+                .get("cursors")
+                .or_else(|| payload.and_then(|p| p.get("cursors")));
+            let mut timelines = serde_json::Map::new();
+            let mut agents = serde_json::Map::new();
+            let mgr = get_agent_manager();
+
+            if let Some(agent_id_array) = agent_ids.as_array() {
+                for aid_val in agent_id_array {
+                    if let Some(aid) = aid_val.as_str() {
+                        let expected_epoch = crate::kernel::timeline::epoch(aid);
+                        let total_rows = mgr.storage().with_timeline(aid, |items| items.len()).unwrap_or(0);
+
+                        let is_current = if let Some(cursor_map) = cursors.and_then(|c| c.get(aid)) {
+                            let cursor_epoch = cursor_map.get("epoch").and_then(|e| e.as_str()).unwrap_or("");
+                            let cursor_seq = cursor_map.get("seq").and_then(|s| s.as_u64()).unwrap_or(0);
+                            cursor_epoch == expected_epoch && cursor_seq == total_rows as u64
+                        } else {
+                            false
+                        };
+
+                        if is_current {
+                            timelines.insert(aid.to_string(), serde_json::json!("current"));
+                            if let Some(agent_record) = mgr.get_agent(aid) {
+                                agents.insert(aid.to_string(), agent_record_to_snapshot(&agent_record));
+                            }
+                        } else if cursors.is_some() {
+                            timelines.insert(aid.to_string(), serde_json::json!("behind"));
+                        }
+                    }
+                }
+            }
+
+            let mut res_payload = serde_json::json!({
+                "requestId": request_id,
+                "subscriptionId": format!("sub-timeline-{}", request_id),
+                "agentIds": agent_ids
+            });
+
+            if cursors.is_some() {
+                if let Some(res_obj) = res_payload.as_object_mut() {
+                    res_obj.insert("timelines".to_string(), serde_json::Value::Object(timelines));
+                    res_obj.insert("agents".to_string(), serde_json::Value::Object(agents));
+                }
+            }
+
             serde_json::json!({
                 "type": "agent.timeline.set_subscription.response",
                 "requestId": request_id,
-                "payload": {
-                    "requestId": request_id,
-                    "subscriptionId": format!("sub-timeline-{}", request_id),
-                    "agentIds": agent_ids
-                }
+                "payload": res_payload
             })
         }
         "creation.subscribe.request" => {
@@ -5576,6 +5734,96 @@ pub async fn dispatch_session_message(msg: &serde_json::Value) -> serde_json::Va
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
             rpc_helpers::handle_subscribe_checkout_diff(cwd_str, &request_id)
+        }
+        "diff.subscribe.request" => {
+            let payload = msg.get("payload");
+            let cwd_str = msg
+                .get("cwd")
+                .or_else(|| payload.and_then(|p| p.get("cwd")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            let sub_id = format!("sub-diff-{}", request_id);
+            serde_json::json!({
+                "type": "diff.subscribe.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "subscriptionId": sub_id,
+                    "slot": 0,
+                    "cwd": cwd_str,
+                    "error": null
+                }
+            })
+        }
+        "diff.unsubscribe.request" => {
+            serde_json::json!({
+                "type": "status",
+                "requestId": request_id,
+                "payload": {
+                    "status": "acknowledged",
+                    "requestId": request_id
+                }
+            })
+        }
+        "plugin.rpc.invoke.request" => {
+            let plugin_id = msg
+                .get("pluginId")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("pluginId")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let method = msg
+                .get("method")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("method")))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let _input = msg
+                .get("input")
+                .or_else(|| msg.get("payload").and_then(|p| p.get("input")))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+
+            let output = match (plugin_id, method) {
+                ("plugins", "list") => {
+                    let plugins = get_plugin_manager().list_active_plugins();
+                    serde_json::json!({ "plugins": plugins })
+                }
+                ("plugins", "metrics") => {
+                    let metrics = get_plugin_manager().get_metrics();
+                    serde_json::json!({ "metrics": metrics })
+                }
+                _ => serde_json::json!({}),
+            };
+
+            serde_json::json!({
+                "type": "plugin.rpc.invoke.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "output": output,
+                    "error": null
+                }
+            })
+        }
+        "plugin.rpc.subscribe.request" => {
+            serde_json::json!({
+                "type": "plugin.rpc.subscribe.response",
+                "requestId": request_id,
+                "payload": {
+                    "requestId": request_id,
+                    "subscriptionId": format!("sub-plugin-{}", request_id),
+                    "error": null
+                }
+            })
+        }
+        "plugin.rpc.unsubscribe.request" => {
+            serde_json::json!({
+                "type": "status",
+                "requestId": request_id,
+                "payload": {
+                    "status": "acknowledged",
+                    "requestId": request_id
+                }
+            })
         }
         "checkout.diff.get.request" => {
             let payload = msg.get("payload");
@@ -6876,22 +7124,115 @@ pub async fn process_incoming_frame(text: &str) -> Option<String> {
     serde_json::to_string(&err_resp).ok()
 }
 
+#[cfg(test)]
+pub(crate) static TEST_NETWORK_BIND_FAILURE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkStatus {
+    pub port: Option<u16>,
+    pub error: Option<String>,
+}
+
+/// Core lifetime is independent of HTTP/WebSocket and pipe/socket listeners.
+pub struct SessionContext {
+    pub access: Arc<crate::kernel::access::AccessControl>,
+    #[cfg(feature = "ipc-acceptance")]
+    pub(crate) acceptance_epoch: u64,
+    shutdown: tokio::sync::watch::Sender<bool>,
+    network: tokio::sync::watch::Sender<NetworkStatus>,
+    #[cfg(test)]
+    _auth_home: tempfile::TempDir,
+}
+
+impl SessionContext {
+    pub(crate) fn initialize() -> Result<Arc<Self>, Box<dyn std::error::Error + Send + Sync>> {
+        #[cfg(test)]
+        let auth_home = tempfile::tempdir()?;
+        #[cfg(test)]
+        let home = auth_home.path().to_path_buf();
+        #[cfg(not(test))]
+        let home = crate::get_data_dir();
+        #[cfg(not(test))]
+        if AGENT_MANAGER.get().is_none() {
+            let manager = crate::agent::manager::AgentManager::try_new(home.clone())?;
+            let _ = AGENT_MANAGER.set(manager);
+        }
+        let access = Arc::new(crate::kernel::access::AccessControl::load(&home, 0)?);
+        #[cfg(not(test))]
+        crate::kernel::schedules::start_scheduler_engine();
+        #[cfg(not(test))]
+        crate::kernel::config_store::get_config_store().sanitize_orphaned_workspaces();
+        #[cfg(feature = "ipc-acceptance")]
+        let acceptance_epoch = {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            let mut current = NEXT.load(std::sync::atomic::Ordering::Relaxed);
+            loop {
+                if current > 9_007_199_254_740_991 {
+                    return Err(std::io::Error::other("Acceptance core epoch exhausted").into());
+                }
+                match NEXT.compare_exchange_weak(
+                    current,
+                    current + 1,
+                    std::sync::atomic::Ordering::Relaxed,
+                    std::sync::atomic::Ordering::Relaxed,
+                ) {
+                    Ok(_) => break current,
+                    Err(latest) => current = latest,
+                }
+            }
+        };
+        Ok(Arc::new(Self {
+            access,
+            #[cfg(feature = "ipc-acceptance")]
+            acceptance_epoch,
+            shutdown: tokio::sync::watch::channel(false).0,
+            network: tokio::sync::watch::channel(NetworkStatus::default()).0,
+            #[cfg(test)]
+            _auth_home: auth_home,
+        }))
+    }
+
+    pub fn subscribe_shutdown(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.shutdown.subscribe()
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        *self.shutdown.borrow()
+    }
+
+    pub(crate) fn stop(&self) {
+        self.shutdown.send_replace(true);
+    }
+
+    pub fn network_status(&self) -> NetworkStatus {
+        self.network.borrow().clone()
+    }
+
+    pub(crate) fn network_failed(&self, error: String) {
+        self.network.send_replace(NetworkStatus {
+            port: None,
+            error: Some(error),
+        });
+    }
+}
+
 pub struct DaemonHandle {
     pub port: u16,
+    pub context: Arc<SessionContext>,
     shutdown_tx: broadcast::Sender<()>,
     server_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pipe_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     #[cfg(test)]
     pub(crate) access: Arc<crate::kernel::access::AccessControl>,
-    #[cfg(test)]
-    _auth_home: tempfile::TempDir,
 }
 
 pub type EmbeddedDaemon = DaemonHandle;
 
 impl DaemonHandle {
     pub async fn start() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Self::start_internal(6767, true, None).await
+        Self::start_internal(0, true, None).await
     }
 
     pub async fn start_test(port: u16) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
@@ -6911,11 +7252,35 @@ impl DaemonHandle {
         is_production: bool,
         custom_pipe: Option<String>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let context = SessionContext::initialize()?;
+        Self::start_network(context, port, is_production, custom_pipe).await
+    }
+
+    pub(crate) async fn start_network(
+        context: Arc<SessionContext>,
+        port: u16,
+        is_production: bool,
+        custom_pipe: Option<String>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        // Test instances must never open the packaged desktop's canonical pipe/socket.
+        #[cfg(test)]
+        let is_production = {
+            let _ = is_production;
+            false
+        };
+        #[cfg(test)]
+        if TEST_NETWORK_BIND_FAILURE.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AddrNotAvailable,
+                "injected listener failure",
+            )
+            .into());
+        }
         let (shutdown_tx, _) = broadcast::channel(16);
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         let listener = match tokio::net::TcpListener::bind(addr).await {
             Ok(l) => l,
-            Err(e) if is_production || port == 6767 => {
+            Err(e) if is_production || port == 6767 || port == 0 => {
                 eprintln!(
                     "[kernel] Port {} unavailable ({}), falling back to OS ephemeral port",
                     port, e
@@ -6925,39 +7290,25 @@ impl DaemonHandle {
             Err(e) => return Err(Box::new(e)),
         };
         let actual_port = listener.local_addr()?.port();
-        crate::daemon::set_active_daemon_port(actual_port);
+        crate::daemon::publish_active_daemon_port(&context, actual_port);
 
-        #[cfg(test)]
-        let auth_home = tempfile::tempdir()?;
-        #[cfg(test)]
-        let home = auth_home.path().to_path_buf();
-        #[cfg(not(test))]
-        let home = crate::get_data_dir();
-        #[cfg(not(test))]
-        if AGENT_MANAGER.get().is_none() {
-            let manager = crate::agent::manager::AgentManager::try_new(home.clone())?;
-            let _ = AGENT_MANAGER.set(manager);
-        }
-        #[cfg(not(test))]
-        crate::kernel::schedules::start_scheduler_engine();
-        #[cfg(not(test))]
-        crate::kernel::config_store::get_config_store().sanitize_orphaned_workspaces();
-        let access = Arc::new(crate::kernel::access::AccessControl::load(
-            &home,
-            actual_port,
-        )?);
+        let access = Arc::new(context.access.with_network_port(actual_port));
+        context.network.send_replace(NetworkStatus {
+            port: Some(actual_port),
+            error: None,
+        });
         let ws_routes = Router::new()
             .route(
                 "/",
                 get({
                     let tx = shutdown_tx.clone();
-                    let access = access.clone();
+                    let context = context.clone();
                     move |ws: WebSocketUpgrade| {
                         let rx = tx.subscribe();
-                        let access = access.clone();
+                        let context = context.clone();
                         async move {
                             ws.max_message_size(16 * 1024 * 1024)
-                                .on_upgrade(move |socket| handle_ws(socket, rx, access))
+                                .on_upgrade(move |socket| handle_ws(socket, rx, context))
                         }
                     }
                 }),
@@ -6966,13 +7317,13 @@ impl DaemonHandle {
                 "/ws",
                 get({
                     let tx = shutdown_tx.clone();
-                    let access = access.clone();
+                    let context = context.clone();
                     move |ws: WebSocketUpgrade| {
                         let rx = tx.subscribe();
-                        let access = access.clone();
+                        let context = context.clone();
                         async move {
                             ws.max_message_size(16 * 1024 * 1024)
-                                .on_upgrade(move |socket| handle_ws(socket, rx, access))
+                                .on_upgrade(move |socket| handle_ws(socket, rx, context))
                         }
                     }
                 }),
@@ -6998,79 +7349,95 @@ impl DaemonHandle {
             ));
 
         let mut s_rx = shutdown_tx.subscribe();
+        let server_context = context.clone();
         let server_handle = tokio::spawn(async move {
-            let _ = axum::serve(listener, app)
+            let result = axum::serve(listener, app)
                 .with_graceful_shutdown(async move {
                     let _ = s_rx.recv().await;
                 })
                 .await;
+            server_context.network.send_replace(NetworkStatus {
+                port: None,
+                error: result.err().map(|error| error.to_string()),
+            });
+            crate::daemon::clear_active_daemon_port(actual_port);
         });
 
         #[cfg(windows)]
         let pipe_task = if let Some(custom) = &custom_pipe {
             let p_rx = shutdown_tx.subscribe();
-            let h = tokio::spawn(run_named_pipe(custom.clone(), p_rx, access.clone()));
+            let h = tokio::spawn(run_named_pipe(custom.clone(), p_rx, context.clone()));
             Some(h)
         } else if is_production {
             let p_rx = shutdown_tx.subscribe();
             let h = tokio::spawn(run_named_pipe(
                 r"\\.\pipe\kronos-ipc".to_string(),
                 p_rx,
-                access.clone(),
+                context.clone(),
             ));
             Some(h)
         } else {
             let p_rx = shutdown_tx.subscribe();
             let pipe_name = format!(r"\\.\pipe\kronos-ipc-{}", actual_port);
-            let h = tokio::spawn(run_named_pipe(pipe_name, p_rx, access.clone()));
+            let h = tokio::spawn(run_named_pipe(pipe_name, p_rx, context.clone()));
             Some(h)
         };
 
         #[cfg(not(windows))]
         let pipe_task = if let Some(custom) = &custom_pipe {
             let p_rx = shutdown_tx.subscribe();
-            let h = tokio::spawn(run_unix_socket(custom.clone(), p_rx, access.clone()));
+            let h = tokio::spawn(run_unix_socket(custom.clone(), p_rx, context.clone()));
             Some(h)
         } else if is_production {
             let p_rx = shutdown_tx.subscribe();
             let h = tokio::spawn(run_unix_socket(
                 "/tmp/kronos-ipc.sock".to_string(),
                 p_rx,
-                access.clone(),
+                context.clone(),
             ));
             Some(h)
         } else {
             let p_rx = shutdown_tx.subscribe();
             let sock_path = format!("/tmp/kronos-ipc-{}.sock", actual_port);
-            let h = tokio::spawn(run_unix_socket(sock_path, p_rx, access.clone()));
+            let h = tokio::spawn(run_unix_socket(sock_path, p_rx, context.clone()));
             Some(h)
         };
 
         Ok(Self {
             port: actual_port,
+            context,
             shutdown_tx,
             server_task: Arc::new(Mutex::new(Some(server_handle))),
             pipe_task: Arc::new(Mutex::new(pipe_task)),
             #[cfg(test)]
             access,
-            #[cfg(test)]
-            _auth_home: auth_home,
         })
     }
 
-    pub async fn stop(&self) {
+    pub async fn stop_network(&self) {
         let _ = self.shutdown_tx.send(());
-
-        let mut task_opt = self.server_task.lock().await;
-        if let Some(task) = task_opt.take() {
-            let _ = tokio::time::timeout(Duration::from_millis(1500), task).await;
+        self.context.network.send_replace(NetworkStatus::default());
+        crate::daemon::clear_active_daemon_port(self.port);
+        if let Some(mut task) = self.server_task.lock().await.take() {
+            if tokio::time::timeout(Duration::from_millis(1500), &mut task)
+                .await
+                .is_err()
+            {
+                task.abort();
+                let _ = task.await;
+            }
         }
-
-        let mut pipe_opt = self.pipe_task.lock().await;
-        if let Some(task) = pipe_opt.take() {
+        if let Some(task) = self.pipe_task.lock().await.take() {
             task.abort();
+            let _ = task.await;
         }
     }
+
+    pub async fn stop(&self) {
+        self.context.stop();
+        self.stop_network().await;
+    }
+
 }
 
 async fn guard_http(
@@ -7102,288 +7469,169 @@ async fn guard_http(
     next.run(request).await
 }
 
-async fn close_for_resync(socket: &mut WebSocket) {
-    let _ = socket
-        .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-            code: 1013,
-            reason: "Stream overflow; reconnect and resynchronize".into(),
-        })))
-        .await;
-}
-
-async fn reject_socket(socket: &mut WebSocket, reason: &str, announce: bool) {
-    if announce {
-        let rejection =
-            serde_json::json!({"type":"hello.rejected", "reason":reason, "accepts":["password"]});
-        let _ = socket
-            .send(Message::Text(rejection.to_string().into()))
-            .await;
-    }
-    let (code, message) = match reason {
-        "incompatible_protocol" => (4003, "Incompatible protocol version"),
-        "incorrect_password" => (4401, "Incorrect password"),
-        _ => (4401, "Password required"),
-    };
-    let _ = socket
-        .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-            code,
-            reason: message.into(),
-        })))
-        .await;
-}
-
 async fn serve_ipc<S>(
     stream: S,
     mut shutdown: broadcast::Receiver<()>,
-    access: Arc<crate::kernel::access::AccessControl>,
+    context: Arc<SessionContext>,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
+    use super::session::{
+        run_session, session_pair, SessionFrame, SessionProfile, MAX_FRAME_BYTES,
+    };
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-    let (reader, mut writer) = tokio::io::split(stream);
-    let mut reader = BufReader::new(reader);
-    let mut frame = Vec::new();
-    let admission = tokio::time::timeout(Duration::from_secs(10), async {
-        (&mut reader)
-            .take(8193)
-            .read_until(b'\n', &mut frame)
-            .await
-            .map_err(|_| "password_required")?;
-        if frame.len() > 8192 || frame.last() != Some(&b'\n') {
-            return Err("password_required");
-        }
-        let hello = serde_json::from_slice(&frame).map_err(|_| "password_required")?;
-        access.authenticate_hello(&hello).await
-    })
-    .await
-    .unwrap_or(Err("password_required"));
-    if let Err(reason) = admission {
-        let rejection =
-            serde_json::json!({"type":"hello.rejected", "reason":reason, "accepts":["password"]});
-        let _ = writer.write_all(format!("{rejection}\n").as_bytes()).await;
-        return;
-    }
-    let info = crate::kernel::protocol::build_server_info_response();
-    if writer
-        .write_all(format!("{info}\n").as_bytes())
-        .await
-        .is_err()
-    {
-        return;
-    }
-    loop {
-        frame.clear();
-        let mut limited = (&mut reader).take(16 * 1024 * 1024 + 1);
-        tokio::select! {
-            _ = shutdown.recv() => break,
-            result = limited.read_until(b'\n', &mut frame) => {
-                if result.is_err() || frame.is_empty() || frame.len() > 16 * 1024 * 1024
-                    || frame.last() != Some(&b'\n') { break; }
-                let Ok(text) = std::str::from_utf8(&frame) else { break; };
-                if let Some(reply) = process_incoming_frame(text.trim()).await {
-                    if writer.write_all(format!("{reply}\n").as_bytes()).await.is_err() { break; }
+    let (session, mut peer) = session_pair(SessionProfile::LegacyLine);
+    let pump = async move {
+        let (reader, mut writer) = tokio::io::split(stream);
+        let mut reader = BufReader::new(reader);
+        let mut frame = Vec::new();
+        let mut first = true;
+        let mut accepting = true;
+        loop {
+            let limit = if first { 8192 } else { MAX_FRAME_BYTES };
+            let mut limited = (&mut reader).take((limit.saturating_sub(frame.len()) + 1) as u64);
+            tokio::select! {
+                _ = shutdown.recv() => break,
+                result = limited.read_until(b'\n', &mut frame), if accepting => {
+                    let valid = result.is_ok() && !frame.is_empty() && frame.len() <= limit && frame.last() == Some(&b'\n');
+                    let text = if valid { std::str::from_utf8(&frame).ok() } else { None };
+                    match text {
+                        Some(text) => { accepting = peer.outgoing.try_send(SessionFrame::Text(text.to_owned())).is_ok(); }
+                        None if first => {
+                            accepting = false;
+                            let _ = peer.outgoing.try_send(SessionFrame::Text(String::new()));
+                        }
+                        None => break,
+                    }
+                    first = false;
+                    frame.clear();
+                }
+                frame = peer.incoming.recv() => match frame {
+                    Some(SessionFrame::Text(text)) => {
+                        if writer.write_all(format!("{text}\n").as_bytes()).await.is_err() { break; }
+                    }
+                    Some(SessionFrame::Close { .. }) | None => break,
+                    Some(SessionFrame::Binary(_)) => break,
                 }
             }
         }
-    }
+    };
+    // Finish an accepted dispatch even after peer EOF; transport teardown must not cancel agent startup.
+    let _ = tokio::join!(run_session(context, session), pump);
 }
 
 async fn handle_ws(
     mut socket: WebSocket,
-    mut shutdown_rx: broadcast::Receiver<()>,
-    access: Arc<crate::kernel::access::AccessControl>,
+    mut shutdown: broadcast::Receiver<()>,
+    context: Arc<SessionContext>,
 ) {
-    // Do not create subscriptions or emit private state before a verified hello.
-    let mut announce_rejection = false;
-    let admission = tokio::time::timeout(Duration::from_secs(10), async {
-        match socket.recv().await {
-            Some(Ok(Message::Text(text))) if text.len() <= 8192 => {
-                let hello = serde_json::from_str::<serde_json::Value>(&text)
-                    .map_err(|_| "password_required")?;
-                announce_rejection = hello.get("auth").is_some()
-                    || hello["capabilities"]["hello_rejection"].as_bool() == Some(true);
-                access.authenticate_hello(&hello).await
+    use super::session::{run_session, session_pair, SessionFrame, SessionProfile};
+    let (session, mut peer) = session_pair(SessionProfile::Full);
+    let pump = async move {
+        let mut accepting = true;
+        loop {
+            tokio::select! {
+                _ = shutdown.recv() => { let _ = socket.send(Message::Close(None)).await; break; }
+                frame = socket.recv(), if accepting => match frame {
+                    Some(Ok(Message::Text(text))) => accepting = peer.outgoing.try_send(SessionFrame::Text(text.to_string())).is_ok(),
+                    Some(Ok(Message::Binary(bytes))) => accepting = peer.outgoing.try_send(SessionFrame::Binary(bytes.to_vec())).is_ok(),
+                    Some(Ok(Message::Ping(data))) => { if socket.send(Message::Pong(data)).await.is_err() { break; } }
+                    Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                },
+                frame = peer.incoming.recv() => {
+                    let (frame, closing) = match frame {
+                        Some(SessionFrame::Text(text)) => (Message::Text(text.into()), false),
+                        Some(SessionFrame::Binary(bytes)) => (Message::Binary(bytes.into()), false),
+                        Some(SessionFrame::Close { code, reason }) => (Message::Close(Some(axum::extract::ws::CloseFrame { code, reason:reason.into() })), true),
+                        None => break,
+                    };
+                    if socket.send(frame).await.is_err() || closing { break; }
+                }
             }
-            _ => Err("password_required"),
         }
-    })
-    .await
-    .unwrap_or(Err("password_required"));
-    if let Err(reason) = admission {
-        reject_socket(&mut socket, reason, announce_rejection).await;
-        return;
+    };
+    let _ = tokio::join!(run_session(context, session), pump);
+}
+
+#[cfg(windows)]
+fn create_first_pipe_instance(
+    pipe_name: &str,
+) -> std::io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+    tokio::net::windows::named_pipe::ServerOptions::new()
+        .first_pipe_instance(true)
+        .create(pipe_name)
+}
+
+/// Exclusive claim on an acceptance-owned first pipe instance.
+/// The held server keeps the name reserved through supervision handoff; an existing
+/// instance (or any canonical fallback name chosen by a caller) fails closed.
+#[cfg(all(windows, feature = "ipc-acceptance"))]
+#[cfg_attr(not(test), allow(dead_code))] // handed off by supervised startup built in Task 4
+#[derive(Debug)]
+pub(crate) struct PipeLease {
+    name: String,
+    server: Option<std::os::windows::io::OwnedHandle>,
+}
+
+#[cfg(all(windows, feature = "ipc-acceptance"))]
+impl PipeLease {
+    pub(crate) fn claim(name: &str) -> std::io::Result<Self> {
+        use std::os::windows::io::FromRawHandle;
+        use windows_sys::Win32::{
+            Foundation::INVALID_HANDLE_VALUE,
+            Storage::FileSystem::{
+                FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
+            },
+            System::Pipes::{
+                CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
+                PIPE_WAIT,
+            },
+        };
+        let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        let handle = unsafe {
+            CreateNamedPipeW(
+                wide.as_ptr(),
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                255,
+                65536,
+                65536,
+                0,
+                std::ptr::null(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self {
+            name: name.to_string(),
+            server: Some(unsafe {
+                std::os::windows::io::OwnedHandle::from_raw_handle(handle as _)
+            }),
+        })
     }
-    if socket
-        .send(Message::Text(
-            crate::kernel::protocol::build_server_info_response()
-                .to_string()
-                .into(),
-        ))
-        .await
-        .is_err()
-    {
-        return;
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
     }
-    let mut watcher_rx = get_watcher_engine().subscribe_events();
-    let mut crdt_rx = get_crdt_engine().subscribe();
-    let mut term_output_rx = crate::native_pty::get_pty_manager().subscribe_output();
-    let mut provider_push_rx = get_provider_push_tx().subscribe();
-    let mut subscribed_terminals: std::collections::HashMap<String, u8> =
-        std::collections::HashMap::new();
-    let mut watcher_active = true;
-    let mut crdt_active = true;
-    loop {
-        tokio::select! {
-            _ = shutdown_rx.recv() => {
-                let _ = socket.send(Message::Close(None)).await;
-                break;
-            }
-            term_chunk = term_output_rx.recv() => {
-                match term_chunk {
-                    Ok(chunk) => {
-                        if let Some(&slot) = subscribed_terminals.get(&chunk.terminal_id) {
-                            let mut frame = Vec::with_capacity(2 + chunk.data.len());
-                            frame.push(0x01);
-                            frame.push(slot);
-                            frame.extend_from_slice(&chunk.data);
-                            if socket.send(Message::Binary(frame.into())).await.is_err() { break; }
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        close_for_resync(&mut socket).await;
-                        break;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                }
-            }
-            provider_update = provider_push_rx.recv() => {
-                match provider_update {
-                    Ok(text) => {
-                        if socket.send(Message::Text(text.into())).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                        tracing::warn!("WebSocket provider push lagged by {} messages; continuing without dropping connection", skipped);
-                        continue;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                }
-            }
-            events_res = watcher_rx.recv(), if watcher_active => {
-                match events_res {
-                    Ok(events) => {
-                        let frame = serde_json::json!({
-                            "type": "vfs/change_events",
-                            "payload": events,
-                        });
-                        if let Ok(text) = serde_json::to_string(&frame) {
-                            if socket.send(Message::Text(text.into())).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        close_for_resync(&mut socket).await;
-                        break;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        watcher_active = false;
-                    }
-                }
-            }
-            crdt_res = crdt_rx.recv(), if crdt_active => {
-                match crdt_res {
-                    Ok(event) => {
-                        let frame = serde_json::json!({
-                            "type": "crdt/update_event",
-                            "payload": {
-                                "room": event.room,
-                                "update": event.update_base64,
-                                "sourceId": event.source_id,
-                            }
-                        });
-                        if let Ok(text) = serde_json::to_string(&frame) {
-                            if socket.send(Message::Text(text.into())).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        close_for_resync(&mut socket).await;
-                        break;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        crdt_active = false;
-                    }
-                }
-            }
-            msg = socket.recv() => {
-                match msg {
-                    Some(Ok(Message::Text(text))) => {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                            let inner = if v.get("type").and_then(|t| t.as_str()) == Some("session") {
-                                v.get("message").unwrap_or(&v)
-                            } else {
-                                &v
-                            };
-                            let msg_type = inner.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                            if msg_type == "subscribe_terminal_request" {
-                                if let Some(term_id) = inner.get("terminalId").and_then(|id| id.as_str()) {
-                                    let next_slot = (subscribed_terminals.len() + 1) as u8;
-                                    subscribed_terminals.insert(term_id.to_string(), next_slot);
-                                }
-                            } else if msg_type == "unsubscribe_terminal_request" || msg_type == "kill_terminal_request" {
-                                if let Some(term_id) = inner.get("terminalId").and_then(|id| id.as_str()) {
-                                    subscribed_terminals.remove(term_id);
-                                }
-                            }
-                        }
-                        if let Some(reply) = process_incoming_frame(&text).await {
-                            if socket.send(Message::Text(reply.into())).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Binary(bytes))) => {
-                        if bytes.len() >= 2 && (bytes[0] == 0x02 || bytes[0] == 0x03) {
-                            let opcode = bytes[0];
-                            let slot = bytes[1];
-                            let payload = &bytes[2..];
-                            if opcode == 0x02 {
-                                if let Some((term_id, _)) = subscribed_terminals.iter().find(|(_, &s)| s == slot) {
-                                    if let Ok(text) = std::str::from_utf8(payload) {
-                                        let _ = crate::native_pty::get_pty_manager().write_terminal(term_id, text);
-                                    }
-                                }
-                            } else if opcode == 0x03 {
-                                if let Some((term_id, _)) = subscribed_terminals.iter().find(|(_, &s)| s == slot) {
-                                    if let Ok(resize_val) = serde_json::from_slice::<serde_json::Value>(payload) {
-                                        let rows = resize_val.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
-                                        let cols = resize_val.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
-                                        let _ = crate::native_pty::get_pty_manager().resize_terminal(term_id, cols, rows);
-                                    }
-                                }
-                            }
-                        } else if let Ok(text) = std::str::from_utf8(&bytes) {
-                            if let Some(reply) = process_incoming_frame(text).await {
-                                if socket.send(Message::Text(reply.into())).await.is_err() {
-                                    break;
-                            }
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Ping(data))) => {
-                        if socket.send(Message::Pong(data)).await.is_err() {
-                            break;
-                        }
-                    }
-                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => {
-                        break;
-                    }
-                    _ => {}
-                }
-            }
+
+    pub(crate) fn into_handle(mut self) -> std::os::windows::io::OwnedHandle {
+        self.server
+            .take()
+            .expect("pipe lease must own its first instance")
+    }
+
+    pub(crate) fn into_server(
+        self,
+    ) -> std::io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+        use std::os::windows::io::IntoRawHandle;
+        let handle = self.into_handle();
+        // Registration belongs to the receiving listener runtime, never an early boot runtime.
+        unsafe {
+            tokio::net::windows::named_pipe::NamedPipeServer::from_raw_handle(
+                handle.into_raw_handle(),
+            )
         }
     }
 }
@@ -7392,15 +7640,32 @@ async fn handle_ws(
 async fn run_named_pipe(
     pipe_name: String,
     mut shutdown_rx: broadcast::Receiver<()>,
-    access: Arc<crate::kernel::access::AccessControl>,
+    context: Arc<SessionContext>,
 ) {
     use tokio::net::windows::named_pipe::ServerOptions;
 
+    // An acceptance listener adopts the pre-claimed first instance instead of creating
+    // one: the lease is the exclusivity proof, and any other name fails closed.
+    #[cfg(feature = "ipc-acceptance")]
+    let mut adopted = match crate::desktop_acceptance::acceptance_pipe_server(&pipe_name) {
+        Ok(server) => server,
+        Err(error) => {
+            eprintln!("[kernel] Acceptance pipe handoff failed: {error}");
+            return;
+        }
+    };
+    #[cfg(not(feature = "ipc-acceptance"))]
+    let mut adopted: Option<tokio::net::windows::named_pipe::NamedPipeServer> = None;
+
     let mut first = true;
     loop {
-        let server_res = ServerOptions::new()
-            .first_pipe_instance(first)
-            .create(&pipe_name);
+        let server_res = if let Some(server) = adopted.take() {
+            Ok(server)
+        } else if first {
+            create_first_pipe_instance(&pipe_name)
+        } else {
+            ServerOptions::new().create(&pipe_name)
+        };
 
         let server = match server_res {
             Ok(s) => {
@@ -7426,7 +7691,11 @@ async fn run_named_pipe(
             }
         }
 
-        tokio::spawn(serve_ipc(server, shutdown_rx.resubscribe(), access.clone()));
+        tokio::spawn(serve_ipc(
+            server,
+            shutdown_rx.resubscribe(),
+            context.clone(),
+        ));
     }
 }
 
@@ -7489,7 +7758,7 @@ pub(crate) fn safe_remove_socket_file(path: &std::path::Path) {
 async fn run_unix_socket(
     sock_path: String,
     mut shutdown_rx: broadcast::Receiver<()>,
-    access: Arc<crate::kernel::access::AccessControl>,
+    context: Arc<SessionContext>,
 ) {
     use tokio::net::UnixListener;
 
@@ -7514,7 +7783,7 @@ async fn run_unix_socket(
             conn = listener.accept() => {
                 match conn {
                     Ok((stream, _)) => {
-                        tokio::spawn(serve_ipc(stream, shutdown_rx.resubscribe(), access.clone()));
+                        tokio::spawn(serve_ipc(stream, shutdown_rx.resubscribe(), context.clone()));
                     }
                     Err(_) => break,
                 }
@@ -8468,7 +8737,7 @@ fn opencode_model_definition(
             .unwrap_or(false),
         extract_context_window(details),
     );
-    let thinking_options = if let Some(variants) = details
+    if let Some(variants) = details
         .get("variants")
         .and_then(serde_json::Value::as_object)
         .filter(|variants| {
@@ -8497,11 +8766,8 @@ fn opencode_model_definition(
                     serde_json::json!({ "id": id, "label": label })
                 }),
         );
-        options
-    } else {
-        opencode_default_thinking_options()
-    };
-    set_model_thinking_options(&mut model, thinking_options, Some("default"));
+        set_model_thinking_options(&mut model, options, Some("default"));
+    }
     Some(model)
 }
 async fn discover_ollama_models() -> Vec<serde_json::Value> {

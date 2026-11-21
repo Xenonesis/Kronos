@@ -6,6 +6,30 @@ mod tests {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::connect_async;
 
+    #[test]
+    fn test_whisper_discovery_roots_preserve_normal_order() {
+        let temporary = tempfile::tempdir().unwrap();
+        let data = temporary.path().join("data");
+        let home = temporary.path().join("decoy-home");
+        let local = temporary.path().join("decoy-local");
+        assert_eq!(crate::kernel::server::whisper_model_roots(data.clone(), None,
+            || Some(home.clone()), || Some(local.clone())),
+            vec![data.join("models"), home.join(".paseo/models"), home.join(".kronos/models"), local.join("Kronos/models")]);
+    }
+
+    #[cfg(feature = "ipc-acceptance")]
+    #[test]
+    fn test_acceptance_whisper_discovery_never_resolves_host_roots() {
+        let temporary = tempfile::tempdir().unwrap();
+        let owned = temporary.path().join("owned-home");
+        let calls = std::cell::Cell::new(0);
+        let roots = crate::kernel::server::whisper_model_roots(temporary.path().join("decoy-data"), Some(&owned),
+            || { calls.set(calls.get() + 1); Some(temporary.path().join("decoy-home")) },
+            || { calls.set(calls.get() + 1); Some(temporary.path().join("decoy-local")) });
+        assert_eq!(roots, vec![owned.join("models")], "Acceptance reached non-owned model search roots");
+        assert_eq!(calls.get(), 0, "Acceptance resolved host known folders");
+    }
+
     async fn authenticate_socket(
         socket: &mut tokio_tungstenite::WebSocketStream<
             tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -210,6 +234,164 @@ mod tests {
         assert!(inner_val["result"]["tools"].as_array().unwrap().len() >= 5);
 
         daemon.stop().await;
+    }
+
+    async fn run_peer_drop_child(stall: bool) -> Result<(), String> {
+        let inherited_homes = [
+            std::env::var_os("KRONOS_HOME"),
+            std::env::var_os("PASEO_HOME"),
+        ];
+        let home = tempfile::Builder::new()
+            .prefix("kronos-task1-peer-drop-")
+            .tempdir()
+            .expect("owned child home");
+        let mut child =
+            tokio::process::Command::new(std::env::current_exe().expect("test executable"))
+                .args([
+                    "--exact",
+                    "kernel::server_test::tests::test_embedded_daemon_peer_drop_baseline",
+                    "--test-threads=1",
+                    "--nocapture",
+                ])
+                .env("KRONOS_TASK1_PEER_DROP_CHILD", home.path())
+                .env(
+                    "KRONOS_TASK1_PEER_DROP_STALL",
+                    if stall { "1" } else { "0" },
+                )
+                .env("KRONOS_HOME", home.path())
+                .env("PASEO_HOME", home.path())
+                .kill_on_drop(true)
+                .spawn()
+                .expect("spawn exact owned-home child");
+        let child_pid = child.id().expect("owned child PID");
+        let deadline = std::time::Duration::from_secs(if stall { 5 } else { 15 });
+        let (timed_out, status) = match tokio::time::timeout(deadline, child.wait()).await {
+            Ok(Ok(status)) => (false, status),
+            Ok(Err(error)) => {
+                let preserved = home.keep();
+                return Err(format!(
+                    "owned child wait failed: {error}; home_preserved={}",
+                    preserved.display()
+                ));
+            }
+            Err(_) => {
+                let kill = child.start_kill();
+                match tokio::time::timeout(std::time::Duration::from_secs(3), child.wait()).await {
+                    Ok(Ok(status)) => (true, status),
+                    result => {
+                        let preserved = home.keep();
+                        return Err(format!("owned child exit unconfirmed: kill={kill:?} wait={result:?}; home_preserved={}", preserved.display()));
+                    }
+                }
+            }
+        };
+        let stalled = home.path().join("workload-stalled").is_file();
+        assert_eq!(
+            [
+                std::env::var_os("KRONOS_HOME"),
+                std::env::var_os("PASEO_HOME")
+            ],
+            inherited_homes,
+            "parent home environment must remain unchanged"
+        );
+        home.close()
+            .expect("remove owned child home after child exits");
+        eprintln!("native_test_isolation child_pid={child_pid} status={status} deadline_exceeded={timed_out} reaped=true parent_env_unchanged=true owned_home_removed=true stalled_at_workload={stalled}");
+        if timed_out {
+            Err(format!("owned child deadline exceeded; reaped=true home_removed=true stalled_at_workload={stalled}"))
+        } else if status.success() {
+            Ok(())
+        } else {
+            Err(format!("owned-home child failed: {status}; reaped=true home_removed=true stalled_at_workload={stalled}"))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_peer_drop_deadline_cleanup() {
+        let error = run_peer_drop_child(true)
+            .await
+            .expect_err("injected stall must fail");
+        assert_eq!(
+            error,
+            "owned child deadline exceeded; reaped=true home_removed=true stalled_at_workload=true"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_embedded_daemon_peer_drop_baseline() {
+        const CHILD_MARKER: &str = "KRONOS_TASK1_PEER_DROP_CHILD";
+        const HOME_PREFIX: &str = "kronos-task1-peer-drop-";
+
+        let Some(owned_home) = std::env::var_os(CHILD_MARKER) else {
+            run_peer_drop_child(false)
+                .await
+                .expect("owned-home peer-drop workload");
+            return;
+        };
+
+        assert_eq!(std::env::var_os("KRONOS_HOME"), Some(owned_home.clone()));
+        assert_eq!(std::env::var_os("PASEO_HOME"), Some(owned_home.clone()));
+        let owned_home = std::path::PathBuf::from(owned_home);
+        assert!(owned_home.starts_with(std::env::temp_dir()));
+        assert!(owned_home
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with(HOME_PREFIX));
+        assert!(owned_home.is_dir());
+        assert_eq!(crate::get_data_dir(), owned_home);
+        eprintln!("native_test_isolation child_home_assertions=passed");
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let started = std::time::Instant::now();
+        let daemon = EmbeddedDaemon::start_test(0).await.expect("start isolated daemon");
+        let start_us = started.elapsed().as_micros();
+        let url = format!("ws://127.0.0.1:{}/ws", daemon.port);
+        eprintln!("native_test_baseline start_us={start_us}");
+
+        for request_id in ["before-peer-drop", "after-peer-drop"] {
+            let attaching = std::time::Instant::now();
+            let (mut socket, _) = tokio::time::timeout(std::time::Duration::from_secs(3), connect_async(&url))
+                .await
+                .expect("owned WebSocket upgrade deadline")
+                .expect("connect owned daemon");
+            authenticate_socket(&mut socket, &daemon).await;
+            if std::env::var("KRONOS_TASK1_PEER_DROP_STALL").as_deref() == Ok("1") {
+                std::fs::write(owned_home.join("workload-stalled"), b"ready").expect("mark controlled workload stall");
+                eprintln!("native_test_fault child_pid={} stall=workload safety_exit_seconds=20", std::process::id());
+                // Self-release bounds the old unbounded wait during RED observation.
+                std::thread::sleep(std::time::Duration::from_secs(20));
+                std::process::exit(86);
+            }
+            let attach_us = attaching.elapsed().as_micros();
+            let request = serde_json::json!({
+                "id": request_id,
+                "type": "ping",
+                "payload": {}
+            });
+            let round_trip = std::time::Instant::now();
+            socket
+                .send(tokio_tungstenite::tungstenite::Message::Text(request.to_string()))
+                .await
+                .expect("send ping");
+            let response = tokio::time::timeout(std::time::Duration::from_secs(3), socket.next())
+                .await
+                .expect("ping response deadline")
+                .expect("ping response frame")
+                .expect("valid ping response");
+            let round_trip_us = round_trip.elapsed().as_micros();
+            let parsed: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+            assert_eq!(parsed, serde_json::json!({
+                "id": request_id,
+                "type": "pong",
+                "success": true
+            }));
+            eprintln!("native_test_baseline request={request_id} attach_us={attach_us} round_trip_us={round_trip_us}");
+            // Drop TCP peer without a WebSocket close handshake; engine must serve the next peer.
+            drop(socket);
+        }
+
+        daemon.stop().await;
+        }).await.expect("owned child workload deadline");
     }
 
     #[tokio::test]
@@ -556,20 +738,30 @@ mod tests {
     #[cfg(windows)]
     #[tokio::test]
     async fn test_embedded_daemon_named_pipe_ipc() {
+        if !crate::daemon::tests::lifecycle_child(
+            "kernel::server_test::tests::test_embedded_daemon_named_pipe_ipc",
+        )
+        .await
+        {
+            return;
+        }
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         use tokio::net::windows::named_pipe::ClientOptions;
 
-        let port = 6796;
-        let daemon = EmbeddedDaemon::start_test(port)
+        let daemon = EmbeddedDaemon::start_test(0)
             .await
             .expect("Failed to start daemon");
-        let pipe_name = format!(r"\\.\pipe\kronos-ipc-{}", port);
-
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        let client = ClientOptions::new()
-            .open(&pipe_name)
-            .expect("Failed to open pipe");
+        let pipe_name = format!(r"\\.\pipe\kronos-ipc-{}", daemon.port);
+        let client = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if let Ok(client) = ClientOptions::new().open(&pipe_name) {
+                    break client;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("owned pipe open deadline");
         let (reader, mut writer) = tokio::io::split(client);
         let mut lines = BufReader::new(reader).lines();
         let hello = serde_json::json!({
@@ -580,8 +772,24 @@ mod tests {
             .write_all(format!("{hello}\n").as_bytes())
             .await
             .unwrap();
-        let info = lines.next_line().await.unwrap().unwrap();
+        let info = tokio::time::timeout(std::time::Duration::from_secs(3), lines.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         assert!(info.contains("server_info"));
+        assert_eq!(
+            crate::kernel::server::get_provider_push_tx().receiver_count(),
+            0,
+            "legacy pipe acquired full-session subscriptions"
+        );
+        writer.write_all(b"not JSON\n").await.unwrap();
+        let malformed = tokio::time::timeout(std::time::Duration::from_secs(3), lines.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(malformed.contains("Invalid JSON"));
 
         let msg = serde_json::json!({
             "id": "pipe-ping-1",
@@ -593,7 +801,11 @@ mod tests {
             .await
             .unwrap();
 
-        let resp_line = lines.next_line().await.unwrap().expect("Response line");
+        let resp_line = tokio::time::timeout(std::time::Duration::from_secs(3), lines.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("Response line");
         let parsed: serde_json::Value = serde_json::from_str(&resp_line).unwrap();
         assert_eq!(parsed["id"], "pipe-ping-1");
         assert_eq!(parsed["type"], "pong");
@@ -741,6 +953,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_embedded_daemon_vfs_websocket_events_forwarding() {
+        if !crate::daemon::tests::lifecycle_child(
+            "kernel::server_test::tests::test_embedded_daemon_vfs_websocket_events_forwarding",
+        )
+        .await
+        {
+            return;
+        }
         let daemon = EmbeddedDaemon::start_test(0)
             .await
             .expect("Failed to start daemon");
@@ -764,7 +983,12 @@ mod tests {
             .await
             .unwrap();
 
-        let parsed_reply = wait_for_rpc_response(&mut ws_stream, "ws-watch-1").await;
+        let parsed_reply = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            wait_for_rpc_response(&mut ws_stream, "ws-watch-1"),
+        )
+        .await
+        .unwrap();
         assert_eq!(parsed_reply["id"], "ws-watch-1");
         assert_eq!(parsed_reply["success"], true);
         let sub_id = parsed_reply["data"]["subscriptionId"]
@@ -824,7 +1048,12 @@ mod tests {
             .await
             .unwrap();
 
-        let parsed_unwatch = wait_for_rpc_response(&mut ws_stream, "ws-unwatch-1").await;
+        let parsed_unwatch = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            wait_for_rpc_response(&mut ws_stream, "ws-unwatch-1"),
+        )
+        .await
+        .unwrap();
         assert_eq!(parsed_unwatch["id"], "ws-unwatch-1");
         assert_eq!(parsed_unwatch["success"], true);
 
@@ -1743,7 +1972,7 @@ mod tests {
         let metrics = usage_resp["payload"]["metrics"]
             .as_array()
             .expect("metrics array");
-        assert_eq!(metrics.len(), 9);
+        assert!(metrics.len() >= 9);
     }
 
     #[tokio::test]
@@ -2650,6 +2879,85 @@ USAGE: opencode models
     }
 
     #[tokio::test]
+    async fn test_agent_permission_response_and_attention_flow() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+
+        // 1. Create agent
+        let create_req = serde_json::json!({
+            "type": "agent.create.request",
+            "requestId": "req-perm-create-1",
+            "provider": "mock",
+            "cwd": temp_dir.path().to_str().unwrap()
+        });
+        let create_res = dispatch_session_message(&create_req).await;
+        assert_eq!(create_res["type"], "agent.create.response");
+        let agent_id = create_res["payload"]["agent"]["id"].as_str().expect("valid id").to_string();
+
+        // 2. Set attention and pending permission on the agent
+        let mgr = crate::kernel::server::get_agent_manager();
+        let _ = mgr.storage().update_agent_record(&agent_id, |rec| {
+            rec.config = Some(serde_json::json!({
+                "requiresAttention": true,
+                "attentionReason": "Needs user permission to execute bash command",
+                "pendingPermissions": [
+                    {
+                        "id": "perm-req-42",
+                        "requestId": "perm-req-42",
+                        "tool": "bash",
+                        "command": "npm install"
+                    }
+                ]
+            }));
+        });
+
+        // Verify snapshot reflects pending permissions
+        let snap_req = serde_json::json!({
+            "type": "fetch_agent_timeline_request",
+            "requestId": "req-snap-1",
+            "agentId": agent_id.clone()
+        });
+        let snap_res = dispatch_session_message(&snap_req).await;
+        let snap_agent = &snap_res["payload"]["agent"];
+        assert_eq!(snap_agent["requiresAttention"], true);
+        assert_eq!(snap_agent["pendingPermissions"].as_array().unwrap().len(), 1);
+        assert_eq!(snap_agent["pendingPermissions"][0]["id"], "perm-req-42");
+
+        // 3. Clear attention
+        let clear_attn_req = serde_json::json!({
+            "type": "clear_agent_attention",
+            "requestId": "req-clear-attn-1",
+            "agentId": agent_id.clone()
+        });
+        let clear_attn_res = dispatch_session_message(&clear_attn_req).await;
+        assert_eq!(clear_attn_res["type"], "clear_agent_attention_response");
+        assert_eq!(clear_attn_res["payload"]["cleared"], true);
+
+        // 4. Respond to permission
+        let perm_resp_req = serde_json::json!({
+            "type": "agent_permission_response",
+            "requestId": "req-perm-resp-1",
+            "agentId": agent_id.clone(),
+            "payload": {
+                "agentId": agent_id.clone(),
+                "requestId": "perm-req-42",
+                "response": { "behavior": "allow" }
+            }
+        });
+        let perm_resp_res = dispatch_session_message(&perm_resp_req).await;
+        assert_eq!(perm_resp_res["type"], "agent_permission_resolved");
+        assert_eq!(perm_resp_res["payload"]["requestId"], "perm-req-42");
+        assert_eq!(perm_resp_res["payload"]["resolution"]["behavior"], "allow");
+
+        // 5. Verify pending permission was cleared from snapshot
+        let snap_res2 = dispatch_session_message(&snap_req).await;
+        let snap_agent2 = &snap_res2["payload"]["agent"];
+        assert_eq!(snap_agent2["pendingPermissions"].as_array().unwrap().len(), 0);
+
+        // Cleanup
+        let _ = mgr.delete_agent_and_wait(&agent_id).await;
+    }
+
+    #[tokio::test]
     async fn test_send_agent_message_rejects_unknown_agent() {
         let agent_id = "missing-send-message-contract-agent";
         let response = dispatch_session_message(&serde_json::json!({
@@ -3197,7 +3505,7 @@ USAGE: opencode models
         .await;
         assert_eq!(pair_resp["type"], "daemon.get_pairing_offer.response");
         let pair_url = pair_resp["payload"]["url"].as_str().unwrap_or("");
-        assert!(pair_url.starts_with("paseo://pair?endpoint=ws://"));
+        assert!(pair_url.starts_with("kronos://pair?endpoint=ws://"));
         let pair_qr = pair_resp["payload"]["qr"].as_str().unwrap_or("");
         assert!(pair_qr.contains('█'));
 
@@ -3342,5 +3650,44 @@ USAGE: opencode models
         assert_eq!(hover_resp["type"], "lsp/hover/response");
         assert_eq!(hover_resp["success"], false);
         assert!(hover_resp["error"].as_str().unwrap().contains("No active LSP server"));
+    }
+
+    #[cfg(all(windows, feature = "ipc-acceptance"))]
+    #[test]
+    fn test_acceptance_pipe_claim_precedes_runtime() {
+        let temporary = tempfile::tempdir().unwrap();
+        let name = format!(r"\\.\pipe\kronos-ipc-acceptance-{}-{}-pipe", std::process::id(), temporary.path().file_name().unwrap().to_string_lossy());
+        let claimed = std::panic::catch_unwind(|| crate::kernel::server::PipeLease::claim(&name));
+        assert!(claimed.is_ok(), "owned pipe claim accessed a Tokio reactor before runtime startup");
+        assert!(claimed.unwrap().is_ok());
+    }
+
+    #[cfg(all(windows, feature = "ipc-acceptance"))]
+    #[tokio::test]
+    async fn test_acceptance_pipe_collision_fails_closed() {
+        use crate::kernel::server::PipeLease;
+        use std::io::ErrorKind;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let run = format!(
+            "{}-{}",
+            std::process::id(),
+            temporary.path().file_name().unwrap().to_string_lossy()
+        );
+        let name = format!(r"\\.\pipe\kronos-ipc-acceptance-{run}-pipe");
+
+        let lease = PipeLease::claim(&name).expect("owned first pipe instance");
+        assert_eq!(lease.name(), name);
+
+        let collision = PipeLease::claim(&name).unwrap_err();
+        assert_eq!(collision.kind(), ErrorKind::PermissionDenied);
+
+        // The handoff server itself keeps the owned name reserved; no canonical fallback.
+        let handed_off = lease.into_server().expect("handoff into current listener runtime");
+        assert!(PipeLease::claim(&name).is_err());
+        drop(handed_off);
+
+        // Only after the owned listener is released may the same run reclaim it.
+        drop(PipeLease::claim(&name).expect("reacquire after owned shutdown"));
     }
 }

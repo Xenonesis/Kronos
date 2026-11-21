@@ -17,7 +17,8 @@ export const ArtifactSnippetChip: React.FC<ArtifactSnippetChipProps> = ({
   const addArtifact = useArtifactsStore((s) => s.addArtifact);
   const openInspector = useArtifactsStore((s) => s.openInspector);
 
-  const effectiveTitle = artifact?.title || title || (type === "svg" ? "SVG Graphic" : "HTML Sandbox");
+  const effectiveTitle =
+    artifact?.title || title || (type === "svg" ? "SVG Graphic" : "HTML Sandbox");
   const effectiveType = artifact?.type || type;
   const effectiveContent = artifact?.content || content;
 
@@ -79,15 +80,9 @@ export const ArtifactSnippetChip: React.FC<ArtifactSnippetChipProps> = ({
         gap: compact ? "6px" : "8px",
         padding: compact ? "4px 10px" : "6px 14px",
         borderRadius: "9999px",
-        backgroundColor: isHovered
-          ? "rgba(168, 85, 247, 0.22)"
-          : "rgba(168, 85, 247, 0.12)",
-        border: isHovered
-          ? "1px solid #c084fc"
-          : "1px solid rgba(168, 85, 247, 0.35)",
-        boxShadow: isHovered
-          ? "0 0 14px rgba(168, 85, 247, 0.3)"
-          : "0 2px 6px rgba(0, 0, 0, 0.3)",
+        backgroundColor: isHovered ? "rgba(168, 85, 247, 0.22)" : "rgba(168, 85, 247, 0.12)",
+        border: isHovered ? "1px solid #c084fc" : "1px solid rgba(168, 85, 247, 0.35)",
+        boxShadow: isHovered ? "0 0 14px rgba(168, 85, 247, 0.3)" : "0 2px 6px rgba(0, 0, 0, 0.3)",
         cursor: "pointer",
         color: "#f4f4f5",
         fontFamily: "system-ui, -apple-system, sans-serif",
@@ -117,7 +112,8 @@ export const ArtifactSnippetChip: React.FC<ArtifactSnippetChipProps> = ({
           letterSpacing: "0.01em",
         }}
       >
-        Preview Artifact: <strong style={{ color: "#ffffff", fontWeight: 600 }}>{effectiveTitle}</strong>
+        Preview Artifact:{" "}
+        <strong style={{ color: "#ffffff", fontWeight: 600 }}>{effectiveTitle}</strong>
       </span>
 
       <span

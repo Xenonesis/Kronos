@@ -135,9 +135,10 @@
     "release:major": "npm run release:check && npm run version:all:major && npm run release:publish && npm run release:push"
   },
   "dependencies": {
-    "@opencode/client": "^2.0.10"
+    "@opencode/client": "^2.3.2"
   },
   "devDependencies": {
+    "@codemirror/legacy-modes": "6.5.3",
     "@types/ws": "^8.5.14",
     "@typescript/native-preview": "7.0.0-dev.20260423.1",
     "@vercel/nft": "^1.5.0",
@@ -150,14 +151,14 @@
     "js-yaml": "^4.1.1",
     "knip": "^5.82.1",
     "lefthook": "^2.1.6",
-    "oxfmt": "0.46.0",
-    "oxlint": "1.61.0",
-    "oxlint-tsgolint": "^0.22.1",
+    "oxfmt": "0.79.0",
+    "oxlint": "1.94.0",
+    "oxlint-tsgolint": "^7.0.2008",
     "patch-package": "^8.0.1",
     "playwright": "^1.56.1",
     "react-dom": "19.2.3",
     "typescript": "^5.9.3",
-    "ws": "^8.20.0"
+    "ws": "^8.23.0"
   },
   "overrides": {
     "@codemirror/language": "6.12.4",
@@ -165,6 +166,8 @@
     "@electron/get@^3.0.0": {
       "semver@^6": "6.3.1"
     },
+    "@lezer/highlight": "1.2.3",
+    "@lezer/lr": "1.4.8",
     "expo": "~57.0.30",
     "expo-router": "~57.0.28",
     "lightningcss": "1.30.1",

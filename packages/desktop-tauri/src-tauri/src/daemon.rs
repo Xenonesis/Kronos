@@ -1,4 +1,5 @@
-use crate::kernel::server::{DaemonHandle, EmbeddedDaemon};
+use crate::kernel::server::{DaemonHandle, NetworkStatus, SessionContext};
+use futures_util::FutureExt;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
@@ -6,19 +7,56 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
-enum EmbeddedDaemonState {
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "phase", rename_all = "lowercase")]
+pub enum EnginePhase {
     Stopped,
-    Starting {
-        cancel: Arc<AtomicBool>,
-        join_handle: tokio::task::JoinHandle<()>,
-    },
-    Running(DaemonHandle),
+    Starting,
+    Ready,
+    Failed { reason: String },
 }
 
-static EMBEDDED_DAEMON: Mutex<EmbeddedDaemonState> = Mutex::new(EmbeddedDaemonState::Stopped);
+type ReadyResult = Result<Arc<SessionContext>, String>;
+
+struct EmbeddedRun {
+    cancel: Arc<AtomicBool>,
+    join_handle: tokio::task::JoinHandle<()>,
+    completion: tokio::sync::watch::Sender<Option<ReadyResult>>,
+    #[allow(dead_code)] // read by the supervised acceptance network toggle wired in Task 4
+    network_tx: tokio::sync::mpsc::Sender<NetworkRequest>,
+}
+
+struct NetworkRequest {
+    enabled: bool,
+    reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+}
+
+struct EmbeddedDaemonState {
+    phase: EnginePhase,
+    context: Option<Arc<SessionContext>>,
+    run: Option<EmbeddedRun>,
+}
+
+static EMBEDDED_DAEMON: Mutex<EmbeddedDaemonState> = Mutex::new(EmbeddedDaemonState {
+    phase: EnginePhase::Stopped,
+    context: None,
+    run: None,
+});
+
+#[cfg(test)]
+#[derive(Clone)]
+struct StartupHook {
+    entered: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+    fail: bool,
+}
+#[cfg(test)]
+static STARTUP_HOOK: Mutex<Option<StartupHook>> = Mutex::new(None);
+
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    let threads = num_cpus::get().clamp(4, 16);
     tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
+        .worker_threads(threads)
         .enable_all()
         .thread_name("kronos-embedded-daemon")
         .build()
@@ -29,7 +67,7 @@ fn get_or_init_runtime() -> &'static tokio::runtime::Runtime {
     &RUNTIME
 }
 
-static ACTIVE_DAEMON_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(6767);
+static ACTIVE_DAEMON_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
 
 pub fn set_active_daemon_port(port: u16) {
     ACTIVE_DAEMON_PORT.store(port, Ordering::SeqCst);
@@ -39,12 +77,41 @@ pub fn get_active_daemon_port() -> u16 {
     ACTIVE_DAEMON_PORT.load(Ordering::SeqCst)
 }
 
+pub(crate) fn publish_active_daemon_port(context: &Arc<SessionContext>, port: u16) {
+    let state = EMBEDDED_DAEMON.lock().unwrap_or_else(|e| e.into_inner());
+    if !context.is_stopped()
+        && state
+            .context
+            .as_ref()
+            .is_none_or(|current| Arc::ptr_eq(current, context))
+    {
+        set_active_daemon_port(port);
+    }
+}
+
+pub(crate) fn clear_active_daemon_port(port: u16) {
+    let _ = ACTIVE_DAEMON_PORT.compare_exchange(port, 0, Ordering::SeqCst, Ordering::SeqCst);
+}
+
 pub fn wait_for_daemon_health(max_attempts: usize) -> bool {
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::time::Duration;
 
-    let port = get_active_daemon_port();
+    // Wait up to 15 seconds for the embedded daemon to assign a port (port starts as 0)
+    let mut port = get_active_daemon_port();
+    if port == 0 {
+        for _ in 0..60 {
+            std::thread::sleep(Duration::from_millis(250));
+            port = get_active_daemon_port();
+            if port != 0 {
+                break;
+            }
+        }
+    }
+    if port == 0 {
+        return false;
+    }
     let addr_str = format!("127.0.0.1:{}", port);
 
     for _ in 0..max_attempts {
@@ -83,52 +150,262 @@ pub fn wait_for_daemon_health(max_attempts: usize) -> bool {
     false
 }
 
-#[allow(dead_code)]
+pub fn embedded_phase() -> EnginePhase {
+    EMBEDDED_DAEMON
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .phase
+        .clone()
+}
+
+pub fn embedded_network_status() -> NetworkStatus {
+    EMBEDDED_DAEMON
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .context
+        .as_ref()
+        .map(|context| context.network_status())
+        .unwrap_or_default()
+}
+
 pub fn is_embedded_running() -> bool {
-    if let Ok(lock) = EMBEDDED_DAEMON.lock() {
-        matches!(*lock, EmbeddedDaemonState::Running(_))
-    } else {
-        false
+    embedded_phase() == EnginePhase::Ready
+}
+
+fn request_embedded_start(
+    retry_failed: bool,
+) -> Result<tokio::sync::watch::Receiver<Option<ReadyResult>>, String> {
+    let mut state = EMBEDDED_DAEMON.lock().unwrap_or_else(|e| e.into_inner());
+    if matches!(state.phase, EnginePhase::Starting | EnginePhase::Ready) {
+        return Ok(state
+            .run
+            .as_ref()
+            .expect("active engine owns startup")
+            .completion
+            .subscribe());
+    }
+    if let EnginePhase::Failed { reason } = &state.phase {
+        if !retry_failed {
+            return Err(reason.clone());
+        }
+    }
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (completion, receiver) = tokio::sync::watch::channel(None);
+    let (network_tx, network_rx) = tokio::sync::mpsc::channel(4);
+    let worker_cancel = cancel.clone();
+    let worker_completion = completion.clone();
+    let join_handle = get_or_init_runtime().spawn(async move {
+        run_embedded(worker_cancel, worker_completion, network_rx).await;
+    });
+    state.phase = EnginePhase::Starting;
+    state.context = None;
+    state.run = Some(EmbeddedRun {
+        cancel,
+        join_handle,
+        completion,
+        network_tx,
+    });
+    Ok(receiver)
+}
+
+pub async fn ensure_embedded_ready() -> ReadyResult {
+    if env::var("KRONOS_DAEMON_ENGINE").is_ok_and(|engine| engine.eq_ignore_ascii_case("node")) {
+        return Err("Embedded IPC is unavailable in Node engine mode".into());
+    }
+    let mut receiver = request_embedded_start(false)?;
+    loop {
+        if let Some(result) = receiver.borrow_and_update().clone() {
+            return result;
+        }
+        receiver
+            .changed()
+            .await
+            .map_err(|_| "Embedded startup ended without readiness".to_string())?;
+    }
+}
+
+/// Toggles the network listener owned by the current embedded run task.
+/// Never creates an engine: it fails when the core is not ready and when the
+/// run is stopped or superseded before completion replies.
+#[cfg(feature = "ipc-acceptance")]
+#[allow(dead_code)] // invoked by the supervised acceptance startup built in Task 4
+pub async fn acceptance_set_network(enabled: bool) -> Result<(), String> {
+    let (reply, reply_rx) = tokio::sync::oneshot::channel();
+    let (sender, run_cancel) = {
+        let state = EMBEDDED_DAEMON.lock().unwrap_or_else(|e| e.into_inner());
+        if state.phase != EnginePhase::Ready {
+            return Err("Embedded core is not ready for a network toggle".into());
+        }
+        let run = state
+            .run
+            .as_ref()
+            .ok_or("Embedded core has no owning run task")?;
+        (run.network_tx.clone(), run.cancel.clone())
+    };
+    sender
+        .send(NetworkRequest { enabled, reply })
+        .await
+        .map_err(|_| "Embedded core stopped before the network toggle".to_string())?;
+    reply_rx
+        .await
+        .map_err(|_| "Network toggle was superseded".to_string())??;
+    let current = {
+        let state = EMBEDDED_DAEMON.lock().unwrap_or_else(|e| e.into_inner());
+        state.phase == EnginePhase::Ready
+            && state
+                .run
+                .as_ref()
+                .is_some_and(|run| Arc::ptr_eq(&run.cancel, &run_cancel))
+    };
+    if !current {
+        return Err("Network toggle was superseded by a new embedded core".into());
+    }
+    Ok(())
+}
+
+/// Acceptance listeners bind only the run-owned pipe; ordinary startup keeps the
+/// canonical listener unchanged.
+fn embedded_pipe() -> Option<String> {
+    #[cfg(all(windows, feature = "ipc-acceptance"))]
+    {
+        crate::desktop_acceptance::acceptance_pipe_name()
+    }
+    #[cfg(not(all(windows, feature = "ipc-acceptance")))]
+    {
+        None
+    }
+}
+
+async fn run_embedded(
+    cancel: Arc<AtomicBool>,
+    completion: tokio::sync::watch::Sender<Option<ReadyResult>>,
+    mut network_rx: tokio::sync::mpsc::Receiver<NetworkRequest>,
+) {
+    let initialized = std::panic::AssertUnwindSafe(async {
+        #[cfg(test)]
+        {
+            let hook = STARTUP_HOOK.lock().unwrap().clone();
+            if let Some(hook) = hook {
+                hook.entered.notify_one();
+                hook.release.notified().await;
+                if hook.fail {
+                    return Err("injected core startup failure".to_string());
+                }
+            }
+        }
+        SessionContext::initialize().map_err(|error| error.to_string())
+    })
+    .catch_unwind()
+    .await
+    .unwrap_or_else(|_| Err("Embedded engine startup panicked".into()));
+
+    let context = {
+        let mut state = EMBEDDED_DAEMON.lock().unwrap_or_else(|e| e.into_inner());
+        let current = state
+            .run
+            .as_ref()
+            .is_some_and(|run| Arc::ptr_eq(&run.cancel, &cancel));
+        if !current || cancel.load(Ordering::SeqCst) {
+            if let Ok(context) = initialized {
+                context.stop();
+            }
+            return;
+        }
+        match initialized {
+            Ok(context) => {
+                state.phase = EnginePhase::Ready;
+                state.context = Some(context.clone());
+                completion.send_replace(Some(Ok(context.clone())));
+                context
+            }
+            Err(reason) => {
+                eprintln!("[EmbeddedDaemon] Failed to initialize core: {reason}");
+                state.phase = EnginePhase::Failed {
+                    reason: reason.clone(),
+                };
+                completion.send_replace(Some(Err(reason)));
+                return;
+            }
+        }
+    };
+    let mut shutdown = context.subscribe_shutdown();
+    let mut handle =
+        match DaemonHandle::start_network(context.clone(), 0, true, embedded_pipe()).await {
+            Ok(handle) => Some(handle),
+            Err(error) => {
+                context.network_failed(error.to_string());
+                None
+            }
+        };
+    loop {
+        if *shutdown.borrow() {
+            break;
+        }
+        tokio::select! {
+            request = network_rx.recv() => {
+                let Some(request) = request else { break };
+                let result = if request.enabled {
+                    if handle.is_some() {
+                        Ok(())
+                    } else {
+                        match DaemonHandle::start_network(context.clone(), 0, true, embedded_pipe()).await {
+                            Ok(started) => {
+                                handle = Some(started);
+                                Ok(())
+                            }
+                            Err(error) => {
+                                context.network_failed(error.to_string());
+                                Err(error.to_string())
+                            }
+                        }
+                    }
+                } else {
+                    if let Some(existing) = handle.take() {
+                        existing.stop_network().await;
+                    }
+                    Ok(())
+                };
+                let _ = request.reply.send(result);
+            }
+            _ = shutdown.changed() => {
+                if *shutdown.borrow() {
+                    break;
+                }
+            }
+        }
+    }
+    if let Some(handle) = handle {
+        handle.stop_network().await;
     }
 }
 
 pub fn stop_embedded() {
-    let old_state = {
-        let mut lock = match EMBEDDED_DAEMON.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        std::mem::replace(&mut *lock, EmbeddedDaemonState::Stopped)
+    let (context, run) = {
+        let mut state = EMBEDDED_DAEMON.lock().unwrap_or_else(|e| e.into_inner());
+        state.phase = EnginePhase::Stopped;
+        (state.context.take(), state.run.take())
     };
-
-    let rt = get_or_init_runtime();
-    match old_state {
-        EmbeddedDaemonState::Stopped => {}
-        EmbeddedDaemonState::Starting {
-            cancel,
-            join_handle,
-        } => {
-            cancel.store(true, Ordering::SeqCst);
-            let abort_handle = join_handle.abort_handle();
-            let (tx, rx) = std::sync::mpsc::channel();
-            rt.spawn(async move {
-                let _ = join_handle.await;
-                let _ = tx.send(());
-            });
-            if rx
-                .recv_timeout(std::time::Duration::from_millis(2500))
-                .is_err()
-            {
-                abort_handle.abort();
-            }
+    if let Some(context) = context {
+        if let Some(port) = context.network_status().port {
+            clear_active_daemon_port(port);
         }
-        EmbeddedDaemonState::Running(handle) => {
-            let (tx, rx) = std::sync::mpsc::channel();
-            rt.spawn(async move {
-                handle.stop().await;
-                let _ = tx.send(());
-            });
-            let _ = rx.recv_timeout(std::time::Duration::from_millis(2500));
+        context.stop();
+    }
+    if let Some(run) = run {
+        run.cancel.store(true, Ordering::SeqCst);
+        run.completion
+            .send_replace(Some(Err("Embedded engine stopped during startup".into())));
+        let abort_handle = run.join_handle.abort_handle();
+        let (tx, rx) = std::sync::mpsc::channel();
+        get_or_init_runtime().spawn(async move {
+            let _ = run.join_handle.await;
+            let _ = tx.send(());
+        });
+        if rx
+            .recv_timeout(std::time::Duration::from_millis(2500))
+            .is_err()
+        {
+            abort_handle.abort();
         }
     }
 }
@@ -365,17 +642,102 @@ pub fn find_pid_listening_on_port(port: u16) -> Option<u32> {
     }
     None
 }
-fn ensure_port_available() -> bool {
-    match std::net::TcpListener::bind("127.0.0.1:6767") {
-        Ok(listener) => {
-            drop(listener);
-            true
-        }
-        Err(error) => {
-            eprintln!("[Daemon] Port 6767 is occupied or unavailable ({error}); refusing to terminate an unowned process.");
-            false
+#[cfg(windows)]
+fn is_kronos_process(pid: u32) -> bool {
+    let pid_str = pid.to_string();
+    // Use PowerShell Get-CimInstance to inspect the process name and executable path
+    let script = format!(
+        "$p = Get-CimInstance Win32_Process -Filter \"ProcessId = {}\"; if ($p) {{ Write-Output ($p.Name + '|' + $p.ExecutablePath + '|' + $p.CommandLine) }}",
+        pid_str
+    );
+    if let Ok(output) = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
+        if let Ok(text) = String::from_utf8(output.stdout) {
+            let lower = text.to_lowercase();
+            if lower.contains("kronos") || lower.contains("paseo") || lower.contains("daemon-worker") {
+                return true;
+            }
         }
     }
+    false
+}
+
+#[cfg(not(windows))]
+fn is_kronos_process(pid: u32) -> bool {
+    if let Ok(output) = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+    {
+        if let Ok(text) = String::from_utf8(output.stdout) {
+            let lower = text.to_lowercase();
+            if lower.contains("kronos") || lower.contains("paseo") || lower.contains("daemon-worker") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn kill_process_by_pid(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .output();
+    }
+    true
+}
+
+fn ensure_port_available() -> bool {
+    // 1. If 6767 is already free, great!
+    if let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:6767") {
+        drop(listener);
+        return true;
+    }
+
+    // 2. Port 6767 is occupied. Identify the process holding it.
+    let current_pid = std::process::id();
+    if let Some(pid) = find_pid_listening_on_port(6767) {
+        if pid != current_pid && is_kronos_process(pid) {
+            eprintln!(
+                "[Daemon] Port 6767 is held by stale Kronos daemon (PID {pid}). Auto-terminating to reclaim default port..."
+            );
+            kill_process_by_pid(pid);
+
+            // Wait up to 1 second for socket to fully release
+            for _ in 0..10 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:6767") {
+                    drop(listener);
+                    eprintln!("[Daemon] Port 6767 successfully reclaimed after terminating stale PID {pid}.");
+                    return true;
+                }
+            }
+            eprintln!("[Daemon] Port 6767 was not immediately freed after terminating PID {pid}.");
+        } else if pid == current_pid {
+            // Already owned by this exact process
+            return true;
+        } else {
+            eprintln!(
+                "[Daemon] Port 6767 is occupied by a non-Kronos process (PID {pid}). Will fallback dynamically to an OS ephemeral port."
+            );
+        }
+    } else {
+        eprintln!("[Daemon] Port 6767 is occupied by an unknown process; will fallback dynamically.");
+    }
+
+    // Return true so start_daemon/EmbeddedDaemon can proceed and safely bind to ephemeral port (port 0)
+    true
 }
 #[cfg(windows)]
 fn sanitize_windows_path(extra_dirs: &[PathBuf]) -> Option<String> {
@@ -453,6 +815,15 @@ fn sanitize_windows_path(extra_dirs: &[PathBuf]) -> Option<String> {
 }
 
 pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
+    #[cfg(windows)]
+    {
+        // Cleanup orphaned opencode/omp processes from previous runs that may consume 100% CPU
+        let _ = std::process::Command::new("taskkill")
+            .args(&["/F", "/IM", "opencode.exe"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .output();
+    }
+
     if wait_for_daemon_health(1) {
         return None;
     }
@@ -469,7 +840,8 @@ pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
     cmd.arg(&script_path)
         .env("PASEO_LISTEN", "127.0.0.1:6767")
         .env("PASEO_PROVIDER_REFRESH_TIMEOUT_MS", &refresh_timeout)
-        .env("KRONOS_PROVIDER_REFRESH_TIMEOUT_MS", &refresh_timeout);
+        .env("KRONOS_PROVIDER_REFRESH_TIMEOUT_MS", &refresh_timeout)
+        .env("UV_THREADPOOL_SIZE", "16");
     if let Some(id) = server_id {
         cmd.env("PASEO_SERVER_ID", id);
     } else if let Some(mut home) = dirs::home_dir() {
@@ -540,7 +912,8 @@ pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
                     .arg(&script_path)
                     .env("PASEO_LISTEN", "127.0.0.1:6767")
                     .env("PASEO_PROVIDER_REFRESH_TIMEOUT_MS", &refresh_timeout)
-                    .env("KRONOS_PROVIDER_REFRESH_TIMEOUT_MS", &refresh_timeout);
+                    .env("KRONOS_PROVIDER_REFRESH_TIMEOUT_MS", &refresh_timeout)
+                    .env("UV_THREADPOOL_SIZE", "16");
                 if let Some(id) = server_id {
                     fallback_cmd.env("PASEO_SERVER_ID", id);
                 } else if let Some(mut home) = dirs::home_dir() {
@@ -601,74 +974,22 @@ pub fn start_node_daemon(server_id: Option<&str>) -> Option<Child> {
 static DAEMON_SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn start_daemon(server_id: Option<&str>) -> Option<Child> {
-    if wait_for_daemon_health(1) {
-        return None;
-    }
     let _guard = DAEMON_SPAWN_LOCK.lock().ok()?;
-    if wait_for_daemon_health(1) {
-        return None;
-    }
     let engine = env::var("KRONOS_DAEMON_ENGINE").unwrap_or_else(|_| "rust".to_string());
     if engine.eq_ignore_ascii_case("node") {
+        ensure_port_available();
+        if wait_for_daemon_health(1) {
+            return None;
+        }
         stop_embedded();
         if let Some(child) = start_node_daemon(server_id) {
             return Some(child);
         }
-        eprintln!("[Daemon] Node daemon requested (KRONOS_DAEMON_ENGINE=node) but failed to start; refusing to hijack port 6767 with protocol-incompatible EmbeddedDaemon");
+        eprintln!("[Daemon] Node daemon requested (KRONOS_DAEMON_ENGINE=node) but failed to start; refusing to hijack port with protocol-incompatible EmbeddedDaemon");
         return None;
     }
 
-    stop_embedded();
-    if !ensure_port_available() {
-        return None;
-    }
-    let rt = get_or_init_runtime();
-    let cancel = Arc::new(AtomicBool::new(false));
-    let cancel_flag = cancel.clone();
-
-    let mut lock = match EMBEDDED_DAEMON.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-
-    let join_handle = rt.spawn(async move {
-        let result = EmbeddedDaemon::start().await;
-        let handle_to_stop = match result {
-            Ok(handle) => {
-                let mut lock = match EMBEDDED_DAEMON.lock() {
-                    Ok(guard) => guard,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
-                if cancel_flag.load(Ordering::SeqCst) {
-                    *lock = EmbeddedDaemonState::Stopped;
-                    Some(handle)
-                } else {
-                    *lock = EmbeddedDaemonState::Running(handle);
-                    None
-                }
-            }
-            Err(e) => {
-                eprintln!("[EmbeddedDaemon] Failed to start: {}", e);
-                let mut lock = match EMBEDDED_DAEMON.lock() {
-                    Ok(guard) => guard,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
-                *lock = EmbeddedDaemonState::Stopped;
-                None
-            }
-        };
-
-        if let Some(handle) = handle_to_stop {
-            handle.stop().await;
-        }
-    });
-
-    *lock = EmbeddedDaemonState::Starting {
-        cancel,
-        join_handle,
-    };
-    drop(lock);
-
+    let _ = request_embedded_start(true);
     None
 }
 
@@ -710,9 +1031,322 @@ pub fn restart_daemon(state: &DaemonState) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    pub(crate) async fn lifecycle_child(name: &str) -> bool {
+        const MARKER: &str = "KRONOS_LIFECYCLE_TEST_CHILD";
+        if std::env::var(MARKER).as_deref() == Ok(name) {
+            let home = PathBuf::from(std::env::var("KRONOS_HOME").unwrap());
+            assert_eq!(std::env::var("PASEO_HOME").unwrap(), home.to_str().unwrap());
+            assert!(home.starts_with(std::env::temp_dir()));
+            assert!(home
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("kronos-lifecycle-"));
+            assert_eq!(crate::get_data_dir(), home);
+            return true;
+        }
+        let inherited = (
+            std::env::var_os("KRONOS_HOME"),
+            std::env::var_os("PASEO_HOME"),
+        );
+        let home = tempfile::Builder::new()
+            .prefix("kronos-lifecycle-")
+            .tempdir()
+            .unwrap();
+        let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([name, "--exact", "--test-threads=1", "--nocapture"])
+            .env(MARKER, name)
+            .env("KRONOS_HOME", home.path())
+            .env("PASEO_HOME", home.path())
+            .env(
+                "KRONOS_DAEMON_ENGINE",
+                if name.ends_with("node_mode_rejects_ipc") {
+                    "node"
+                } else {
+                    "rust"
+                },
+            )
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(20), child.wait()).await;
+        let status = match result {
+            Ok(Ok(status)) => status,
+            _ => {
+                let _ = child.start_kill();
+                match tokio::time::timeout(std::time::Duration::from_secs(3), child.wait()).await {
+                    Ok(Ok(_)) => {
+                        home.close().unwrap();
+                        panic!("lifecycle child failed or exceeded deadline; reaped=true owned_home_removed=true");
+                    }
+                    _ => {
+                        let preserved = home.keep();
+                        panic!(
+                            "lifecycle child exit unconfirmed; preserved home {}",
+                            preserved.display()
+                        );
+                    }
+                }
+            }
+        };
+        home.close().unwrap();
+        assert_eq!(
+            inherited,
+            (
+                std::env::var_os("KRONOS_HOME"),
+                std::env::var_os("PASEO_HOME")
+            )
+        );
+        eprintln!("lifecycle_child reaped=true owned_home_removed=true parent_env_unchanged=true");
+        assert!(status.success(), "lifecycle child failed: {status}");
+        false
+    }
+
+    async fn running_access() -> Arc<crate::kernel::access::AccessControl> {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Some(access) = {
+                    let state = EMBEDDED_DAEMON.lock().unwrap();
+                    state.context.as_ref().map(|context| context.access.clone())
+                } {
+                    return access;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("embedded engine did not become ready")
+    }
+
+    #[tokio::test]
+    async fn test_embedded_ensure_ready_is_idempotent() {
+        if !lifecycle_child("daemon::tests::test_embedded_ensure_ready_is_idempotent").await {
+            return;
+        }
+        start_daemon(None);
+        let first = running_access().await;
+        start_daemon(None);
+        let second = running_access().await;
+        stop_embedded();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "attaching twice replaced the existing engine's admission authority"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_embedded_ready_when_network_bind_fails() {
+        if !lifecycle_child("daemon::tests::test_embedded_ready_when_network_bind_fails").await {
+            return;
+        }
+        crate::kernel::server::TEST_NETWORK_BIND_FAILURE.store(true, Ordering::SeqCst);
+        start_daemon(None);
+        let core = ensure_embedded_ready().await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while core.network_status().error.is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            core.network_status().error.as_deref(),
+            Some("injected listener failure")
+        );
+        assert_eq!(
+            get_active_daemon_port(),
+            0,
+            "failed listener must not advertise an endpoint"
+        );
+        assert_eq!(embedded_phase(), EnginePhase::Ready);
+        assert!(!core.is_stopped());
+        let status: serde_json::Value =
+            serde_json::from_str(&crate::get_daemon_status_json()).unwrap();
+        assert_eq!(status["enginePhase"], serde_json::json!({"phase":"ready"}));
+        assert_eq!(status["status"], "errored");
+        assert_eq!(status["networkAvailable"], false);
+        assert_eq!(status["listen"], serde_json::Value::Null);
+        assert_eq!(status["error"], "injected listener failure");
+        stop_embedded();
+    }
+
+    fn startup_hook(fail: bool) -> StartupHook {
+        let hook = StartupHook {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Notify::new()),
+            fail,
+        };
+        *STARTUP_HOOK.lock().unwrap() = Some(hook.clone());
+        hook
+    }
+
+    #[tokio::test]
+    async fn test_embedded_concurrent_ensure_shares_start() {
+        if !lifecycle_child("daemon::tests::test_embedded_concurrent_ensure_shares_start").await {
+            return;
+        }
+        let hook = startup_hook(false);
+        let first = tokio::spawn(ensure_embedded_ready());
+        tokio::time::timeout(std::time::Duration::from_secs(3), hook.entered.notified())
+            .await
+            .unwrap();
+        let second = tokio::spawn(ensure_embedded_ready());
+        assert_eq!(embedded_phase(), EnginePhase::Starting);
+        hook.release.notify_one();
+        let a = tokio::time::timeout(std::time::Duration::from_secs(3), first)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let b = tokio::time::timeout(std::time::Duration::from_secs(3), second)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "concurrent ensures created different engines"
+        );
+        assert_eq!(embedded_phase(), EnginePhase::Ready);
+        stop_embedded();
+    }
+
+    #[tokio::test]
+    async fn test_embedded_start_failure_releases_waiters() {
+        if !lifecycle_child("daemon::tests::test_embedded_start_failure_releases_waiters").await {
+            return;
+        }
+        let hook = startup_hook(true);
+        let first = tokio::spawn(ensure_embedded_ready());
+        tokio::time::timeout(std::time::Duration::from_secs(3), hook.entered.notified())
+            .await
+            .unwrap();
+        let second = tokio::spawn(ensure_embedded_ready());
+        hook.release.notify_one();
+        for waiter in [first, second] {
+            let result = tokio::time::timeout(std::time::Duration::from_secs(3), waiter)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                result.err().as_deref(),
+                Some("injected core startup failure")
+            );
+        }
+        assert_eq!(
+            embedded_phase(),
+            EnginePhase::Failed {
+                reason: "injected core startup failure".into()
+            }
+        );
+        assert_eq!(get_active_daemon_port(), 0);
+        let status: serde_json::Value =
+            serde_json::from_str(&crate::get_daemon_status_json()).unwrap();
+        assert_eq!(status["status"], "errored");
+        assert_eq!(
+            status["enginePhase"],
+            serde_json::json!({"phase":"failed","reason":"injected core startup failure"})
+        );
+        assert_eq!(status["error"], "injected core startup failure");
+        *STARTUP_HOOK.lock().unwrap() = None;
+        start_daemon(None);
+        assert!(
+            ensure_embedded_ready().await.is_ok(),
+            "explicit start should retry failed initialization"
+        );
+        stop_embedded();
+    }
+
+    #[tokio::test]
+    async fn test_embedded_stop_during_start_releases_waiters() {
+        if !lifecycle_child("daemon::tests::test_embedded_stop_during_start_releases_waiters").await
+        {
+            return;
+        }
+        let hook = startup_hook(false);
+        let waiter = tokio::spawn(ensure_embedded_ready());
+        tokio::time::timeout(std::time::Duration::from_secs(3), hook.entered.notified())
+            .await
+            .unwrap();
+        stop_embedded();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), waiter)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result.err().as_deref(),
+            Some("Embedded engine stopped during startup")
+        );
+        assert_eq!(embedded_phase(), EnginePhase::Stopped);
+        *STARTUP_HOOK.lock().unwrap() = None;
+        let new_core = ensure_embedded_ready().await.unwrap();
+        hook.release.notify_one();
+        assert!(Arc::ptr_eq(
+            &new_core,
+            &ensure_embedded_ready().await.unwrap()
+        ));
+        assert_eq!(embedded_phase(), EnginePhase::Ready);
+        stop_embedded();
+    }
+
+    #[tokio::test]
+    async fn test_embedded_ui_detach_preserves_engine() {
+        if !lifecycle_child("daemon::tests::test_embedded_ui_detach_preserves_engine").await {
+            return;
+        }
+        let first = ensure_embedded_ready().await.unwrap();
+        let detached_transport_subscription = first.subscribe_shutdown();
+        drop(detached_transport_subscription);
+        let second = ensure_embedded_ready().await.unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(
+            !second.is_stopped(),
+            "dropping UI transport subscription stopped engine"
+        );
+        assert_eq!(embedded_phase(), EnginePhase::Ready);
+        stop_embedded();
+        assert!(second.is_stopped());
+        assert_eq!(get_active_daemon_port(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_node_mode_rejects_ipc() {
+        if !lifecycle_child("daemon::tests::test_embedded_node_mode_rejects_ipc").await {
+            return;
+        }
+        assert_eq!(
+            ensure_embedded_ready().await.err().as_deref(),
+            Some("Embedded IPC is unavailable in Node engine mode")
+        );
+        assert_eq!(embedded_phase(), EnginePhase::Stopped);
+        assert_eq!(get_active_daemon_port(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_network_shutdown_preserves_core() {
+        if !lifecycle_child("daemon::tests::test_embedded_network_shutdown_preserves_core").await {
+            return;
+        }
+        let context = SessionContext::initialize().unwrap();
+        let network = DaemonHandle::start_network(context.clone(), 0, false, None)
+            .await
+            .unwrap();
+        assert_eq!(context.network_status().port, Some(network.port));
+        network.stop_network().await;
+        assert!(!context.is_stopped());
+        assert_eq!(context.network_status().port, None);
+        assert_eq!(get_active_daemon_port(), 0);
+        let hello = serde_json::json!({"type":"hello","protocolVersion":1,
+            "auth":{"kind":"localCredential","token":context.access.local_credential}});
+        assert_eq!(context.access.authenticate_hello(&hello).await, Ok(()));
+        network.stop().await;
+        assert!(context.is_stopped());
+    }
 
     #[test]
     fn test_daemon_state_empty_stop() {

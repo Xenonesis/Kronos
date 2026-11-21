@@ -188,8 +188,10 @@ export class PaseoBrowserWebviewRegistry {
   }
 
   private deleteActiveBrowserReferences(browserId: string): void {
-    for (const [hostWebContentsId, activeBrowserIdsByWorkspace] of this
-      .activeBrowserIdsByHostWindow) {
+    for (const [
+      hostWebContentsId,
+      activeBrowserIdsByWorkspace,
+    ] of this.activeBrowserIdsByHostWindow) {
       for (const [workspaceId, activeBrowserId] of activeBrowserIdsByWorkspace) {
         if (activeBrowserId === browserId) {
           activeBrowserIdsByWorkspace.delete(workspaceId);

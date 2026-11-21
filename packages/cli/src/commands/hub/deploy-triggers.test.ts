@@ -25,17 +25,20 @@ describe("Hub trigger deployment discovery", () => {
     ]);
   });
 
-  it("rejects unsupported and unsafe trigger paths", async () => {
-    const cwd = await temporaryDirectory();
-    const directory = path.join(cwd, ".paseo", "triggers");
-    await mkdir(directory, { recursive: true });
-    await writeFile(path.join(cwd, "outside.yml"), "name: outside\n");
-    await symlink(path.join(cwd, "outside.yml"), path.join(directory, "linked.yml"));
+  it.skipIf(process.platform === "win32")(
+    "rejects unsupported and unsafe trigger paths",
+    async () => {
+      const cwd = await temporaryDirectory();
+      const directory = path.join(cwd, ".paseo", "triggers");
+      await mkdir(directory, { recursive: true });
+      await writeFile(path.join(cwd, "outside.yml"), "name: outside\n");
+      await symlink(path.join(cwd, "outside.yml"), path.join(directory, "linked.yml"));
 
-    await expect(discoverHubTriggers(cwd)).rejects.toMatchObject({
-      code: "HUB_TRIGGER_UNSAFE_PATH",
-    });
-  });
+      await expect(discoverHubTriggers(cwd)).rejects.toMatchObject({
+        code: "HUB_TRIGGER_UNSAFE_PATH",
+      });
+    },
+  );
 
   it("requires at least one trigger", async () => {
     const cwd = await temporaryDirectory();

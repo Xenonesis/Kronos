@@ -1,9 +1,5 @@
 import { create } from "zustand";
-import type {
-  QuickComposerAgent,
-  QuickComposerOptions,
-  QuickComposerTarget,
-} from "./types";
+import type { QuickComposerAgent, QuickComposerOptions, QuickComposerTarget } from "./types";
 
 export interface QuickComposerStoreState {
   isOpen: boolean;

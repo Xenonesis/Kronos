@@ -38,7 +38,13 @@ import {
 import { resolveAppVersion } from "@/utils/app-version";
 import { ConnectionOfferSchema, type ConnectionOffer } from "@getpaseo/protocol/connection-offer";
 import { HostConfirmations, type HostConfirmationRequest } from "./host-confirmation";
-import { shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
+import {
+  shouldUseDesktopDaemon,
+  getManagedDesktopTransport,
+  getDesktopDaemonStatus,
+  type DesktopDaemonStatus,
+} from "@/desktop/daemon/desktop-daemon";
+import { upsertDesktopDaemonConnection } from "./daemon-start-service";
 import { isWeb } from "@/constants/platform";
 import { connectToDaemon, getConnectionAuthFailureReason } from "@/utils/test-daemon-connection";
 import { getOrCreateClientId } from "@/utils/client-id";
@@ -599,8 +605,18 @@ function createDefaultDeps(
         providerSnapshots: "wire",
         createPluginClientBundleStore: createHostPluginClientBundleStore,
         ...(host.password ? { password: host.password } : {}),
-        localCredential: () => readDesktopManagedLocalCredential(connection),
+        localCredential: () => readDesktopManagedLocalCredential(connection, host.serverId),
       } satisfies Omit<DaemonClientConfig, "url">;
+      const managedTarget = getManagedDesktopTransport(connection, host.serverId);
+      if (managedTarget) {
+        if (!desktopTransportFactory)
+          throw new Error("Embedded IPC requires the desktop transport.");
+        return new DaemonClient({
+          ...base,
+          transportFactory: desktopTransportFactory,
+          url: buildDesktopDaemonTransportUrl(managedTarget),
+        });
+      }
       if (connection.type === "routed") {
         const origin = resolveOrigin(connection.originServerId);
         if (!origin) throw new Error(`Origin host ${connection.originServerId} is unavailable`);
@@ -691,7 +707,7 @@ function createDefaultDeps(
       return connectToDaemon(connection, {
         ...(host.serverId ? { serverId: host.serverId } : {}),
         ...(host.password ? { password: host.password } : {}),
-        localCredential: () => readDesktopManagedLocalCredential(connection),
+        localCredential: () => readDesktopManagedLocalCredential(connection, host.serverId),
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         capabilities: appCapabilities,
         trace: createPerformanceTrace({ host: host.serverId, connection: connection.id }),
@@ -1764,7 +1780,8 @@ export class HostRuntimeStore {
 
   private async runBoot(): Promise<void> {
     const override = readConfiguredLocalDaemonOverride();
-    await this.loadRegistry();
+    const desktopStatus = shouldUseDesktopDaemon() ? await getDesktopDaemonStatus() : undefined;
+    await this.loadRegistry(desktopStatus);
 
     let isE2E: string | null = null;
     try {
@@ -1776,26 +1793,11 @@ export class HostRuntimeStore {
       return;
     }
 
-    if (shouldUseDesktopDaemon()) {
+    if (desktopStatus) {
       try {
-        const bridge = getDesktopHost();
-        if (bridge?.invoke) {
-          const status = (await bridge.invoke("desktop_daemon_status")) as {
-            serverId?: string;
-            listen?: string;
-            hostname?: string;
-          } | null;
-          if (status?.serverId && status?.listen) {
-            await this.upsertConnectionFromListen({
-              listenAddress: status.listen,
-              serverId: status.serverId,
-              hostname: status.hostname ?? "localhost",
-            });
-            void this.runProbeCycleNow(status.serverId);
-          }
-        }
-      } catch (e) {
-        console.warn("[HostRuntime] Failed to pre-seed desktop daemon", e);
+        await this.bootstrapDesktopStatus(desktopStatus);
+      } catch (error) {
+        console.warn("[HostRuntime] Failed to pre-seed desktop daemon", error);
       }
       return;
     }
@@ -1817,14 +1819,38 @@ export class HostRuntimeStore {
     }
   }
 
-  private loadRegistry(): Promise<void> {
+  private async bootstrapDesktopStatus(status: DesktopDaemonStatus): Promise<void> {
+    if (status.localTransport) {
+      const result = await upsertDesktopDaemonConnection(this, status);
+      if (!result.ok) throw new Error(result.error);
+      void this.runProbeCycleNow(status.serverId);
+      return;
+    }
+    const initialHint = this.deps.readInitialConnectionHint
+      ? this.deps.readInitialConnectionHint()
+      : readInitialDaemonConnectionHint();
+    const hintListen = typeof initialHint === "string" ? initialHint : initialHint?.listen;
+    let listen = status.listen?.trim();
+    if (!listen || listen.endsWith(":0")) listen = hintListen;
+    if (!status.serverId || !listen || listen.endsWith(":0")) return;
+    await this.upsertConnectionFromListen({
+      listenAddress: listen,
+      serverId: status.serverId,
+      hostname: status.hostname ?? "localhost",
+    });
+    void this.runProbeCycleNow(status.serverId);
+  }
+
+  private loadRegistry(desktopStatus?: DesktopDaemonStatus): Promise<void> {
     if (!this.registryLoad) {
-      this.registryLoad = this.loadFromStorage().then(() => this.markHostRegistryLoaded());
+      this.registryLoad = this.loadFromStorage(desktopStatus).then(() =>
+        this.markHostRegistryLoaded(),
+      );
     }
     return this.registryLoad;
   }
 
-  private async loadFromStorage(): Promise<void> {
+  private async loadFromStorage(desktopStatus?: DesktopDaemonStatus): Promise<void> {
     let shouldPersistHosts = false;
     let profiles: HostProfile[] = [];
     try {
@@ -1855,6 +1881,27 @@ export class HostRuntimeStore {
         profiles = normalizedProfiles.filter((entry) => !isPlaceholderServerId(entry.serverId));
         if (profiles.length !== normalizedProfiles.length) {
           shouldPersistHosts = true;
+        }
+      }
+      if (
+        desktopStatus?.localTransport &&
+        desktopStatus.desktopManaged &&
+        desktopStatus.ownedByDesktop &&
+        desktopStatus.serverId
+      ) {
+        const connection = connectionFromListen(
+          desktopStatus.localTransport === "ipc" ? "ipc://embedded" : (desktopStatus.listen ?? ""),
+        );
+        if (connection) {
+          const normalized = upsertHostConnectionInProfiles({
+            profiles,
+            serverId: desktopStatus.serverId,
+            label: desktopStatus.hostname ?? undefined,
+            connection,
+            desktopManaged: true,
+          });
+          shouldPersistHosts ||= normalized !== profiles;
+          profiles = normalized;
         }
       }
       this.hosts = profiles;
@@ -2267,6 +2314,7 @@ export class HostRuntimeStore {
     listenAddress: string;
     serverId: string;
     hostname: string | null;
+    desktopManaged?: boolean;
   }): Promise<HostProfile> {
     const normalizedListenAddress = input.listenAddress.trim();
     const serverId = input.serverId.trim();
@@ -2281,6 +2329,7 @@ export class HostRuntimeStore {
       serverId,
       label: input.hostname ?? undefined,
       connection,
+      desktopManaged: input.desktopManaged,
     });
   }
 
@@ -2393,6 +2442,7 @@ export class HostRuntimeStore {
     label?: string;
     password?: string;
     connection: HostConnection;
+    desktopManaged?: boolean;
     existingClient?: DaemonClient;
   }): Promise<HostProfile> {
     const now = new Date().toISOString();
@@ -2402,6 +2452,7 @@ export class HostRuntimeStore {
       label: input.label,
       connection: input.connection,
       password: input.password,
+      desktopManaged: input.desktopManaged,
       now,
     });
     this.setHostsAndSync(next, {

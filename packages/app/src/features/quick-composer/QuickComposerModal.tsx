@@ -23,16 +23,15 @@ import { AdaptiveTextInput } from "@/components/adaptive-text-input";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/contexts/toast-context";
-import { useActiveWorkspaceSelection, navigateToWorkspace } from "@/stores/navigation-active-workspace-store";
+import {
+  useActiveWorkspaceSelection,
+  navigateToWorkspace,
+} from "@/stores/navigation-active-workspace-store";
 import { useSessionStore } from "@/stores/session-store";
 import { useNotesStore } from "@/features/notes/use-notes";
 import { NotePickerModal } from "@/features/notes/NotePickerModal";
 import type { NoteRecord } from "@/features/notes/types";
-import {
-  AGENT_HARNESS_OPTIONS,
-  type QuickComposerAgent,
-  type QuickComposerTarget,
-} from "./types";
+import { AGENT_HARNESS_OPTIONS, type QuickComposerAgent, type QuickComposerTarget } from "./types";
 import { useQuickComposerStore } from "./use-quick-composer";
 
 const ThemedSparkles = withUnistyles(Sparkles, (theme) => ({
@@ -311,10 +310,7 @@ export const QuickComposerModal = memo(function QuickComposerModal() {
                 ]}
                 onPress={() => setTarget("workspace")}
               >
-                <FolderGit2
-                  size={13}
-                  color={target === "workspace" ? "#38bdf8" : "#888888"}
-                />
+                <FolderGit2 size={13} color={target === "workspace" ? "#38bdf8" : "#888888"} />
                 <Text
                   style={[
                     styles.targetSwitchText,
@@ -333,10 +329,7 @@ export const QuickComposerModal = memo(function QuickComposerModal() {
                 ]}
                 onPress={() => setTarget("general")}
               >
-                <MessageSquare
-                  size={13}
-                  color={target === "general" ? "#a855f7" : "#888888"}
-                />
+                <MessageSquare size={13} color={target === "general" ? "#a855f7" : "#888888"} />
                 <Text
                   style={[
                     styles.targetSwitchText,
@@ -415,10 +408,7 @@ export const QuickComposerModal = memo(function QuickComposerModal() {
           {/* Spotlight Actions Footer */}
           <View style={styles.footer}>
             <View style={styles.footerLeft}>
-              <PressHighlight
-                style={styles.attachNoteBtn}
-                onPress={() => setNotePickerOpen(true)}
-              >
+              <PressHighlight style={styles.attachNoteBtn} onPress={() => setNotePickerOpen(true)}>
                 <StickyNote size={13} color="#888888" />
                 <Text style={styles.attachNoteText}>Attach Note (@note)</Text>
               </PressHighlight>
