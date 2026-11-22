@@ -15,6 +15,6 @@
     "build:signed": "node build.mjs --signed"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0"
+    "@tauri-apps/cli": "^2.12.6"
   }
 }
