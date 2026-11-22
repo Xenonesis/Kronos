@@ -32,8 +32,10 @@ function language(parser: Parser): Language {
 
 const languageCache: Partial<Record<string, Language>> = {};
 
-const shellLanguage = StreamLanguage.define(shell);
-const dockerfileLanguage = StreamLanguage.define(dockerFile);
+// oxlint-disable-next-line no-explicit-any
+const shellLanguage = StreamLanguage.define(shell as any);
+// oxlint-disable-next-line no-explicit-any
+const dockerfileLanguage = StreamLanguage.define(dockerFile as any);
 
 const languageFactories: Record<string, () => Language> = {
   // JavaScript/TypeScript
