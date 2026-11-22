@@ -1,5 +1,7 @@
 import { defineLanguageFacet, Language, StreamLanguage } from "@codemirror/language";
 import { dart } from "@codemirror/legacy-modes/mode/clike";
+import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
+import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { swift } from "@codemirror/legacy-modes/mode/swift";
 import { parser as jsParser } from "@lezer/javascript";
 import { parser as jsonParser } from "@lezer/json";
@@ -29,6 +31,9 @@ function language(parser: Parser): Language {
 }
 
 const languageCache: Partial<Record<string, Language>> = {};
+
+const shellLanguage = StreamLanguage.define(shell);
+const dockerfileLanguage = StreamLanguage.define(dockerFile);
 
 const languageFactories: Record<string, () => Language> = {
   // JavaScript/TypeScript
@@ -77,6 +82,12 @@ const languageFactories: Record<string, () => Language> = {
   yml: () => language(yamlParser),
   // Rust
   rs: () => language(rustParser),
+  // Shell
+  sh: () => shellLanguage,
+  bash: () => shellLanguage,
+  zsh: () => shellLanguage,
+  // Docker
+  dockerfile: () => dockerfileLanguage,
   // Swift
   swift: () =>
     StreamLanguage.define(swift as unknown as Parameters<typeof StreamLanguage.define>[0]),
@@ -99,7 +110,16 @@ const languageFactories: Record<string, () => Language> = {
 };
 
 export function getLanguageForFile(filename: string): Language | null {
-  const ext = filename.split(".").pop()?.toLowerCase();
+  const basename = filename.slice(
+    Math.max(filename.lastIndexOf("/"), filename.lastIndexOf("\\")) + 1,
+  );
+  if (basename.toLowerCase() === "dockerfile") return dockerfileLanguage;
+
+  const dot = basename.lastIndexOf(".");
+  // Callers also pass bare language keys for code fences.
+  if (dot === -1 && basename !== filename) return null;
+
+  const ext = basename.slice(dot + 1).toLowerCase();
   if (!ext) return null;
   const cached = languageCache[ext];
   if (cached) return cached;

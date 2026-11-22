@@ -16,7 +16,8 @@ import {
   useHostRuntimeSnapshot,
   useHosts,
 } from "@/runtime/host-runtime";
-import { ProvidersSection } from "@/screens/settings/providers-section";
+import { ProviderList } from "@/provider-settings";
+import { openProviderSettings } from "@/navigation/settings-navigation";
 import { HostUsageSection } from "@/usage";
 import { HostAppearanceSection } from "@/screens/settings/host-appearance-section";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
@@ -250,6 +251,10 @@ export function HostWorkspacesPage({ serverId }: { serverId: string }) {
 
 export function HostProvidersPage({ serverId }: { serverId: string }) {
   const host = useHostProfile(serverId);
+  const openProvider = useCallback(
+    (providerId: string) => openProviderSettings(serverId, providerId),
+    [serverId],
+  );
 
   if (!host) {
     return <HostNotFound />;
@@ -257,7 +262,7 @@ export function HostProvidersPage({ serverId }: { serverId: string }) {
 
   return (
     <View>
-      <ProvidersSection serverId={serverId} />
+      <ProviderList serverId={serverId} onOpenProvider={openProvider} />
     </View>
   );
 }

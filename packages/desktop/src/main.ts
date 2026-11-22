@@ -10,6 +10,8 @@ log.initialize({ spyRendererConsole: true });
 import { inheritLoginShellEnv } from "./login-shell-env.js";
 
 import path from "node:path";
+import { randomBytes, randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { pathToFileURL } from "node:url";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -46,6 +48,7 @@ import {
   buildStandardContextMenuItems,
 } from "./window/window-manager.js";
 import { setupDarwinCompositorWatchdog } from "./window/compositor-watchdog/index.js";
+import { reloadWhenRendererExits } from "./window/renderer-recovery.js";
 import { showWindowWhenReady } from "./window/show-when-ready.js";
 import { resolveDesktopWindowChromeMode, windowChromeModeArgument } from "./window/chrome.js";
 import { registerDialogHandlers } from "./features/dialogs.js";
@@ -670,6 +673,14 @@ function getWorkAreasPrimaryFirst(): Electron.Rectangle[] {
   return [primary, ...others].map((display) => display.workArea);
 }
 
+const browserHostComputerName =
+  hostname()
+    .replace(/\.local$/i, "")
+    .trim()
+    .slice(0, 120) || "Desktop";
+const browserHostSessionCode = randomBytes(3).toString("hex").toUpperCase();
+let browserHostWindowNumber = 0;
+
 async function createWindow(
   options: {
     initialRoute?: string | null;
@@ -695,6 +706,7 @@ async function createWindow(
     : null;
 
   const title = devWorktreeName ? `${APP_NAME} (${devWorktreeName})` : APP_NAME;
+  const browserHostLabel = `${browserHostComputerName} · Window ${++browserHostWindowNumber} (${browserHostSessionCode})`;
   const mainWindow = new BrowserWindow({
     title,
     ...resolveWindowBounds(restoredWindowState),
@@ -706,7 +718,11 @@ async function createWindow(
     }),
     webPreferences: {
       preload: getPreloadPath(),
-      additionalArguments: [windowChromeModeArgument(DESKTOP_WINDOW_CHROME_MODE)],
+      additionalArguments: [
+        windowChromeModeArgument(DESKTOP_WINDOW_CHROME_MODE),
+        `--paseo-browser-host-label=${browserHostLabel}`,
+        `--paseo-browser-host-instance-id=${randomUUID()}`,
+      ],
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
@@ -737,6 +753,7 @@ async function createWindow(
   }
 
   setupDarwinCompositorWatchdog(mainWindow);
+  reloadWhenRendererExits(mainWindow);
   setupWindowResizeEvents(mainWindow);
   if (windowStateStore) {
     setupWindowStatePersistence(mainWindow, windowStateStore);

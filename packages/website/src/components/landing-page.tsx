@@ -106,6 +106,8 @@ import "~/styles.css";
 interface LandingPageProps {
   title: React.ReactNode;
   subtitle: React.ReactNode;
+  pluginCount?: number | null;
+  showHubEyebrow?: boolean;
 }
 
 export function LandingPage({ title, subtitle }: LandingPageProps) {

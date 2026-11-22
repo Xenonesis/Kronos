@@ -8,6 +8,7 @@ import {
   useSyncExternalStore,
   type ComponentProps,
   type ComponentType,
+  type ReactNode,
 } from "react";
 import {
   useFileText,
@@ -17,6 +18,7 @@ import {
 import { Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
+import { RetainedPanel } from "@/components/retained-panel";
 import { Button } from "@/components/ui/button";
 import { isWeb } from "@/constants/platform";
 import { useAppSettings } from "@/hooks/use-settings";
@@ -83,7 +85,9 @@ type TextFilePanelProps = PluginFilePanelProps & {
 /**
  * What the Markdown, HTML and Source panels share: a toolbar over the file's Source view and, when
  * the panel passes one, its Preview. Both views show the one read of the file and, while editing, the one editor buffer, so switching
- * between them neither re-reads nor loses edits. Edits files up to 1 MiB on web; shows larger files
+ * between them neither re-reads nor loses edits. Each view stays mounted once shown, so switching
+ * back also returns to where it was scrolled. The exception is the HTML Preview on iOS: iOS
+ * replaces the WebView of a hidden view, so the page loads again from the top. Edits files up to 1 MiB on web; shows larger files
  * and every file on native read-only, and refuses files above the display budget before reading.
  */
 export function TextFilePanel(props: TextFilePanelProps) {
@@ -188,19 +192,25 @@ function ReadonlyTextFile({
         hasSymbols={flattenedSymbols.length > 0}
         onOpenSymbolPalette={() => setPaletteOpen(true)}
       />
-      {showPreview ? (
-        <Preview text={text.text} params={params} workspaceId={workspaceId} host={host} />
-      ) : (
-        <Suspense fallback={<FilePanelLoading />}>
-          <ThemedFileSourceView
-            content={text.text}
-            filename={params.path}
-            location={sourceLocation}
-            navigationRevision={targetRev}
-            presentation={presentation}
-          />
-        </Suspense>
-      )}
+      {Preview ? (
+        <RetainedPreview
+          active={showPreview}
+          preview={Preview}
+          text={text.text}
+          params={params}
+          workspaceId={workspaceId}
+          host={host}
+        />
+      ) : null}
+      <RetainedView active={!showPreview}>
+        <ThemedFileSourceView
+          content={text.text}
+          filename={params.path}
+          location={sourceLocation}
+          navigationRevision={targetRev}
+          presentation={presentation}
+        />
+      </RetainedView>
       <SymbolPaletteModal
         visible={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -329,9 +339,17 @@ function EditableTextFile({
         hasSymbols={flattenedSymbols.length > 0}
         onOpenSymbolPalette={() => setPaletteOpen(true)}
       />
-      {showPreview ? (
-        <Preview text={snapshot.content} params={params} workspaceId={workspaceId} host={host} />
-      ) : (
+      {Preview ? (
+        <RetainedPreview
+          active={showPreview}
+          preview={Preview}
+          text={snapshot.content}
+          params={params}
+          workspaceId={workspaceId}
+          host={host}
+        />
+      ) : null}
+      <RetainedView active={!showPreview}>
         <SourceEditor
           model={model}
           filename={params.path}
@@ -342,7 +360,7 @@ function EditableTextFile({
           onCursorChange={setCursor}
           onVimModeChange={setVimMode}
         />
-      )}
+      </RetainedView>
       <SymbolPaletteModal
         visible={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -351,6 +369,43 @@ function EditableTextFile({
       />
     </View>
   );
+}
+
+/**
+ * A view of the panel that stays mounted, hidden, while the other view shows, so switching back
+ * returns to the same scroll offset. It mounts the first time it shows.
+ */
+function RetainedView({ active, children }: { active: boolean; children: ReactNode }) {
+  const [shown, setShown] = useState(active);
+  if (active && !shown) setShown(true);
+  if (!shown) return null;
+  return (
+    <RetainedPanel active={active} style={styles.view}>
+      {children}
+    </RetainedPanel>
+  );
+}
+
+/**
+ * The Preview, retained like the Source. While hidden it keeps the text it last showed, so
+ * editing in Source does not render the hidden Preview on every change.
+ */
+function RetainedPreview({
+  active,
+  preview: Preview,
+  text,
+  params,
+  workspaceId,
+  host,
+}: TextFilePreviewProps & { active: boolean; preview: ComponentType<TextFilePreviewProps> }) {
+  const [shownText, setShownText] = useState(text);
+  if (active && shownText !== text) setShownText(text);
+  const previewText = active ? text : shownText;
+  const preview = useMemo(
+    () => <Preview text={previewText} params={params} workspaceId={workspaceId} host={host} />,
+    [Preview, previewText, params, workspaceId, host],
+  );
+  return <RetainedView active={active}>{preview}</RetainedView>;
 }
 
 /** The editor over the panel's buffer. Each mount shows Loading until the editor shows the text. */
@@ -369,6 +424,7 @@ function SourceEditor(props: Omit<ComponentProps<typeof ThemedFileEditorView>, "
 
 const styles = StyleSheet.create((theme) => ({
   container: { flex: 1, minHeight: 0 },
+  view: { minHeight: 0 },
   editor: { flex: 1, minHeight: 0 },
   centerState: {
     flex: 1,

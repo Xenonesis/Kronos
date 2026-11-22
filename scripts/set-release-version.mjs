@@ -61,9 +61,21 @@ if (args.print) {
   process.exit(0);
 }
 
+const dirty = execFileSync("git", ["status", "--porcelain"], {
+  cwd: rootDir,
+  encoding: "utf8",
+}).trim();
+if (dirty) {
+  throw new Error("Git working directory not clean. Commit or stash changes before bumping.");
+}
+
 const npmBin = process.platform === "win32" ? "npm.cmd" : "npm";
-execFileSync(
-  npmBin,
-  ["version", nextVersion, "--include-workspace-root", `--message="chore(release): cut %s"`],
-  { cwd: rootDir, stdio: "inherit", shell: process.platform === "win32" },
-);
+execFileSync(npmBin, ["version", nextVersion, "--include-workspace-root", "--no-git-tag-version"], {
+  cwd: rootDir,
+  stdio: "inherit",
+  shell: process.platform === "win32",
+});
+execFileSync("git", ["commit", "-m", `chore(release): cut ${nextVersion}`], {
+  cwd: rootDir,
+  stdio: "inherit",
+});

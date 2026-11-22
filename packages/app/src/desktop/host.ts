@@ -244,6 +244,8 @@ export interface NativeDiffBridge {
 export interface DesktopHostBridge {
   platform?: string;
   windowChromeMode?: string;
+  browserHostLabel?: string;
+  browserHostInstanceId?: string;
   invoke?: DesktopInvokeBridge["invoke"];
   validateDirectory?: (path: string) => Promise<DirectoryValidationResult | null>;
   getPendingOpenProject?: () => Promise<string | null>;
